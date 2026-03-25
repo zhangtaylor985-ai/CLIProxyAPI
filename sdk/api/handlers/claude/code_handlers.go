@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	. "github.com/router-for-me/CLIProxyAPI/v6/internal/constant"
@@ -114,7 +115,7 @@ func (h *ClaudeCodeAPIHandler) ClaudeCountTokens(c *gin.Context) {
 
 	resp, upstreamHeaders, errMsg := h.ExecuteCountWithAuthManager(cliCtx, h.HandlerType(), modelName, rawJSON, alt)
 	if errMsg != nil {
-		h.WriteErrorResponse(c, errMsg)
+		h.writeClientError(c, errMsg)
 		cliCancel(errMsg.Error)
 		return
 	}
@@ -169,7 +170,7 @@ func (h *ClaudeCodeAPIHandler) handleNonStreamingResponse(c *gin.Context, rawJSO
 	resp, upstreamHeaders, errMsg := h.ExecuteWithAuthManager(cliCtx, h.HandlerType(), modelName, rawJSON, alt)
 	stopKeepAlive()
 	if errMsg != nil {
-		h.WriteErrorResponse(c, errMsg)
+		h.writeClientError(c, errMsg)
 		cliCancel(errMsg.Error)
 		return
 	}
@@ -248,7 +249,7 @@ func (h *ClaudeCodeAPIHandler) handleStreamingResponse(c *gin.Context, rawJSON [
 				continue
 			}
 			// Upstream failed immediately. Return proper error status and JSON.
-			h.WriteErrorResponse(c, errMsg)
+			h.writeClientError(c, errMsg)
 			if errMsg != nil {
 				cliCancel(errMsg.Error)
 			} else {
@@ -294,6 +295,7 @@ func (h *ClaudeCodeAPIHandler) forwardClaudeStream(c *gin.Context, flusher http.
 			if errMsg == nil {
 				return
 			}
+			errMsg = h.sanitizeClientError(c, errMsg)
 			status := http.StatusInternalServerError
 			if errMsg.StatusCode > 0 {
 				status = errMsg.StatusCode
@@ -304,6 +306,186 @@ func (h *ClaudeCodeAPIHandler) forwardClaudeStream(c *gin.Context, flusher http.
 			_, _ = fmt.Fprintf(c.Writer, "event: error\ndata: %s\n\n", errorBytes)
 		},
 	})
+}
+
+func (h *ClaudeCodeAPIHandler) writeClientError(c *gin.Context, msg *interfaces.ErrorMessage) {
+	h.WriteErrorResponse(c, h.sanitizeClientError(c, msg))
+}
+
+func (h *ClaudeCodeAPIHandler) sanitizeClientError(c *gin.Context, msg *interfaces.ErrorMessage) *interfaces.ErrorMessage {
+	if !shouldSuppressClientError(c, msg) {
+		return msg
+	}
+
+	entry := log.WithFields(log.Fields{
+		"component":   "claude_error_sanitize",
+		"status_code": msg.StatusCode,
+	})
+	if hasCodexFailoverMarker(c) {
+		entry = entry.WithField("provider", "codex")
+	}
+	if msg != nil && msg.Error != nil {
+		entry = entry.WithError(msg.Error)
+	}
+	entry.Error("suppressing raw upstream error for Claude client")
+
+	sanitized := *msg
+	sanitized.StatusCode = http.StatusServiceUnavailable
+	sanitized.Error = fmt.Errorf("upstream model temporarily unavailable, please retry later")
+	return &sanitized
+}
+
+func shouldSuppressClientError(c *gin.Context, msg *interfaces.ErrorMessage) bool {
+	if hasCodexFailoverMarker(c) {
+		return true
+	}
+	return shouldSuppressSensitiveUpstreamError(msg)
+}
+
+func hasCodexFailoverMarker(c *gin.Context) bool {
+	if c == nil {
+		return false
+	}
+	value, exists := c.Get("cpa_failover_provider")
+	if !exists {
+		return false
+	}
+	provider, ok := value.(string)
+	if !ok {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(provider), "codex")
+}
+
+func shouldSuppressSensitiveUpstreamError(msg *interfaces.ErrorMessage) bool {
+	if msg == nil || msg.Error == nil {
+		return false
+	}
+
+	raw := strings.TrimSpace(msg.Error.Error())
+	status := msg.StatusCode
+	embedded := extractEmbeddedJSON(raw)
+	envelopeMsg, envelopeType, envelopeCode := extractErrorEnvelopeFields(embedded)
+	combined := strings.ToLower(strings.TrimSpace(strings.Join([]string{
+		raw,
+		envelopeMsg,
+		envelopeType,
+		envelopeCode,
+	}, " ")))
+
+	switch {
+	case status >= http.StatusInternalServerError:
+		return containsAny(combined,
+			"service unavailable",
+			"temporarily unavailable",
+			"upstream",
+			"gateway",
+			"timeout",
+			"cf-ray",
+			"request id",
+			"request_id",
+			"open1.codes",
+			"api.openai.com",
+			"api.anthropic.com",
+		)
+	case status == http.StatusTooManyRequests:
+		return containsAny(combined,
+			"usage_limit_reached",
+			"model_cooldown",
+			"rate_limit",
+			"too many requests",
+			"cooling down",
+			"reset_seconds",
+			"resets_in_seconds",
+		)
+	case status == http.StatusBadRequest || status == http.StatusUnauthorized || status == http.StatusForbidden:
+		return containsAny(combined,
+			"organization has been disabled",
+			"organization disabled",
+			"organization has been suspended",
+			"account disabled",
+			"account suspended",
+			"account banned",
+			"account blocked",
+			"credential",
+			"oauth",
+			"session",
+			"login",
+			"api key",
+			"invalid_api_key",
+			"permission_error",
+			"authentication_error",
+		)
+	default:
+		return false
+	}
+}
+
+func extractEmbeddedJSON(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if json.Valid([]byte(raw)) {
+		return raw
+	}
+	start := strings.IndexByte(raw, '{')
+	if start < 0 {
+		return ""
+	}
+	candidate := strings.TrimSpace(raw[start:])
+	if !json.Valid([]byte(candidate)) {
+		return ""
+	}
+	return candidate
+}
+
+func extractErrorEnvelopeFields(raw string) (message string, errType string, code string) {
+	if strings.TrimSpace(raw) == "" {
+		return "", "", ""
+	}
+
+	var payload struct {
+		Error struct {
+			Message string `json:"message"`
+			Type    string `json:"type"`
+			Code    string `json:"code"`
+		} `json:"error"`
+		Message string `json:"message"`
+		Type    string `json:"type"`
+		Code    string `json:"code"`
+	}
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return "", "", ""
+	}
+
+	message = strings.TrimSpace(payload.Error.Message)
+	if message == "" {
+		message = strings.TrimSpace(payload.Message)
+	}
+	errType = strings.TrimSpace(payload.Error.Type)
+	if errType == "" {
+		errType = strings.TrimSpace(payload.Type)
+	}
+	code = strings.TrimSpace(payload.Error.Code)
+	if code == "" {
+		code = strings.TrimSpace(payload.Code)
+	}
+	return message, errType, code
+}
+
+func containsAny(haystack string, needles ...string) bool {
+	haystack = strings.ToLower(strings.TrimSpace(haystack))
+	if haystack == "" {
+		return false
+	}
+	for _, needle := range needles {
+		needle = strings.ToLower(strings.TrimSpace(needle))
+		if needle != "" && strings.Contains(haystack, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 type claudeErrorDetail struct {

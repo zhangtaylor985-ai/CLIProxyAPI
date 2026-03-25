@@ -59,12 +59,13 @@ type RefreshEvaluator interface {
 }
 
 const (
-	refreshCheckInterval  = 5 * time.Second
-	refreshMaxConcurrency = 16
-	refreshPendingBackoff = time.Minute
-	refreshFailureBackoff = 5 * time.Minute
-	quotaBackoffBase      = time.Second
-	quotaBackoffMax       = 30 * time.Minute
+	refreshCheckInterval   = 5 * time.Second
+	refreshMaxConcurrency  = 16
+	refreshPendingBackoff  = time.Minute
+	refreshFailureBackoff  = 5 * time.Minute
+	quotaBackoffBase       = time.Second
+	quotaBackoffMax        = 30 * time.Minute
+	fastRecoveryBackoffMax = 2 * time.Minute
 )
 
 var quotaCooldownDisabled atomic.Bool
@@ -1744,11 +1745,25 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 				}
 
 				statusCode := statusCodeFromResult(result.Error)
+				backoffLevel := state.Quota.BackoffLevel
+				state.Quota = QuotaState{}
 				if isModelSupportResultError(result.Error) {
 					next := now.Add(12 * time.Hour)
 					state.NextRetryAfter = next
 					suspendReason = "model_not_supported"
 					shouldSuspendModel = true
+				} else if auth.FastRecoveryEnabled() && isFastRecoveryEligibleStatus(statusCode) {
+					next, nextLevel := fastRecoveryRetryAt(now, result.RetryAfter, backoffLevel, quotaCooldownDisabledForAuth(auth))
+					state.NextRetryAfter = next
+					state.Quota.BackoffLevel = nextLevel
+					if statusCode == 429 {
+						state.Quota.Exceeded = true
+						state.Quota.Reason = "quota"
+						state.Quota.NextRecoverAt = next
+						suspendReason = "quota"
+						shouldSuspendModel = true
+						setModelQuota = true
+					}
 				} else {
 					switch statusCode {
 					case 401:
@@ -1768,7 +1783,6 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 						shouldSuspendModel = true
 					case 429:
 						var next time.Time
-						backoffLevel := state.Quota.BackoffLevel
 						if result.RetryAfter != nil {
 							next = now.Add(*result.RetryAfter)
 						} else {
@@ -2007,6 +2021,39 @@ func statusCodeFromResult(err *Error) int {
 	return err.StatusCode()
 }
 
+func isFastRecoveryEligibleStatus(statusCode int) bool {
+	switch statusCode {
+	case 0, 408, 429, 500, 502, 503, 504:
+		return true
+	default:
+		return false
+	}
+}
+
+func fastRecoveryRetryAt(now time.Time, retryAfter *time.Duration, backoffLevel int, disableCooling bool) (time.Time, int) {
+	if disableCooling {
+		return time.Time{}, backoffLevel
+	}
+	if retryAfter != nil {
+		wait := *retryAfter
+		if wait < 0 {
+			wait = 0
+		}
+		if wait > fastRecoveryBackoffMax {
+			wait = fastRecoveryBackoffMax
+		}
+		if wait <= 0 {
+			return now, backoffLevel
+		}
+		return now.Add(wait), backoffLevel
+	}
+	cooldown, nextLevel := nextFastRecoveryCooldown(backoffLevel, disableCooling)
+	if cooldown <= 0 {
+		return time.Time{}, backoffLevel
+	}
+	return now.Add(cooldown), nextLevel
+}
+
 func isModelSupportErrorMessage(message string) bool {
 	lower := strings.ToLower(strings.TrimSpace(message))
 	if lower == "" {
@@ -2091,6 +2138,21 @@ func applyAuthFailureState(auth *Auth, resultErr *Error, retryAfter *time.Durati
 		}
 	}
 	statusCode := statusCodeFromResult(resultErr)
+	backoffLevel := auth.Quota.BackoffLevel
+	auth.Quota = QuotaState{}
+	if auth.FastRecoveryEnabled() && isFastRecoveryEligibleStatus(statusCode) {
+		auth.StatusMessage = "transient upstream error"
+		next, nextLevel := fastRecoveryRetryAt(now, retryAfter, backoffLevel, quotaCooldownDisabledForAuth(auth))
+		auth.NextRetryAfter = next
+		auth.Quota.BackoffLevel = nextLevel
+		if statusCode == 429 {
+			auth.StatusMessage = "quota exhausted"
+			auth.Quota.Exceeded = true
+			auth.Quota.Reason = "quota"
+			auth.Quota.NextRecoverAt = next
+		}
+		return
+	}
 	switch statusCode {
 	case 401:
 		auth.StatusMessage = "unauthorized"
@@ -2109,7 +2171,7 @@ func applyAuthFailureState(auth *Auth, resultErr *Error, retryAfter *time.Durati
 		if retryAfter != nil {
 			next = now.Add(*retryAfter)
 		} else {
-			cooldown, nextLevel := nextQuotaCooldown(auth.Quota.BackoffLevel, quotaCooldownDisabledForAuth(auth))
+			cooldown, nextLevel := nextQuotaCooldown(backoffLevel, quotaCooldownDisabledForAuth(auth))
 			if cooldown > 0 {
 				next = now.Add(cooldown)
 			}
@@ -2133,18 +2195,26 @@ func applyAuthFailureState(auth *Auth, resultErr *Error, retryAfter *time.Durati
 
 // nextQuotaCooldown returns the next cooldown duration and updated backoff level for repeated quota errors.
 func nextQuotaCooldown(prevLevel int, disableCooling bool) (time.Duration, int) {
+	return nextExponentialCooldown(prevLevel, quotaBackoffBase, quotaBackoffMax, disableCooling)
+}
+
+func nextFastRecoveryCooldown(prevLevel int, disableCooling bool) (time.Duration, int) {
+	return nextExponentialCooldown(prevLevel, quotaBackoffBase, fastRecoveryBackoffMax, disableCooling)
+}
+
+func nextExponentialCooldown(prevLevel int, base, max time.Duration, disableCooling bool) (time.Duration, int) {
 	if prevLevel < 0 {
 		prevLevel = 0
 	}
 	if disableCooling {
 		return 0, prevLevel
 	}
-	cooldown := quotaBackoffBase * time.Duration(1<<prevLevel)
-	if cooldown < quotaBackoffBase {
-		cooldown = quotaBackoffBase
+	cooldown := base * time.Duration(1<<prevLevel)
+	if cooldown < base {
+		cooldown = base
 	}
-	if cooldown >= quotaBackoffMax {
-		return quotaBackoffMax, prevLevel
+	if cooldown >= max {
+		return max, prevLevel
 	}
 	return cooldown, prevLevel + 1
 }

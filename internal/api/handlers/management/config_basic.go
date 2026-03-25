@@ -12,6 +12,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/policy"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 	sdkconfig "github.com/router-for-me/CLIProxyAPI/v6/sdk/config"
 	log "github.com/sirupsen/logrus"
@@ -28,7 +29,8 @@ func (h *Handler) GetConfig(c *gin.Context) {
 		c.JSON(200, gin.H{})
 		return
 	}
-	c.JSON(200, new(*h.cfg))
+	cfgCopy := *h.cfg
+	c.JSON(200, &cfgCopy)
 }
 
 type releaseInfo struct {
@@ -277,6 +279,45 @@ func (h *Handler) GetForceModelPrefix(c *gin.Context) {
 }
 func (h *Handler) PutForceModelPrefix(c *gin.Context) {
 	h.updateBoolField(c, func(v bool) { h.cfg.ForceModelPrefix = v })
+}
+
+// ClaudeToGPTRoutingEnabled
+func (h *Handler) GetClaudeToGPTRoutingEnabled(c *gin.Context) {
+	c.JSON(200, gin.H{"claude-to-gpt-routing-enabled": h.cfg.ClaudeToGPTRoutingEnabled})
+}
+func (h *Handler) PutClaudeToGPTRoutingEnabled(c *gin.Context) {
+	h.updateBoolField(c, func(v bool) { h.cfg.ClaudeToGPTRoutingEnabled = v })
+}
+
+// ClaudeToGPTTargetFamily
+func (h *Handler) GetClaudeToGPTTargetFamily(c *gin.Context) {
+	c.JSON(200, gin.H{"claude-to-gpt-target-family": strings.TrimSpace(h.cfg.ClaudeToGPTTargetFamily)})
+}
+func (h *Handler) PutClaudeToGPTTargetFamily(c *gin.Context) {
+	var body struct {
+		Value *string `json:"value"`
+	}
+	if errBindJSON := c.ShouldBindJSON(&body); errBindJSON != nil || body.Value == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
+		return
+	}
+
+	trimmed := strings.TrimSpace(*body.Value)
+	normalized := policy.NormalizeClaudeGPTTargetFamily(trimmed)
+	if trimmed != "" && normalized == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid claude-to-gpt-target-family"})
+		return
+	}
+	h.cfg.ClaudeToGPTTargetFamily = normalized
+	h.persist(c)
+}
+
+// DisableClaudeOpus1M
+func (h *Handler) GetDisableClaudeOpus1M(c *gin.Context) {
+	c.JSON(200, gin.H{"disable-claude-opus-1m": h.cfg.DisableClaudeOpus1M})
+}
+func (h *Handler) PutDisableClaudeOpus1M(c *gin.Context) {
+	h.updateBoolField(c, func(v bool) { h.cfg.DisableClaudeOpus1M = v })
 }
 
 func normalizeRoutingStrategy(strategy string) (string, bool) {

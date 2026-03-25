@@ -3,6 +3,7 @@
 package management
 
 import (
+	"context"
 	"crypto/subtle"
 	"fmt"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/billing"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/buildinfo"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
@@ -42,12 +44,13 @@ type Handler struct {
 	failedAttempts      map[string]*attemptInfo // keyed by client IP
 	authManager         *coreauth.Manager
 	usageStats          *usage.RequestStatistics
+	billingStore        *billing.SQLiteStore
 	tokenStore          coreauth.Store
 	localPassword       string
 	allowRemoteOverride bool
 	envSecret           string
 	logDir              string
-	postAuthHook        coreauth.PostAuthHook
+	postAuthHook        func(context.Context, *coreauth.Auth) error
 }
 
 // NewHandler creates a new management handler instance.
@@ -113,6 +116,8 @@ func (h *Handler) SetAuthManager(manager *coreauth.Manager) { h.authManager = ma
 // SetUsageStatistics allows replacing the usage statistics reference.
 func (h *Handler) SetUsageStatistics(stats *usage.RequestStatistics) { h.usageStats = stats }
 
+func (h *Handler) SetBillingStore(store *billing.SQLiteStore) { h.billingStore = store }
+
 // SetLocalPassword configures the runtime-local password accepted for localhost requests.
 func (h *Handler) SetLocalPassword(password string) { h.localPassword = password }
 
@@ -129,10 +134,7 @@ func (h *Handler) SetLogDirectory(dir string) {
 	h.logDir = dir
 }
 
-// SetPostAuthHook registers a hook to be called after auth record creation but before persistence.
-func (h *Handler) SetPostAuthHook(hook coreauth.PostAuthHook) {
-	h.postAuthHook = hook
-}
+func (h *Handler) SetPostAuthHook(hook coreauth.PostAuthHook) { h.postAuthHook = hook }
 
 // Middleware enforces access control for management endpoints.
 // All requests (local and remote) require a valid management key.
@@ -148,6 +150,7 @@ func (h *Handler) Middleware() gin.HandlerFunc {
 
 		clientIP := c.ClientIP()
 		localClient := clientIP == "127.0.0.1" || clientIP == "::1"
+		localPasswordEnabled := localClient && strings.TrimSpace(h.localPassword) != ""
 		cfg := h.cfg
 		var (
 			allowRemote bool
@@ -202,7 +205,7 @@ func (h *Handler) Middleware() gin.HandlerFunc {
 				h.attemptsMu.Unlock()
 			}
 		}
-		if secretHash == "" && envSecret == "" {
+		if secretHash == "" && envSecret == "" && !localPasswordEnabled {
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "remote management key not set"})
 			return
 		}
@@ -229,7 +232,7 @@ func (h *Handler) Middleware() gin.HandlerFunc {
 			return
 		}
 
-		if localClient {
+		if localPasswordEnabled {
 			if lp := h.localPassword; lp != "" {
 				if subtle.ConstantTimeCompare([]byte(provided), []byte(lp)) == 1 {
 					c.Next()

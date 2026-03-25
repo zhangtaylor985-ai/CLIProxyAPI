@@ -37,6 +37,58 @@ api-keys:
   - "your-api-key-2"
   - "your-api-key-3"
 
+# Per-client API key policies (restrictions and usage quotas).
+# - excluded-models supports '*' wildcard matching and is case-insensitive.
+# - allow-claude-opus-4-6: when false, requests for claude-opus-4-6* are downgraded to claude-opus-4-5-20251101*.
+# - model-routing: optional deterministic time-window routing to a target model (e.g. split Claude -> Codex by hour).
+# - failover: optional per-provider automatic retry to a target model when a provider becomes unavailable.
+#   Supports model-specific rules to override the target based on the requested model (wildcards supported).
+#   (e.g. Claude weekly cap / rolling-window caps / account issues). Useful for automatically switching to Codex.
+# - daily-limits: request counts are tracked per day in China Standard Time (UTC+8).
+# - daily-budget-usd / weekly-budget-usd: spend quotas are tracked from persisted billing data.
+#   Weekly quota windows use China Standard Time (UTC+8), Monday 00:00 -> next Monday 00:00.
+# - token-package-usd / token-package-started-at: one-time prepaid spend allowance for the API key.
+#   While package balance remains, daily/weekly spend budgets are bypassed. Once exhausted,
+#   daily/weekly spend budgets resume counting only from the depletion point forward.
+# - Storage: daily counters are persisted in SQLite at APIKEY_POLICY_SQLITE_PATH (or a default path under the writable directory).
+api-key-policies:
+  - api-key: "your-api-key-1"
+    # Optional: override upstream base URL for this client API key.
+    # When set, /v1/* requests will be transparently proxied to this base URL (treat it as the provider address).
+    # Examples:
+    #   - "http://127.0.0.1:8001" (incoming /v1/models -> http://127.0.0.1:8001/v1/models)
+    #   - "http://127.0.0.1:8001/v1" (incoming /v1/models -> http://127.0.0.1:8001/v1/models)
+    upstream-base-url: ""
+    excluded-models:
+      - "claude-haiku-4-5-20251001"
+    model-routing:
+      rules:
+        - enabled: true
+          from-model: "claude-opus-4-6*"
+          target-model: "gpt-5.4(high)"
+          target-percent: 50
+          sticky-window-seconds: 3600
+        - enabled: true
+          from-model: "claude-sonnet-4-6*"
+          target-model: "gpt-5.4(medium)"
+          target-percent: 50
+          sticky-window-seconds: 3600
+    failover:
+      claude:
+        enabled: true
+        target-model: "gpt-5.4(medium)" # default fallback when no rules match
+        rules:
+          - from-model: "claude-opus-4-6*"
+            target-model: "gpt-5.4(high)"
+          - from-model: "claude-sonnet-4-6*"
+            target-model: "gpt-5.4(medium)"
+    allow-claude-opus-4-6: true
+    token-package-usd: 1000
+    token-package-started-at: "2026-03-25T12:00:00+08:00"
+    weekly-budget-usd: 400
+    daily-limits:
+      claude-opus-4-6: 10
+
 # Enable debug logging
 debug: false
 
@@ -63,22 +115,18 @@ error-logs-max-files: 10
 usage-statistics-enabled: false
 
 # Proxy URL. Supports socks5/http/https protocols. Example: socks5://user:pass@192.168.1.1:1080/
-# Per-entry proxy-url also supports "direct" or "none" to bypass both the global proxy-url and environment proxies explicitly.
 proxy-url: ""
+
+# When claude-to-gpt-routing-enabled is true, selects the default GPT family used for synthesized
+# Claude -> GPT routing/failover. Supported values: "gpt-5.2", "gpt-5.4", "gpt-5.3-codex".
+# Leave empty for default gpt-5.4.
+claude-to-gpt-target-family: ""
 
 # When true, unprefixed model requests only use credentials without a prefix (except when prefix == model name).
 force-model-prefix: false
 
-# When true, forward filtered upstream response headers to downstream clients.
-# Default is false (disabled).
-passthrough-headers: false
-
 # Number of times to retry a request. Retries will occur if the HTTP response code is 403, 408, 500, 502, 503, or 504.
 request-retry: 3
-
-# Maximum number of different credentials to try for one failed request.
-# Set to 0 to keep legacy behavior (try all available credentials).
-max-retry-credentials: 0
 
 # Maximum wait time in seconds for a cooled-down credential before triggering a retry.
 max-retry-interval: 30
@@ -111,7 +159,6 @@ nonstream-keepalive-interval: 0
 #     headers:
 #       X-Custom-Header: "custom-value"
 #     proxy-url: "socks5://proxy.example.com:1080"
-#     # proxy-url: "direct" # optional: explicit direct connect for this credential
 #     models:
 #       - name: "gemini-2.5-flash" # upstream model name
 #         alias: "gemini-flash"    # client alias mapped to the upstream model
@@ -126,11 +173,11 @@ nonstream-keepalive-interval: 0
 # codex-api-key:
 #   - api-key: "sk-atSM..."
 #     prefix: "test" # optional: require calls like "test/gpt-5-codex" to target this credential
+#     fast-recovery: true # optional: use short exponential cooldowns (1s..2m) for transient failures
 #     base-url: "https://www.example.com" # use the custom codex API endpoint
 #     headers:
 #       X-Custom-Header: "custom-value"
 #     proxy-url: "socks5://proxy.example.com:1080" # optional: per-key proxy override
-#     # proxy-url: "direct" # optional: explicit direct connect for this credential
 #     models:
 #       - name: "gpt-5-codex"   # upstream model name
 #         alias: "codex-latest" # client alias mapped to the upstream model
@@ -145,11 +192,10 @@ nonstream-keepalive-interval: 0
 #   - api-key: "sk-atSM..." # use the official claude API key, no need to set the base url
 #   - api-key: "sk-atSM..."
 #     prefix: "test" # optional: require calls like "test/claude-sonnet-latest" to target this credential
-#     base-url: "https://www.example.com" # use the custom claude API endpoint
+#     base-url: "https://www.example.com" # use the custom Claude API endpoint (or set ANTHROPIC_BASE_URL to override globally)
 #     headers:
 #       X-Custom-Header: "custom-value"
 #     proxy-url: "socks5://proxy.example.com:1080" # optional: per-key proxy override
-#     # proxy-url: "direct" # optional: explicit direct connect for this credential
 #     models:
 #       - name: "claude-3-5-sonnet-20241022" # upstream model name
 #         alias: "claude-sonnet-latest"      # client alias mapped to the upstream model
@@ -167,30 +213,6 @@ nonstream-keepalive-interval: 0
 #       sensitive-words:             # optional: words to obfuscate with zero-width characters
 #         - "API"
 #         - "proxy"
-#       cache-user-id: true          # optional: default is false; set true to reuse cached user_id per API key instead of generating a random one each request
-
-# Default headers for Claude API requests. Update when Claude Code releases new versions.
-# In legacy mode, user-agent/package-version/runtime-version/timeout are used as fallbacks
-# when the client omits them, while OS/arch remain runtime-derived. When
-# stabilize-device-profile is enabled, OS/arch stay pinned to the baseline values below,
-# while user-agent/package-version/runtime-version seed a software fingerprint that can
-# still upgrade to newer official Claude client versions.
-# claude-header-defaults:
-#   user-agent: "claude-cli/2.1.44 (external, sdk-cli)"
-#   package-version: "0.74.0"
-#   runtime-version: "v24.3.0"
-#   os: "MacOS"
-#   arch: "arm64"
-#   timeout: "600"
-#   stabilize-device-profile: false  # optional, default false; set true to enable per-auth/API-key fingerprint pinning
-
-# Default headers for Codex OAuth model requests.
-# These are used only for file-backed/OAuth Codex requests when the client
-# does not send the header. `user-agent` applies to HTTP and websocket requests;
-# `beta-features` only applies to websocket requests. They do not apply to codex-api-key entries.
-# codex-header-defaults:
-#   user-agent: "codex_cli_rs/0.114.0 (Mac OS 14.2.0; x86_64) vscode/1.111.0"
-#   beta-features: "multi_agent"
 
 # OpenAI compatibility providers
 # openai-compatibility:
@@ -202,30 +224,17 @@ nonstream-keepalive-interval: 0
 #     api-key-entries:
 #       - api-key: "sk-or-v1-...b780"
 #         proxy-url: "socks5://proxy.example.com:1080" # optional: per-key proxy override
-#         # proxy-url: "direct" # optional: explicit direct connect for this credential
 #       - api-key: "sk-or-v1-...b781" # without proxy-url
 #     models: # The models supported by the provider.
 #       - name: "moonshotai/kimi-k2:free" # The actual model name.
 #         alias: "kimi-k2" # The alias used in the API.
-#       # You may repeat the same alias to build an internal model pool.
-#       # The client still sees only one alias in the model list.
-#       # Requests to that alias will round-robin across the upstream names below,
-#       # and if the chosen upstream fails before producing output, the request will
-#       # continue with the next upstream model in the same alias pool.
-#       - name: "qwen3.5-plus"
-#         alias: "claude-opus-4.66"
-#       - name: "glm-5"
-#         alias: "claude-opus-4.66"
-#       - name: "kimi-k2.5"
-#         alias: "claude-opus-4.66"
 
-# Vertex API keys (Vertex-compatible endpoints, base-url is optional)
+# Vertex API keys (Vertex-compatible endpoints, use API key + base URL)
 # vertex-api-key:
 #   - api-key: "vk-123..."                        # x-goog-api-key header
 #     prefix: "test"                              # optional: require calls like "test/vertex-pro" to target this credential
-#     base-url: "https://example.com/api"         # optional, e.g. https://zenmux.ai/api; falls back to Google Vertex when omitted
+#     base-url: "https://example.com/api"         # e.g. https://zenmux.ai/api
 #     proxy-url: "socks5://proxy.example.com:1080" # optional per-key proxy override
-#     # proxy-url: "direct" # optional: explicit direct connect for this credential
 #     headers:
 #       X-Custom-Header: "custom-value"
 #     models:                                     # optional: map aliases to upstream model names
@@ -233,9 +242,6 @@ nonstream-keepalive-interval: 0
 #         alias: "vertex-flash"                   # client-visible alias
 #       - name: "gemini-2.5-pro"
 #         alias: "vertex-pro"
-#     excluded-models:                            # optional: models to exclude from listing
-#       - "imagen-3.0-generate-002"
-#       - "imagen-*"
 
 # Amp Integration
 # ampcode:

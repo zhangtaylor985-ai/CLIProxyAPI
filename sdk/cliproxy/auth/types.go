@@ -285,6 +285,33 @@ func (a *Auth) DisableCoolingOverride() (bool, bool) {
 	return false, false
 }
 
+// FastRecoveryEnabled reports whether the auth should use short exponential
+// cooldowns for transient upstream failures.
+func (a *Auth) FastRecoveryEnabled() bool {
+	if a == nil {
+		return false
+	}
+	if a.Attributes != nil {
+		for _, key := range []string{"fast_recovery", "fast-recovery"} {
+			if val, ok := a.Attributes[key]; ok {
+				if parsed, errParse := strconv.ParseBool(strings.TrimSpace(val)); errParse == nil {
+					return parsed
+				}
+			}
+		}
+	}
+	if a.Metadata != nil {
+		for _, key := range []string{"fast_recovery", "fast-recovery"} {
+			if val, ok := a.Metadata[key]; ok {
+				if parsed, okParse := parseBoolAny(val); okParse {
+					return parsed
+				}
+			}
+		}
+	}
+	return false
+}
+
 // ToolPrefixDisabled returns whether the proxy_ tool name prefix should be
 // skipped for this auth. When true, tool names are sent to Anthropic unchanged.
 // The value is read from metadata key "tool_prefix_disabled" (or "tool-prefix-disabled").

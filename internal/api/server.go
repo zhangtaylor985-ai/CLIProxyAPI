@@ -24,9 +24,11 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/api/middleware"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/api/modules"
 	ampmodule "github.com/router-for-me/CLIProxyAPI/v6/internal/api/modules/amp"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/billing"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/managementasset"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/policy"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 	sdkaccess "github.com/router-for-me/CLIProxyAPI/v6/sdk/access"
@@ -36,6 +38,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/api/handlers/openai"
 	sdkAuth "github.com/router-for-me/CLIProxyAPI/v6/sdk/auth"
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
+	coreusage "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/usage"
 	log "github.com/sirupsen/logrus"
 	"gopkg.in/yaml.v3"
 )
@@ -48,10 +51,10 @@ type serverOptionConfig struct {
 	routerConfigurator   func(*gin.Engine, *handlers.BaseAPIHandler, *config.Config)
 	requestLoggerFactory func(*config.Config, string) logging.RequestLogger
 	localPassword        string
+	postAuthHook         auth.PostAuthHook
 	keepAliveEnabled     bool
 	keepAliveTimeout     time.Duration
 	keepAliveOnTimeout   func()
-	postAuthHook         auth.PostAuthHook
 }
 
 // ServerOption customises HTTP server construction.
@@ -59,8 +62,7 @@ type ServerOption func(*serverOptionConfig)
 
 func defaultRequestLoggerFactory(cfg *config.Config, configPath string) logging.RequestLogger {
 	configDir := filepath.Dir(configPath)
-	logsDir := logging.ResolveLogDirectory(cfg)
-	return logging.NewFileRequestLogger(cfg.RequestLog, logsDir, configDir, cfg.ErrorLogsMaxFiles)
+	return logging.NewFileRequestLogger(cfg.RequestLog, logging.ResolveLogDirectory(cfg), configDir, cfg.ErrorLogsMaxFiles)
 }
 
 // WithMiddleware appends additional Gin middleware during server construction.
@@ -91,6 +93,12 @@ func WithLocalManagementPassword(password string) ServerOption {
 	}
 }
 
+func WithPostAuthHook(hook auth.PostAuthHook) ServerOption {
+	return func(cfg *serverOptionConfig) {
+		cfg.postAuthHook = hook
+	}
+}
+
 // WithKeepAliveEndpoint enables a keep-alive endpoint with the provided timeout and callback.
 func WithKeepAliveEndpoint(timeout time.Duration, onTimeout func()) ServerOption {
 	return func(cfg *serverOptionConfig) {
@@ -107,13 +115,6 @@ func WithKeepAliveEndpoint(timeout time.Duration, onTimeout func()) ServerOption
 func WithRequestLoggerFactory(factory func(*config.Config, string) logging.RequestLogger) ServerOption {
 	return func(cfg *serverOptionConfig) {
 		cfg.requestLoggerFactory = factory
-	}
-}
-
-// WithPostAuthHook registers a hook to be called after auth record creation.
-func WithPostAuthHook(hook auth.PostAuthHook) ServerOption {
-	return func(cfg *serverOptionConfig) {
-		cfg.postAuthHook = hook
 	}
 }
 
@@ -171,6 +172,9 @@ type Server struct {
 
 	localPassword string
 
+	dailyLimiter *policy.SQLiteDailyLimiter
+	billingStore *billing.SQLiteStore
+
 	keepAliveEnabled   bool
 	keepAliveTimeout   time.Duration
 	keepAliveOnTimeout func()
@@ -213,15 +217,19 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 		engine.Use(mw)
 	}
 
-	// Add request logging middleware (positioned after recovery, before auth)
-	// Resolve logs directory relative to the configuration file directory.
+	// Add request logging middleware (positioned after recovery, before auth).
+	// In commercial mode we still honor an explicit request-log=true setting so
+	// operators can opt into detailed request capture for troubleshooting.
 	var requestLogger logging.RequestLogger
 	var toggle func(bool)
-	if !cfg.CommercialMode {
+	if !cfg.CommercialMode || cfg.RequestLog {
 		if optionState.requestLoggerFactory != nil {
 			requestLogger = optionState.requestLoggerFactory(cfg, configFilePath)
 		}
 		if requestLogger != nil {
+			if cfg.CommercialMode && cfg.RequestLog {
+				log.Warn("commercial-mode is enabled, but request-log=true explicitly enables detailed request logging")
+			}
 			engine.Use(middleware.RequestLoggingMiddleware(requestLogger))
 			if setter, ok := requestLogger.(interface{ SetEnabled(bool) }); ok {
 				toggle = setter.SetEnabled
@@ -252,6 +260,13 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 		envManagementSecret: envManagementSecret,
 		wsRoutes:            make(map[string]struct{}),
 	}
+	s.dailyLimiter = s.initDailyLimiter(configFilePath)
+	s.billingStore = s.initBillingStore(configFilePath)
+	if s.billingStore != nil {
+		plugin := billing.NewUsagePersistPlugin(s.billingStore)
+		s.billingStore.SetPendingUsageProvider(plugin)
+		coreusage.RegisterPlugin(plugin)
+	}
 	s.wsAuthEnabled.Store(cfg.WebsocketAuth)
 	// Save initial YAML snapshot
 	s.oldConfigYaml, _ = yaml.Marshal(cfg)
@@ -263,6 +278,9 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 	auth.SetQuotaCooldownDisabled(cfg.DisableCooling)
 	// Initialize management handler
 	s.mgmt = managementHandlers.NewHandler(cfg, configFilePath, authManager)
+	if s.billingStore != nil {
+		s.mgmt.SetBillingStore(s.billingStore)
+	}
 	if optionState.localPassword != "" {
 		s.mgmt.SetLocalPassword(optionState.localPassword)
 	}
@@ -293,9 +311,8 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 		optionState.routerConfigurator(engine, s.handlers, cfg)
 	}
 
-	// Register management routes when configuration or environment secrets are available,
-	// or when a local management password is provided (e.g. TUI mode).
-	hasManagementSecret := cfg.RemoteManagement.SecretKey != "" || envManagementSecret || s.localPassword != ""
+	// Register management routes when configuration, environment, or local-only password access is available.
+	hasManagementSecret := cfg.RemoteManagement.SecretKey != "" || envManagementSecret || optionState.localPassword != ""
 	s.managementRoutesEnabled.Store(hasManagementSecret)
 	if hasManagementSecret {
 		s.registerManagementRoutes()
@@ -314,6 +331,42 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 	return s
 }
 
+func (s *Server) initDailyLimiter(configFilePath string) *policy.SQLiteDailyLimiter {
+	// Always initialize limiter so management can enable limits without restart.
+	// If initialization fails, policy middleware will surface the error when limits are configured.
+	path := resolvePolicySQLitePath(configFilePath)
+	limiter, err := policy.NewSQLiteDailyLimiter(path)
+	if err != nil {
+		log.WithError(err).Warnf("failed to initialize api key policy daily limiter (sqlite): %s", path)
+		return nil
+	}
+	log.Infof("api key policy daily limiter enabled (sqlite): %s", path)
+	return limiter
+}
+
+func (s *Server) initBillingStore(configFilePath string) *billing.SQLiteStore {
+	path := resolvePolicySQLitePath(configFilePath)
+	store, err := billing.NewSQLiteStore(path)
+	if err != nil {
+		log.WithError(err).Warnf("failed to initialize billing store (sqlite): %s", path)
+		return nil
+	}
+	log.Infof("billing store enabled (sqlite): %s", path)
+	return store
+}
+
+func resolvePolicySQLitePath(configFilePath string) string {
+	path := strings.TrimSpace(os.Getenv("APIKEY_POLICY_SQLITE_PATH"))
+	if path != "" {
+		return path
+	}
+	base := util.WritablePath()
+	if base == "" {
+		base = filepath.Dir(configFilePath)
+	}
+	return filepath.Join(base, "api_key_policy_limits.sqlite")
+}
+
 // setupRoutes configures the API routes for the server.
 // It defines the endpoints and associates them with their respective handlers.
 func (s *Server) setupRoutes() {
@@ -327,13 +380,14 @@ func (s *Server) setupRoutes() {
 	// OpenAI compatible API routes
 	v1 := s.engine.Group("/v1")
 	v1.Use(AuthMiddleware(s.accessManager))
+	v1.Use(middleware.APIKeyPolicyMiddleware(func() *config.Config { return s.cfg }, s.dailyLimiter, s.billingStore))
+	v1.Use(middleware.APIKeyUpstreamProxyMiddleware(func() *config.Config { return s.cfg }))
 	{
 		v1.GET("/models", s.unifiedModelsHandler(openaiHandlers, claudeCodeHandlers))
 		v1.POST("/chat/completions", openaiHandlers.ChatCompletions)
 		v1.POST("/completions", openaiHandlers.Completions)
 		v1.POST("/messages", claudeCodeHandlers.ClaudeMessages)
 		v1.POST("/messages/count_tokens", claudeCodeHandlers.ClaudeCountTokens)
-		v1.GET("/responses", openaiResponsesHandlers.ResponsesWebsocket)
 		v1.POST("/responses", openaiResponsesHandlers.Responses)
 		v1.POST("/responses/compact", openaiResponsesHandlers.Compact)
 	}
@@ -341,6 +395,7 @@ func (s *Server) setupRoutes() {
 	// Gemini compatible API routes
 	v1beta := s.engine.Group("/v1beta")
 	v1beta.Use(AuthMiddleware(s.accessManager))
+	v1beta.Use(middleware.APIKeyPolicyMiddleware(func() *config.Config { return s.cfg }, s.dailyLimiter, s.billingStore))
 	{
 		v1beta.GET("/models", geminiHandlers.GeminiModels)
 		v1beta.POST("/models/*action", geminiHandlers.GeminiHandler)
@@ -487,6 +542,8 @@ func (s *Server) registerManagementRoutes() {
 	mgmt.Use(s.managementAvailabilityMiddleware(), s.mgmt.Middleware())
 	{
 		mgmt.GET("/usage", s.mgmt.GetUsageStatistics)
+		mgmt.GET("/usage/dashboard", s.mgmt.GetUsageDashboard)
+		mgmt.GET("/usage/targets-dashboard", s.mgmt.GetUsageTargetsDashboard)
 		mgmt.GET("/usage/export", s.mgmt.ExportUsageStatistics)
 		mgmt.POST("/usage/import", s.mgmt.ImportUsageStatistics)
 		mgmt.GET("/config", s.mgmt.GetConfig)
@@ -533,6 +590,19 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.PUT("/api-keys", s.mgmt.PutAPIKeys)
 		mgmt.PATCH("/api-keys", s.mgmt.PatchAPIKeys)
 		mgmt.DELETE("/api-keys", s.mgmt.DeleteAPIKeys)
+
+		mgmt.GET("/api-key-policies", s.mgmt.GetAPIKeyPolicies)
+		mgmt.PUT("/api-key-policies", s.mgmt.PutAPIKeyPolicies)
+		mgmt.PATCH("/api-key-policies", s.mgmt.PatchAPIKeyPolicies)
+		mgmt.DELETE("/api-key-policies", s.mgmt.DeleteAPIKeyPolicies)
+
+		mgmt.GET("/model-prices", s.mgmt.GetModelPrices)
+		mgmt.GET("/model-prices/export", s.mgmt.ExportModelPrices)
+		mgmt.PUT("/model-prices", s.mgmt.PutModelPrice)
+		mgmt.POST("/model-prices/import", s.mgmt.ImportModelPrices)
+		mgmt.DELETE("/model-prices", s.mgmt.DeleteModelPrice)
+
+		mgmt.GET("/api-key-usage", s.mgmt.GetAPIKeyDailyUsage)
 
 		mgmt.GET("/gemini-api-key", s.mgmt.GetGeminiKeys)
 		mgmt.PUT("/gemini-api-key", s.mgmt.PutGeminiKeys)
@@ -585,6 +655,15 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.GET("/force-model-prefix", s.mgmt.GetForceModelPrefix)
 		mgmt.PUT("/force-model-prefix", s.mgmt.PutForceModelPrefix)
 		mgmt.PATCH("/force-model-prefix", s.mgmt.PutForceModelPrefix)
+		mgmt.GET("/claude-to-gpt-routing-enabled", s.mgmt.GetClaudeToGPTRoutingEnabled)
+		mgmt.PUT("/claude-to-gpt-routing-enabled", s.mgmt.PutClaudeToGPTRoutingEnabled)
+		mgmt.PATCH("/claude-to-gpt-routing-enabled", s.mgmt.PutClaudeToGPTRoutingEnabled)
+		mgmt.GET("/claude-to-gpt-target-family", s.mgmt.GetClaudeToGPTTargetFamily)
+		mgmt.PUT("/claude-to-gpt-target-family", s.mgmt.PutClaudeToGPTTargetFamily)
+		mgmt.PATCH("/claude-to-gpt-target-family", s.mgmt.PutClaudeToGPTTargetFamily)
+		mgmt.GET("/disable-claude-opus-1m", s.mgmt.GetDisableClaudeOpus1M)
+		mgmt.PUT("/disable-claude-opus-1m", s.mgmt.PutDisableClaudeOpus1M)
+		mgmt.PATCH("/disable-claude-opus-1m", s.mgmt.PutDisableClaudeOpus1M)
 
 		mgmt.GET("/routing/strategy", s.mgmt.GetRoutingStrategy)
 		mgmt.PUT("/routing/strategy", s.mgmt.PutRoutingStrategy)
@@ -624,10 +703,17 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.GET("/auth-files/models", s.mgmt.GetAuthFileModels)
 		mgmt.GET("/model-definitions/:channel", s.mgmt.GetStaticModelDefinitions)
 		mgmt.GET("/auth-files/download", s.mgmt.DownloadAuthFile)
+		mgmt.GET("/console/config", s.mgmt.GetConsoleConfig)
+		mgmt.GET("/console/config.yaml", s.mgmt.GetConsoleConfigYAML)
+		mgmt.PUT("/console/config.yaml", s.mgmt.PutConsoleConfigYAML)
+		mgmt.GET("/console/auth-files", s.mgmt.ListConsoleAuthFiles)
+		mgmt.GET("/console/auth-files/download", s.mgmt.DownloadConsoleAuthFile)
+		mgmt.POST("/console/auth-files", s.mgmt.UploadConsoleAuthFile)
+		mgmt.DELETE("/console/auth-files", s.mgmt.DeleteConsoleAuthFile)
+		mgmt.GET("/console/claude-quotas", s.mgmt.GetConsoleClaudeQuotas)
 		mgmt.POST("/auth-files", s.mgmt.UploadAuthFile)
 		mgmt.DELETE("/auth-files", s.mgmt.DeleteAuthFile)
 		mgmt.PATCH("/auth-files/status", s.mgmt.PatchAuthFileStatus)
-		mgmt.PATCH("/auth-files/fields", s.mgmt.PatchAuthFileFields)
 		mgmt.POST("/vertex/import", s.mgmt.ImportVertexCredential)
 
 		mgmt.GET("/anthropic-auth-url", s.mgmt.RequestAnthropicToken)
@@ -768,16 +854,96 @@ func (s *Server) watchKeepAlive() {
 func (s *Server) unifiedModelsHandler(openaiHandler *openai.OpenAIAPIHandler, claudeHandler *claude.ClaudeCodeAPIHandler) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		userAgent := c.GetHeader("User-Agent")
+		apiKey := strings.TrimSpace(c.GetString("apiKey"))
 
 		// Route to Claude handler if User-Agent starts with "claude-cli"
 		if strings.HasPrefix(userAgent, "claude-cli") {
-			// log.Debugf("Routing /v1/models to Claude handler for User-Agent: %s", userAgent)
-			claudeHandler.ClaudeModels(c)
-		} else {
-			// log.Debugf("Routing /v1/models to OpenAI handler for User-Agent: %s", userAgent)
-			openaiHandler.OpenAIModels(c)
+			models := claudeHandler.Models()
+			models = s.filterModelsForAPIKey(models, apiKey)
+
+			firstID := ""
+			lastID := ""
+			if len(models) > 0 {
+				if id, ok := models[0]["id"].(string); ok {
+					firstID = id
+				}
+				if id, ok := models[len(models)-1]["id"].(string); ok {
+					lastID = id
+				}
+			}
+
+			c.JSON(http.StatusOK, gin.H{
+				"data":     models,
+				"has_more": false,
+				"first_id": firstID,
+				"last_id":  lastID,
+			})
+			return
 		}
+
+		allModels := openaiHandler.Models()
+		allModels = s.filterModelsForAPIKey(allModels, apiKey)
+
+		filteredModels := make([]map[string]any, len(allModels))
+		for i, model := range allModels {
+			filteredModel := map[string]any{
+				"id":     model["id"],
+				"object": model["object"],
+			}
+			if created, exists := model["created"]; exists {
+				filteredModel["created"] = created
+			}
+			if ownedBy, exists := model["owned_by"]; exists {
+				filteredModel["owned_by"] = ownedBy
+			}
+			filteredModels[i] = filteredModel
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"object": "list",
+			"data":   filteredModels,
+		})
 	}
+}
+
+func (s *Server) filterModelsForAPIKey(models []map[string]any, apiKey string) []map[string]any {
+	if s == nil || s.cfg == nil || len(models) == 0 {
+		return models
+	}
+	p := s.cfg.EffectiveAPIKeyPolicy(apiKey)
+	if p == nil {
+		return models
+	}
+
+	out := make([]map[string]any, 0, len(models))
+	for _, model := range models {
+		if model == nil {
+			continue
+		}
+		idValue, _ := model["id"].(string)
+		idKey := strings.ToLower(strings.TrimSpace(idValue))
+		if idKey == "" {
+			continue
+		}
+		if !p.AllowsClaudeOpus46() && strings.HasPrefix(idKey, "claude-opus-4-6") {
+			continue
+		}
+		if s.cfg.ShouldRouteClaudeToGPT(apiKey) && policy.IsClaudeModel(idKey) {
+			continue
+		}
+		denied := false
+		for _, pattern := range p.ExcludedModels {
+			if policy.MatchWildcard(pattern, idKey) {
+				denied = true
+				break
+			}
+		}
+		if denied {
+			continue
+		}
+		out = append(out, model)
+	}
+	return out
 }
 
 // Start begins listening for and serving HTTP or HTTPS requests.
@@ -833,6 +999,19 @@ func (s *Server) Stop(ctx context.Context) error {
 	// Shutdown the HTTP server.
 	if err := s.server.Shutdown(ctx); err != nil {
 		return fmt.Errorf("failed to shutdown HTTP server: %v", err)
+	}
+
+	coreusage.StopDefault()
+
+	if s.dailyLimiter != nil {
+		if err := s.dailyLimiter.Close(); err != nil {
+			log.WithError(err).Warn("failed to close api key policy daily limiter")
+		}
+	}
+	if s.billingStore != nil {
+		if err := s.billingStore.Close(); err != nil {
+			log.WithError(err).Warn("failed to close billing store")
+		}
 	}
 
 	log.Debug("API server stopped")
@@ -928,10 +1107,15 @@ func (s *Server) UpdateClients(cfg *config.Config) {
 		prevSecretEmpty = oldCfg.RemoteManagement.SecretKey == ""
 	}
 	newSecretEmpty := cfg.RemoteManagement.SecretKey == ""
-	if s.envManagementSecret {
+	localPasswordEnabled := strings.TrimSpace(s.localPassword) != ""
+	if s.envManagementSecret || localPasswordEnabled {
 		s.registerManagementRoutes()
 		if s.managementRoutesEnabled.CompareAndSwap(false, true) {
-			log.Info("management routes enabled via MANAGEMENT_PASSWORD")
+			if s.envManagementSecret {
+				log.Info("management routes enabled via MANAGEMENT_PASSWORD")
+			} else {
+				log.Info("management routes enabled via local management password")
+			}
 		} else {
 			s.managementRoutesEnabled.Store(true)
 		}

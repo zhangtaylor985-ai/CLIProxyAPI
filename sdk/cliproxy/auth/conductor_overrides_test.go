@@ -447,3 +447,107 @@ func TestManager_MarkResult_RespectsAuthDisableCoolingOverride(t *testing.T) {
 		t.Fatalf("expected NextRetryAfter to be zero when disable_cooling=true, got %v", state.NextRetryAfter)
 	}
 }
+
+func TestManager_MarkResult_CodexFastRecoveryUsesShortCooldown(t *testing.T) {
+	m := NewManager(nil, nil, nil)
+
+	auth := &Auth{
+		ID:       "codex-fast",
+		Provider: "codex",
+		Attributes: map[string]string{
+			"fast_recovery": "true",
+		},
+	}
+	if _, errRegister := m.Register(context.Background(), auth); errRegister != nil {
+		t.Fatalf("register auth: %v", errRegister)
+	}
+
+	model := "gpt-5-codex"
+	m.MarkResult(context.Background(), Result{
+		AuthID:   auth.ID,
+		Provider: auth.Provider,
+		Model:    model,
+		Success:  false,
+		Error:    &Error{HTTPStatus: 500, Message: "boom"},
+	})
+
+	updated, ok := m.GetByID(auth.ID)
+	if !ok || updated == nil {
+		t.Fatalf("expected auth to be present")
+	}
+	state := updated.ModelStates[model]
+	if state == nil {
+		t.Fatalf("expected model state to be present")
+	}
+	wait := state.NextRetryAfter.Sub(state.UpdatedAt)
+	if wait < 900*time.Millisecond || wait > 2*time.Second {
+		t.Fatalf("expected fast recovery cooldown near 1s, got %v", wait)
+	}
+	if state.Quota.Exceeded {
+		t.Fatalf("expected transient fast recovery not to mark quota exceeded")
+	}
+	if state.Quota.BackoffLevel != 1 {
+		t.Fatalf("expected backoff level 1 after first transient failure, got %d", state.Quota.BackoffLevel)
+	}
+
+	m.MarkResult(context.Background(), Result{
+		AuthID:   auth.ID,
+		Provider: auth.Provider,
+		Model:    model,
+		Success:  false,
+		Error:    &Error{HTTPStatus: 500, Message: "boom again"},
+	})
+
+	updated, ok = m.GetByID(auth.ID)
+	if !ok || updated == nil {
+		t.Fatalf("expected auth to still be present")
+	}
+	state = updated.ModelStates[model]
+	if state == nil {
+		t.Fatalf("expected model state after second failure")
+	}
+	wait = state.NextRetryAfter.Sub(state.UpdatedAt)
+	if wait < 1900*time.Millisecond || wait > 3*time.Second {
+		t.Fatalf("expected second fast recovery cooldown near 2s, got %v", wait)
+	}
+	if state.Quota.BackoffLevel != 2 {
+		t.Fatalf("expected backoff level 2 after second transient failure, got %d", state.Quota.BackoffLevel)
+	}
+}
+
+func TestManager_MarkResult_CodexFastRecoveryLeavesLongCooldownErrorsUntouched(t *testing.T) {
+	m := NewManager(nil, nil, nil)
+
+	auth := &Auth{
+		ID:       "codex-fast-404",
+		Provider: "codex",
+		Attributes: map[string]string{
+			"fast_recovery": "true",
+		},
+	}
+	if _, errRegister := m.Register(context.Background(), auth); errRegister != nil {
+		t.Fatalf("register auth: %v", errRegister)
+	}
+
+	model := "gpt-5-codex"
+	m.MarkResult(context.Background(), Result{
+		AuthID:   auth.ID,
+		Provider: auth.Provider,
+		Model:    model,
+		Success:  false,
+		Error:    &Error{HTTPStatus: 404, Message: "not found"},
+	})
+
+	updated, ok := m.GetByID(auth.ID)
+	if !ok || updated == nil {
+		t.Fatalf("expected auth to be present")
+	}
+	state := updated.ModelStates[model]
+	if state == nil {
+		t.Fatalf("expected model state to be present")
+	}
+	wait := state.NextRetryAfter.Sub(state.UpdatedAt)
+	if wait < 11*time.Hour || wait > 12*time.Hour+time.Minute {
+		t.Fatalf("expected 404 cooldown near 12h, got %v", wait)
+	}
+}

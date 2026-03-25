@@ -34,6 +34,33 @@ func TestToolPrefixDisabled(t *testing.T) {
 	}
 }
 
+func TestFastRecoveryEnabled(t *testing.T) {
+	var a *Auth
+	if a.FastRecoveryEnabled() {
+		t.Error("nil auth should return false")
+	}
+
+	a = &Auth{}
+	if a.FastRecoveryEnabled() {
+		t.Error("empty auth should return false")
+	}
+
+	a = &Auth{Attributes: map[string]string{"fast_recovery": "true"}}
+	if !a.FastRecoveryEnabled() {
+		t.Error("should return true when attributes enable fast recovery")
+	}
+
+	a = &Auth{Attributes: map[string]string{"fast-recovery": "false"}, Metadata: map[string]any{"fast_recovery": true}}
+	if a.FastRecoveryEnabled() {
+		t.Error("attribute false should take precedence over metadata")
+	}
+
+	a = &Auth{Metadata: map[string]any{"fast-recovery": true}}
+	if !a.FastRecoveryEnabled() {
+		t.Error("should return true when metadata enables fast recovery")
+	}
+}
+
 func TestEnsureIndexUsesCredentialIdentity(t *testing.T) {
 	t.Parallel()
 

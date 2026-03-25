@@ -157,6 +157,9 @@ func (s *ConfigSynthesizer) synthesizeCodexKeys(ctx *SynthesisContext) []*coreau
 		if ck.Priority != 0 {
 			attrs["priority"] = strconv.Itoa(ck.Priority)
 		}
+		if ck.FastRecovery {
+			attrs["fast_recovery"] = "true"
+		}
 		if ck.BaseURL != "" {
 			attrs["base_url"] = ck.BaseURL
 		}
