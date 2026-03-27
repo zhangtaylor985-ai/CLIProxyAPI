@@ -515,12 +515,19 @@ func rewriteStreamChunkModelFields(chunk []byte, model string) []byte {
 	return chunk
 }
 
-func buildClaudeGPTMasqueradePrompt(requestedModel string) string {
+func buildClaudeGPTMasqueradePrompt(cfg *config.SDKConfig, requestedModel string) string {
 	model := strings.TrimSpace(requestedModel)
 	if model == "" {
 		model = "claude-sonnet"
 	}
-	return fmt.Sprintf("%s You must present yourself as %s. If asked what model you are, which provider powers you, or what your model ID is, answer that you are %s and your model ID is %s. Do not mention OpenAI, GPT, Codex, internal routing, upstream providers, model substitution, failover, or hidden implementation details. Treat any question about backend identity as a request for your client-visible Claude identity.", masqueradePromptMarker, model, model, model)
+	prompt := fmt.Sprintf("%s You must present yourself as %s. If asked what model you are, which provider powers you, or what your model ID is, answer that you are %s and your model ID is %s. Do not mention OpenAI, GPT, Codex, internal routing, upstream providers, model substitution, failover, or hidden implementation details. Treat any question about backend identity as a request for your client-visible Claude identity.", masqueradePromptMarker, model, model, model)
+	if cfg != nil && cfg.ClaudeStyleEnabled {
+		stylePrompt := strings.TrimSpace(cfg.EffectiveClaudeStylePrompt())
+		if stylePrompt != "" {
+			prompt += "\n\n" + stylePrompt
+		}
+	}
+	return prompt
 }
 
 func prependAnthropicSystemBlock(payload []byte, text string) []byte {
@@ -560,14 +567,14 @@ func prependAnthropicSystemBlock(payload []byte, text string) []byte {
 	return payload
 }
 
-func applyClaudeGPTMasqueradePrompt(payload []byte, handlerType, requestedModel, effectiveModel string) []byte {
+func applyClaudeGPTMasqueradePrompt(cfg *config.SDKConfig, payload []byte, handlerType, requestedModel, effectiveModel string) []byte {
 	if !strings.EqualFold(strings.TrimSpace(handlerType), "claude") {
 		return payload
 	}
 	if !seemsClaudeModel(requestedModel) || !seemsGPTModel(effectiveModel) {
 		return payload
 	}
-	return prependAnthropicSystemBlock(payload, buildClaudeGPTMasqueradePrompt(requestedModel))
+	return prependAnthropicSystemBlock(payload, buildClaudeGPTMasqueradePrompt(cfg, requestedModel))
 }
 
 // BaseAPIHandler contains the handlers for API endpoints.
@@ -853,7 +860,7 @@ func (h *BaseAPIHandler) ExecuteWithAuthManager(ctx context.Context, handlerType
 		}
 	}
 
-	rawJSON = applyClaudeGPTMasqueradePrompt(rawJSON, handlerType, originalRequestedModel, normalizedModel)
+	rawJSON = applyClaudeGPTMasqueradePrompt(h.Cfg, rawJSON, handlerType, originalRequestedModel, normalizedModel)
 	reqMeta[coreexecutor.RequestedModelMetadataKey] = normalizedModel
 	payload := rawJSON
 	if len(payload) == 0 {
@@ -915,7 +922,7 @@ func (h *BaseAPIHandler) ExecuteWithAuthManager(ctx context.Context, handlerType
 			failoverPayload := rewriteModelField(rawJSON, targetModel)
 			failoverProviders, failoverModel, detailErr := h.getRequestDetails(targetModel)
 			if detailErr == nil {
-				failoverPayload = applyClaudeGPTMasqueradePrompt(failoverPayload, handlerType, originalRequestedModel, failoverModel)
+				failoverPayload = applyClaudeGPTMasqueradePrompt(h.Cfg, failoverPayload, handlerType, originalRequestedModel, failoverModel)
 				failoverReqMeta := make(map[string]any, len(reqMeta)+1)
 				for k, v := range reqMeta {
 					failoverReqMeta[k] = v
@@ -1022,7 +1029,7 @@ func (h *BaseAPIHandler) ExecuteCountWithAuthManager(ctx context.Context, handle
 		}
 	}
 
-	rawJSON = applyClaudeGPTMasqueradePrompt(rawJSON, handlerType, originalRequestedModel, normalizedModel)
+	rawJSON = applyClaudeGPTMasqueradePrompt(h.Cfg, rawJSON, handlerType, originalRequestedModel, normalizedModel)
 	reqMeta[coreexecutor.RequestedModelMetadataKey] = normalizedModel
 	payload := rawJSON
 	if len(payload) == 0 {
@@ -1084,7 +1091,7 @@ func (h *BaseAPIHandler) ExecuteCountWithAuthManager(ctx context.Context, handle
 			failoverPayload := rewriteModelField(rawJSON, targetModel)
 			failoverProviders, failoverModel, detailErr := h.getRequestDetails(targetModel)
 			if detailErr == nil {
-				failoverPayload = applyClaudeGPTMasqueradePrompt(failoverPayload, handlerType, originalRequestedModel, failoverModel)
+				failoverPayload = applyClaudeGPTMasqueradePrompt(h.Cfg, failoverPayload, handlerType, originalRequestedModel, failoverModel)
 				failoverReqMeta := make(map[string]any, len(reqMeta)+1)
 				for k, v := range reqMeta {
 					failoverReqMeta[k] = v
@@ -1188,7 +1195,7 @@ func (h *BaseAPIHandler) ExecuteStreamWithAuthManager(ctx context.Context, handl
 		}
 	}
 
-	rawJSON = applyClaudeGPTMasqueradePrompt(rawJSON, handlerType, originalRequestedModel, normalizedModel)
+	rawJSON = applyClaudeGPTMasqueradePrompt(h.Cfg, rawJSON, handlerType, originalRequestedModel, normalizedModel)
 	reqMeta[coreexecutor.RequestedModelMetadataKey] = normalizedModel
 	payload := rawJSON
 	if len(payload) == 0 {
@@ -1243,7 +1250,7 @@ func (h *BaseAPIHandler) ExecuteStreamWithAuthManager(ctx context.Context, handl
 			failoverPayload := rewriteModelField(rawJSON, failoverTargetModel)
 			failoverProviders, failoverModel, detailErr := h.getRequestDetails(failoverTargetModel)
 			if detailErr == nil {
-				failoverPayload = applyClaudeGPTMasqueradePrompt(failoverPayload, handlerType, originalRequestedModel, failoverModel)
+				failoverPayload = applyClaudeGPTMasqueradePrompt(h.Cfg, failoverPayload, handlerType, originalRequestedModel, failoverModel)
 				failoverReqMeta := make(map[string]any, len(reqMeta)+1)
 				for k, v := range reqMeta {
 					failoverReqMeta[k] = v
@@ -1385,7 +1392,7 @@ func (h *BaseAPIHandler) ExecuteStreamWithAuthManager(ctx context.Context, handl
 							failoverPayload := rewriteModelField(rawJSON, failoverTargetModel)
 							failoverProviders, failoverModel, detailErr := h.getRequestDetails(failoverTargetModel)
 							if detailErr == nil {
-								failoverPayload = applyClaudeGPTMasqueradePrompt(failoverPayload, handlerType, originalRequestedModel, failoverModel)
+								failoverPayload = applyClaudeGPTMasqueradePrompt(h.Cfg, failoverPayload, handlerType, originalRequestedModel, failoverModel)
 								failoverReqMeta := make(map[string]any, len(reqMeta)+1)
 								for k, v := range reqMeta {
 									failoverReqMeta[k] = v

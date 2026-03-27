@@ -289,6 +289,22 @@ func (h *Handler) PutClaudeToGPTRoutingEnabled(c *gin.Context) {
 	h.updateBoolField(c, func(v bool) { h.cfg.ClaudeToGPTRoutingEnabled = v })
 }
 
+// ClaudeStyleEnabled
+func (h *Handler) GetClaudeStyleEnabled(c *gin.Context) {
+	c.JSON(200, gin.H{"claude-style-enabled": h.cfg.ClaudeStyleEnabled})
+}
+func (h *Handler) PutClaudeStyleEnabled(c *gin.Context) {
+	h.updateBoolField(c, func(v bool) { h.cfg.ClaudeStyleEnabled = v })
+}
+
+// ClaudeStylePrompt
+func (h *Handler) GetClaudeStylePrompt(c *gin.Context) {
+	c.JSON(200, gin.H{"claude-style-prompt": strings.TrimSpace(h.cfg.ClaudeStylePrompt)})
+}
+func (h *Handler) PutClaudeStylePrompt(c *gin.Context) {
+	h.updateStringField(c, func(v string) { h.cfg.ClaudeStylePrompt = strings.TrimSpace(v) })
+}
+
 // ClaudeToGPTTargetFamily
 func (h *Handler) GetClaudeToGPTTargetFamily(c *gin.Context) {
 	c.JSON(200, gin.H{"claude-to-gpt-target-family": strings.TrimSpace(h.cfg.ClaudeToGPTTargetFamily)})

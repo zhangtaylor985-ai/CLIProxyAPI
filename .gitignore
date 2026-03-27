@@ -27,6 +27,7 @@ auths/*
 
 # Documentation
 docs/*
+!docs/claude-style-prompt-research_CN.md
 AGENTS.md
 CLAUDE.md
 GEMINI.md

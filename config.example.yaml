@@ -125,6 +125,13 @@ claude-to-gpt-target-family: ""
 # When true, unprefixed model requests only use credentials without a prefix (except when prefix == model name).
 force-model-prefix: false
 
+# When true, Claude -> GPT blackbox routing also injects a stronger Claude/Opus-style behavior prompt.
+claude-style-enabled: false
+
+# Editable Claude/Opus-style prompt used by the blackbox masquerade layer.
+# Leave empty to use the built-in default template.
+claude-style-prompt: ""
+
 # Number of times to retry a request. Retries will occur if the HTTP response code is 403, 408, 500, 502, 503, or 504.
 request-retry: 3
 
