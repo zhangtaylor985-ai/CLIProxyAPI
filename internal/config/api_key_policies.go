@@ -29,6 +29,12 @@ type APIKeyPolicy struct {
 	// It only takes effect when claude-to-gpt-routing-enabled is true.
 	EnableClaudeModels *bool `yaml:"enable-claude-models,omitempty" json:"enable-claude-models,omitempty"`
 
+	// ClaudeUsageLimitUSD defines the cumulative Claude spend ceiling (USD) for this API key
+	// when EnableClaudeModels is enabled. Once the persisted Claude usage reaches the limit,
+	// the key falls back to the global Claude -> GPT default strategy when that global switch is on.
+	// Values <= 0 are treated as disabled.
+	ClaudeUsageLimitUSD float64 `yaml:"claude-usage-limit-usd,omitempty" json:"claude-usage-limit-usd,omitempty"`
+
 	// ClaudeGPTTargetFamily optionally overrides the target base model used by the synthesized
 	// Claude -> GPT routing/failover defaults for this API key. Supported values:
 	// "gpt-5.2", "gpt-5.4", and "gpt-5.3-codex". When unset, the server defaults to gpt-5.4.
@@ -150,6 +156,10 @@ type ModelFailoverRule struct {
 type APIKeyFailoverPolicy struct {
 	// Claude controls failover behaviour when the request is routed to the Claude provider.
 	Claude ProviderFailoverPolicy `yaml:"claude,omitempty" json:"claude,omitempty"`
+}
+
+type APIKeyPolicyEffectiveOptions struct {
+	ForceGlobalClaudeRouting bool
 }
 
 func defaultGlobalClaudeRoutingRules(family string) []ModelRoutingRule {
@@ -295,6 +305,13 @@ func (p *APIKeyPolicy) ClaudeModelsEnabled() bool {
 		return false
 	}
 	return *p.EnableClaudeModels
+}
+
+func (p *APIKeyPolicy) ClaudeUsageLimitEnabled() bool {
+	if p == nil {
+		return false
+	}
+	return p.ClaudeUsageLimitUSD > 0
 }
 
 func (p *APIKeyPolicy) ClaudeGPTTargetFamilyOrDefault() string {
@@ -452,6 +469,10 @@ func (cfg *Config) AllowsClaudeOpus1M(apiKey string) bool {
 // EffectiveAPIKeyPolicy returns a copy of the API key policy augmented with
 // global defaults such as Claude -> GPT routing.
 func (cfg *Config) EffectiveAPIKeyPolicy(apiKey string) *APIKeyPolicy {
+	return cfg.EffectiveAPIKeyPolicyWithOptions(apiKey, APIKeyPolicyEffectiveOptions{})
+}
+
+func (cfg *Config) EffectiveAPIKeyPolicyWithOptions(apiKey string, opts APIKeyPolicyEffectiveOptions) *APIKeyPolicy {
 	if cfg == nil {
 		return nil
 	}
@@ -468,11 +489,18 @@ func (cfg *Config) EffectiveAPIKeyPolicy(apiKey string) *APIKeyPolicy {
 		entry.ExcludedModels = append(entry.ExcludedModels, defaultClientHiddenGPTModelPatterns...)
 		entry.ExcludedModels = NormalizeExcludedModels(entry.ExcludedModels)
 	}
-	if strings.TrimSpace(entry.ClaudeGPTTargetFamily) == "" {
+	if opts.ForceGlobalClaudeRouting {
+		entry.EnableClaudeModels = nil
+		entry.ClaudeGPTTargetFamily = cfg.ClaudeGPTTargetFamilyOrDefault()
+	} else if strings.TrimSpace(entry.ClaudeGPTTargetFamily) == "" {
 		entry.ClaudeGPTTargetFamily = cfg.ClaudeGPTTargetFamilyOrDefault()
 	}
 
 	if !cfg.ShouldRouteClaudeToGPT(key) {
+		if opts.ForceGlobalClaudeRouting && cfg.ClaudeToGPTRoutingEnabled {
+			entry.ModelRouting.Rules = append(defaultGlobalClaudeRoutingRules(entry.ClaudeGPTTargetFamilyOrDefault()), entry.ModelRouting.Rules...)
+			return &entry
+		}
 		if found != nil {
 			if cfg.ClaudeToGPTRoutingEnabled && entry.ClaudeModelsEnabled() && !hasExplicitClaudeFailoverConfig(entry.Failover.Claude) {
 				entry.Failover.Claude.Enabled = true
@@ -576,6 +604,9 @@ func (cfg *Config) SanitizeAPIKeyPolicies() {
 
 		if entry.DailyBudgetUSD <= 0 {
 			entry.DailyBudgetUSD = 0
+		}
+		if entry.ClaudeUsageLimitUSD <= 0 {
+			entry.ClaudeUsageLimitUSD = 0
 		}
 		if entry.WeeklyBudgetUSD <= 0 {
 			entry.WeeklyBudgetUSD = 0

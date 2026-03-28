@@ -501,6 +501,47 @@ func TestSQLiteStore_GetCostMicroUSDByTimeRange(t *testing.T) {
 	}
 }
 
+func TestSQLiteStore_GetCostMicroUSDByModelPrefix(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "billing.sqlite")
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore: %v", err)
+	}
+	defer store.Close()
+
+	ctx := context.Background()
+	if err := store.AddUsage(ctx, "k", "claude-opus-4-6", "2026-03-15", DailyUsageRow{
+		Requests:     1,
+		TotalTokens:  1,
+		CostMicroUSD: 111,
+	}); err != nil {
+		t.Fatalf("AddUsage(claude): %v", err)
+	}
+	if err := store.AddUsage(ctx, "k", "claude-sonnet-4-6", "2026-03-16", DailyUsageRow{
+		Requests:     1,
+		TotalTokens:  1,
+		CostMicroUSD: 222,
+	}); err != nil {
+		t.Fatalf("AddUsage(claude sonnet): %v", err)
+	}
+	if err := store.AddUsage(ctx, "k", "gpt-5.4", "2026-03-16", DailyUsageRow{
+		Requests:     1,
+		TotalTokens:  1,
+		CostMicroUSD: 333,
+	}); err != nil {
+		t.Fatalf("AddUsage(gpt): %v", err)
+	}
+
+	total, err := store.GetCostMicroUSDByModelPrefix(ctx, "k", "claude-")
+	if err != nil {
+		t.Fatalf("GetCostMicroUSDByModelPrefix: %v", err)
+	}
+	if total != 333 {
+		t.Fatalf("total=%d", total)
+	}
+}
+
 func TestSQLiteStore_BuildUsageStatisticsSnapshot_DBFirst(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "billing.sqlite")

@@ -9,6 +9,7 @@ import (
 	"crypto/subtle"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -916,10 +917,14 @@ func (s *Server) filterModelsForAPIKey(models []map[string]any, apiKey string) [
 	if s == nil || s.cfg == nil || len(models) == 0 {
 		return models
 	}
-	p := s.cfg.EffectiveAPIKeyPolicy(apiKey)
+	forceGlobalClaudeRouting := s.shouldForceGlobalClaudeRoutingForAPIKey(context.Background(), apiKey)
+	p := s.cfg.EffectiveAPIKeyPolicyWithOptions(apiKey, config.APIKeyPolicyEffectiveOptions{
+		ForceGlobalClaudeRouting: forceGlobalClaudeRouting,
+	})
 	if p == nil {
 		return models
 	}
+	shouldRouteClaudeToGPT := s.cfg.ShouldRouteClaudeToGPT(apiKey) || forceGlobalClaudeRouting
 
 	out := make([]map[string]any, 0, len(models))
 	for _, model := range models {
@@ -934,7 +939,7 @@ func (s *Server) filterModelsForAPIKey(models []map[string]any, apiKey string) [
 		if !p.AllowsClaudeOpus46() && strings.HasPrefix(idKey, "claude-opus-4-6") {
 			continue
 		}
-		if s.cfg.ShouldRouteClaudeToGPT(apiKey) && policy.IsClaudeModel(idKey) {
+		if shouldRouteClaudeToGPT && policy.IsClaudeModel(idKey) {
 			continue
 		}
 		denied := false
@@ -950,6 +955,22 @@ func (s *Server) filterModelsForAPIKey(models []map[string]any, apiKey string) [
 		out = append(out, model)
 	}
 	return out
+}
+
+func (s *Server) shouldForceGlobalClaudeRoutingForAPIKey(ctx context.Context, apiKey string) bool {
+	if s == nil || s.cfg == nil || s.billingStore == nil || !s.cfg.ClaudeToGPTRoutingEnabled {
+		return false
+	}
+	p := s.cfg.FindAPIKeyPolicy(apiKey)
+	if p == nil || !p.ClaudeModelsEnabled() || !p.ClaudeUsageLimitEnabled() {
+		return false
+	}
+	spentMicro, err := s.billingStore.GetCostMicroUSDByModelPrefix(ctx, apiKey, "claude-")
+	if err != nil {
+		return false
+	}
+	limitMicro := int64(math.Round(p.ClaudeUsageLimitUSD * 1_000_000))
+	return limitMicro > 0 && spentMicro >= limitMicro
 }
 
 // Start begins listening for and serving HTTP or HTTPS requests.

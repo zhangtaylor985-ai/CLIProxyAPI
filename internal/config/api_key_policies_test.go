@@ -90,6 +90,24 @@ func TestConfig_SanitizeAPIKeyPolicies_DisablesTokenPackageWhenStartInvalid(t *t
 	}
 }
 
+func TestConfig_SanitizeAPIKeyPolicies_DisablesClaudeUsageLimitWhenNonPositive(t *testing.T) {
+	cfg := &Config{
+		APIKeyPolicies: []APIKeyPolicy{
+			{APIKey: "k1", ClaudeUsageLimitUSD: -1},
+			{APIKey: "k2", ClaudeUsageLimitUSD: 25},
+		},
+	}
+
+	cfg.SanitizeAPIKeyPolicies()
+
+	if got := cfg.FindAPIKeyPolicy("k1"); got == nil || got.ClaudeUsageLimitUSD != 0 {
+		t.Fatalf("k1 claude usage limit = %v", got)
+	}
+	if got := cfg.FindAPIKeyPolicy("k2"); got == nil || got.ClaudeUsageLimitUSD != 25 {
+		t.Fatalf("k2 claude usage limit = %v", got)
+	}
+}
+
 func TestConfig_ShouldRouteClaudeToGPT_DefaultsToAllKeysWhenGlobalEnabled(t *testing.T) {
 	cfg := &Config{SDKConfig: SDKConfig{ClaudeToGPTRoutingEnabled: true}}
 
@@ -237,6 +255,38 @@ func TestConfig_EffectiveAPIKeyPolicy_UsesPerKeyClaudeGPTTargetFamily(t *testing
 	target, decision = policy.RoutedModelFor("k1", "claude-sonnet-4-6", time.Unix(0, 0))
 	if decision == nil || target != "gpt-5.2(medium)" {
 		t.Fatalf("expected sonnet routing to gpt-5.2(medium), got target=%q decision=%+v", target, decision)
+	}
+}
+
+func TestConfig_EffectiveAPIKeyPolicyWithOptions_ForcesGlobalClaudeRouting(t *testing.T) {
+	cfg := &Config{
+		SDKConfig: SDKConfig{
+			ClaudeToGPTRoutingEnabled: true,
+			ClaudeToGPTTargetFamily:   "gpt-5.4",
+		},
+		APIKeyPolicies: []APIKeyPolicy{
+			{
+				APIKey:                "k1",
+				EnableClaudeModels:    boolPtr(true),
+				ClaudeUsageLimitUSD:   10,
+				ClaudeGPTTargetFamily: "gpt-5.2",
+			},
+		},
+	}
+
+	policy := cfg.EffectiveAPIKeyPolicyWithOptions("k1", APIKeyPolicyEffectiveOptions{
+		ForceGlobalClaudeRouting: true,
+	})
+	if policy == nil {
+		t.Fatal("expected synthesized policy")
+	}
+	if policy.ClaudeModelsEnabled() {
+		t.Fatal("expected forced policy to stop opting into direct Claude execution")
+	}
+
+	target, decision := policy.RoutedModelFor("k1", "claude-opus-4-6", time.Unix(0, 0))
+	if decision == nil || target != "gpt-5.4(high)" {
+		t.Fatalf("expected forced opus routing to gpt-5.4(high), got target=%q decision=%+v", target, decision)
 	}
 }
 

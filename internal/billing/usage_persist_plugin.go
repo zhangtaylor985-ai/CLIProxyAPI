@@ -191,6 +191,29 @@ func (p *UsagePersistPlugin) PendingCostMicroUSDByTimeRange(apiKey string, start
 	return total
 }
 
+func (p *UsagePersistPlugin) PendingCostMicroUSDByModelPrefix(apiKey, modelPrefix string) int64 {
+	if p == nil {
+		return 0
+	}
+	apiKey = strings.TrimSpace(apiKey)
+	modelPrefix = policy.NormaliseModelKey(modelPrefix)
+	if apiKey == "" || modelPrefix == "" {
+		return 0
+	}
+	var total int64
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	for _, item := range p.pending {
+		if item.delta.APIKey != apiKey {
+			continue
+		}
+		if strings.HasPrefix(item.delta.Model, modelPrefix) {
+			total += item.delta.CostMicroUSD
+		}
+	}
+	return total
+}
+
 func (p *UsagePersistPlugin) MergePendingSnapshot(snapshot *internalusage.StatisticsSnapshot) {
 	if p == nil || snapshot == nil {
 		return

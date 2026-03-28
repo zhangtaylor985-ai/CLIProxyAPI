@@ -67,6 +67,7 @@ func (h *Handler) PatchAPIKeyPolicies(c *gin.Context) {
 	type policyPatch struct {
 		FastMode              *bool              `json:"fast-mode"`
 		EnableClaudeModels    *bool              `json:"enable-claude-models"`
+		ClaudeUsageLimitUSD   *float64           `json:"claude-usage-limit-usd"`
 		ClaudeGPTTargetFamily *string            `json:"claude-gpt-target-family"`
 		EnableClaudeOpus1M    *bool              `json:"enable-claude-opus-1m"`
 		ModelRouting          *modelRoutingPatch `json:"model-routing"`
@@ -128,6 +129,9 @@ func (h *Handler) PatchAPIKeyPolicies(c *gin.Context) {
 	if body.Value.EnableClaudeModels != nil {
 		v := *body.Value.EnableClaudeModels
 		entry.EnableClaudeModels = &v
+	}
+	if body.Value.ClaudeUsageLimitUSD != nil {
+		entry.ClaudeUsageLimitUSD = *body.Value.ClaudeUsageLimitUSD
 	}
 	if body.Value.ClaudeGPTTargetFamily != nil {
 		entry.ClaudeGPTTargetFamily = strings.TrimSpace(*body.Value.ClaudeGPTTargetFamily)

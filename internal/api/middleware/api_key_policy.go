@@ -3,6 +3,7 @@ package middleware
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"math"
 	"net/http"
@@ -74,13 +75,10 @@ func APIKeyPolicyMiddleware(getConfig func() *config.Config, limiter *policy.SQL
 			return
 		}
 		allowClaudeOpus1M := cfg.AllowsClaudeOpus1M(apiKey)
-
-		if p := cfg.EffectiveAPIKeyPolicy(apiKey); p != nil {
-			c.Set(apiKeyPolicyContextKey, p)
+		policyEntry := cfg.EffectiveAPIKeyPolicy(apiKey)
+		if policyEntry != nil {
+			c.Set(apiKeyPolicyContextKey, policyEntry)
 		}
-
-		policyValue, _ := c.Get(apiKeyPolicyContextKey)
-		policyEntry, _ := policyValue.(*config.APIKeyPolicy)
 
 		if !allowClaudeOpus1M {
 			stripClaudeOpus1MHeaders(c.Request.Header)
@@ -125,6 +123,23 @@ func APIKeyPolicyMiddleware(getConfig func() *config.Config, limiter *policy.SQL
 		if policyEntry != nil && !policyEntry.AllowsClaudeOpus46() {
 			if rewritten, changed := policy.DowngradeClaudeOpus46(effectiveModel); changed {
 				effectiveModel = rewritten
+			}
+		}
+		if cfg.ClaudeToGPTRoutingEnabled && policyEntry != nil && policyEntry.ClaudeModelsEnabled() && policyEntry.ClaudeUsageLimitEnabled() && policy.IsClaudeModel(effectiveModel) {
+			exceeded, errExceeded := claudeUsageLimitExceeded(c.Request.Context(), costReader, apiKey, policyEntry)
+			if errExceeded != nil {
+				body := handlers.BuildErrorResponseBody(http.StatusInternalServerError, errExceeded.Error())
+				c.Abort()
+				c.Data(http.StatusInternalServerError, "application/json", body)
+				return
+			}
+			if exceeded {
+				policyEntry = cfg.EffectiveAPIKeyPolicyWithOptions(apiKey, config.APIKeyPolicyEffectiveOptions{
+					ForceGlobalClaudeRouting: true,
+				})
+				if policyEntry != nil {
+					c.Set(apiKeyPolicyContextKey, policyEntry)
+				}
 			}
 		}
 		budgetModel := effectiveModel
@@ -425,6 +440,29 @@ func resolveDailyLimit(p *config.APIKeyPolicy, modelKey string) (limit int, limi
 		}
 	}
 	return 0, ""
+}
+
+func claudeUsageLimitExceeded(
+	ctx context.Context,
+	costReader billing.DailyCostReader,
+	apiKey string,
+	p *config.APIKeyPolicy,
+) (bool, error) {
+	if p == nil || !p.ClaudeModelsEnabled() || !p.ClaudeUsageLimitEnabled() {
+		return false, nil
+	}
+	if costReader == nil {
+		return false, fmt.Errorf("billing store unavailable")
+	}
+	limitMicro := int64(math.Round(p.ClaudeUsageLimitUSD * 1_000_000))
+	if limitMicro <= 0 {
+		return false, nil
+	}
+	spentMicro, err := costReader.GetCostMicroUSDByModelPrefix(ctx, apiKey, "claude-")
+	if err != nil {
+		return false, err
+	}
+	return spentMicro >= limitMicro, nil
 }
 
 func resolveTokenPackageBudgetState(

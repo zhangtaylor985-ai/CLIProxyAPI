@@ -45,6 +45,9 @@ api-keys:
 #   Supports model-specific rules to override the target based on the requested model (wildcards supported).
 #   (e.g. Claude weekly cap / rolling-window caps / account issues). Useful for automatically switching to Codex.
 # - daily-limits: request counts are tracked per day in China Standard Time (UTC+8).
+# - claude-usage-limit-usd: when enable-claude-models is true, the API key may keep using Claude
+#   until cumulative Claude spend reaches this limit. Once reached, it falls back to the global
+#   Claude -> GPT default strategy (only when claude-to-gpt-routing-enabled is true).
 # - daily-budget-usd / weekly-budget-usd: spend quotas are tracked from persisted billing data.
 #   Weekly quota windows use China Standard Time (UTC+8), Monday 00:00 -> next Monday 00:00.
 # - token-package-usd / token-package-started-at: one-time prepaid spend allowance for the API key.
@@ -82,6 +85,7 @@ api-key-policies:
             target-model: "gpt-5.4(high)"
           - from-model: "claude-sonnet-4-6*"
             target-model: "gpt-5.4(medium)"
+    claude-usage-limit-usd: 30
     allow-claude-opus-4-6: true
     token-package-usd: 1000
     token-package-started-at: "2026-03-25T12:00:00+08:00"

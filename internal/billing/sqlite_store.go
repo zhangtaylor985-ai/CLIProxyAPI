@@ -22,6 +22,7 @@ type DailyCostReader interface {
 	GetDailyCostMicroUSD(ctx context.Context, apiKey, dayKey string) (int64, error)
 	GetCostMicroUSDByDayRange(ctx context.Context, apiKey, startDay, endDayExclusive string) (int64, error)
 	GetCostMicroUSDByTimeRange(ctx context.Context, apiKey string, startInclusive, endExclusive time.Time) (int64, error)
+	GetCostMicroUSDByModelPrefix(ctx context.Context, apiKey, modelPrefix string) (int64, error)
 }
 
 type SQLiteStore struct {
@@ -38,6 +39,7 @@ type pendingUsageProvider interface {
 	PendingDailyUsageRows(apiKey, dayKey string) []DailyUsageRow
 	PendingCostMicroUSDByDayRange(apiKey, startDay, endDayExclusive string) int64
 	PendingCostMicroUSDByTimeRange(apiKey string, startInclusive, endExclusive time.Time) int64
+	PendingCostMicroUSDByModelPrefix(apiKey, modelPrefix string) int64
 	MergePendingSnapshot(snapshot *internalusage.StatisticsSnapshot)
 }
 
@@ -502,6 +504,30 @@ func (s *SQLiteStore) GetCostMicroUSDByTimeRange(ctx context.Context, apiKey str
 	}
 	if provider := s.getPendingUsageProvider(); provider != nil {
 		total += provider.PendingCostMicroUSDByTimeRange(apiKey, startInclusive, endExclusive)
+	}
+	return total, nil
+}
+
+func (s *SQLiteStore) GetCostMicroUSDByModelPrefix(ctx context.Context, apiKey, modelPrefix string) (int64, error) {
+	if s == nil || s.db == nil {
+		return 0, fmt.Errorf("billing sqlite: not initialized")
+	}
+	apiKey = strings.TrimSpace(apiKey)
+	modelPrefix = policy.NormaliseModelKey(modelPrefix)
+	if apiKey == "" || modelPrefix == "" {
+		return 0, fmt.Errorf("billing sqlite: invalid inputs")
+	}
+	row := s.db.QueryRowContext(ctx, `
+		SELECT COALESCE(SUM(cost_micro_usd), 0)
+		FROM api_key_model_daily_usage
+		WHERE api_key = ? AND model LIKE ?
+	`, apiKey, modelPrefix+"%")
+	var total int64
+	if err := row.Scan(&total); err != nil {
+		return 0, fmt.Errorf("billing sqlite: model prefix cost: %w", err)
+	}
+	if provider := s.getPendingUsageProvider(); provider != nil {
+		total += provider.PendingCostMicroUSDByModelPrefix(apiKey, modelPrefix)
 	}
 	return total, nil
 }

@@ -342,11 +342,13 @@ type stubCostReader struct {
 	dailyCost         int64
 	weeklyCost        int64
 	timeCost          int64
+	modelPrefixCost   int64
 	priceSource       string
 	err               error
 	dailyCostFn       func(ctx context.Context, apiKey, dayKey string) (int64, error)
 	dayRangeCostFn    func(ctx context.Context, apiKey, startDay, endDayExclusive string) (int64, error)
 	timeRangeCostFn   func(ctx context.Context, apiKey string, startInclusive, endExclusive time.Time) (int64, error)
+	modelPrefixCostFn func(ctx context.Context, apiKey, modelPrefix string) (int64, error)
 	resolvePriceMicro func(ctx context.Context, model string) (billing.PriceMicroUSDPer1M, string, int64, error)
 }
 
@@ -371,6 +373,13 @@ func (s stubCostReader) GetCostMicroUSDByTimeRange(ctx context.Context, apiKey s
 	return s.timeCost, s.err
 }
 
+func (s stubCostReader) GetCostMicroUSDByModelPrefix(ctx context.Context, apiKey, modelPrefix string) (int64, error) {
+	if s.modelPrefixCostFn != nil {
+		return s.modelPrefixCostFn(ctx, apiKey, modelPrefix)
+	}
+	return s.modelPrefixCost, s.err
+}
+
 func (s stubCostReader) ResolvePriceMicro(ctx context.Context, model string) (billing.PriceMicroUSDPer1M, string, int64, error) {
 	if s.resolvePriceMicro != nil {
 		return s.resolvePriceMicro(ctx, model)
@@ -380,6 +389,13 @@ func (s stubCostReader) ResolvePriceMicro(ctx context.Context, model string) (bi
 		source = "saved"
 	}
 	return billing.PriceMicroUSDPer1M{Prompt: 1}, source, 0, s.err
+}
+
+func firstRoutingTarget(p *config.APIKeyPolicy) string {
+	if p == nil || len(p.ModelRouting.Rules) == 0 {
+		return ""
+	}
+	return p.ModelRouting.Rules[0].TargetModel
 }
 
 func TestAPIKeyPolicyMiddleware_DailyBudget(t *testing.T) {
@@ -410,6 +426,54 @@ func TestAPIKeyPolicyMiddleware_DailyBudget(t *testing.T) {
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusTooManyRequests {
 		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestAPIKeyPolicyMiddleware_ClaudeUsageLimitFallsBackToGlobalRouting(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	cfg := &config.Config{
+		SDKConfig: config.SDKConfig{ClaudeToGPTRoutingEnabled: true},
+		APIKeyPolicies: []config.APIKeyPolicy{
+			{
+				APIKey:              "k",
+				EnableClaudeModels:  boolPtr(true),
+				ClaudeUsageLimitUSD: 10,
+			},
+		},
+	}
+	cfg.SanitizeAPIKeyPolicies()
+
+	reader := stubCostReader{modelPrefixCost: 10_000_000}
+	var _ billing.DailyCostReader = reader
+
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set("apiKey", "k")
+		c.Next()
+	})
+	r.Use(APIKeyPolicyMiddleware(func() *config.Config { return cfg }, nil, reader))
+	r.POST("/v1/chat/completions", func(c *gin.Context) {
+		policyValue, _ := c.Get(apiKeyPolicyContextKey)
+		policyEntry, _ := policyValue.(*config.APIKeyPolicy)
+		body, _ := io.ReadAll(c.Request.Body)
+		c.JSON(200, gin.H{
+			"model":         gjson.GetBytes(body, "model").String(),
+			"routed_target": firstRoutingTarget(policyEntry),
+		})
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{"model":"claude-opus-4-6"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	if got := gjson.GetBytes(w.Body.Bytes(), "model").String(); got != "claude-opus-4-6" {
+		t.Fatalf("model=%q", got)
+	}
+	if got := gjson.GetBytes(w.Body.Bytes(), "routed_target").String(); got != "gpt-5.4(high)" {
+		t.Fatalf("routed_target=%q body=%s", got, w.Body.String())
 	}
 }
 
