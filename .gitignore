@@ -17,6 +17,9 @@ refs/*
 pgstore/*
 gitstore/*
 objectstore/*
+api_key_policy_limits.sqlite
+api_key_policy_limits.sqlite-shm
+api_key_policy_limits.sqlite-wal
 
 # Static assets
 static/*
