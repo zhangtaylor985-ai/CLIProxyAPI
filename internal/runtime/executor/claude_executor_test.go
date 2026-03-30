@@ -1019,6 +1019,90 @@ func TestEnforceCacheControlLimit_ToolOnlyPayloadStillRespectsLimit(t *testing.T
 	}
 }
 
+func TestStripEmptyThinkingSignatures_RemovesOnlyBlankSignatures(t *testing.T) {
+	payload := []byte(`{
+		"messages": [
+			{
+				"role": "assistant",
+				"content": [
+					{"type":"thinking","thinking":"first","signature":"   "},
+					{"type":"thinking","thinking":"second","signature":"sig_valid_123"},
+					{"type":"text","text":"done"}
+				]
+			}
+		]
+	}`)
+
+	out := stripEmptyThinkingSignatures(payload)
+
+	if gjson.GetBytes(out, "messages.0.content.0.signature").Exists() {
+		t.Fatalf("blank thinking signature should be removed, got %s", string(out))
+	}
+	if got := gjson.GetBytes(out, "messages.0.content.0.thinking").String(); got != "first" {
+		t.Fatalf("thinking text should be preserved, got %q", got)
+	}
+	if got := gjson.GetBytes(out, "messages.0.content.1.signature").String(); got != "sig_valid_123" {
+		t.Fatalf("valid signature should be preserved, got %q", got)
+	}
+}
+
+func TestClaudeExecutor_ExecuteStream_StripsEmptyThinkingSignatureBeforeUpstream(t *testing.T) {
+	var seenBody []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		seenBody = bytes.Clone(body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"type\":\"message_stop\"}\n\n"))
+	}))
+	defer server.Close()
+
+	executor := NewClaudeExecutor(&config.Config{})
+	auth := &cliproxyauth.Auth{Attributes: map[string]string{
+		"api_key":  "key-123",
+		"base_url": server.URL,
+	}}
+	payload := []byte(`{
+		"messages": [
+			{
+				"role": "assistant",
+				"content": [
+					{"type":"thinking","thinking":"scratchpad","signature":""},
+					{"type":"text","text":"continuing"}
+				]
+			},
+			{
+				"role": "user",
+				"content": [{"type":"text","text":"next"}]
+			}
+		]
+	}`)
+
+	result, err := executor.ExecuteStream(context.Background(), auth, cliproxyexecutor.Request{
+		Model:   "claude-3-5-sonnet-20241022",
+		Payload: payload,
+	}, cliproxyexecutor.Options{
+		SourceFormat: sdktranslator.FromString("claude"),
+	})
+	if err != nil {
+		t.Fatalf("ExecuteStream error: %v", err)
+	}
+	for chunk := range result.Chunks {
+		if chunk.Err != nil {
+			t.Fatalf("unexpected chunk error: %v", chunk.Err)
+		}
+	}
+
+	if len(seenBody) == 0 {
+		t.Fatal("expected upstream request body to be captured")
+	}
+	if gjson.GetBytes(seenBody, "messages.0.content.0.signature").Exists() {
+		t.Fatalf("empty signature should be stripped before upstream, got %s", string(seenBody))
+	}
+	if got := gjson.GetBytes(seenBody, "messages.0.content.0.thinking").String(); got != "scratchpad" {
+		t.Fatalf("thinking text should be preserved, got %q", got)
+	}
+}
+
 func TestClaudeExecutor_CountTokens_AppliesCacheControlGuards(t *testing.T) {
 	var seenBody []byte
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

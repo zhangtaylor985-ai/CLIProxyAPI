@@ -551,3 +551,71 @@ func TestManager_MarkResult_CodexFastRecoveryLeavesLongCooldownErrorsUntouched(t
 		t.Fatalf("expected 404 cooldown near 12h, got %v", wait)
 	}
 }
+
+func TestManager_MarkResult_CodexPoolEmptyGetsCooldown(t *testing.T) {
+	m := NewManager(nil, nil, nil)
+
+	auth := &Auth{
+		ID:       "codex-pool-empty",
+		Provider: "codex",
+	}
+	if _, errRegister := m.Register(context.Background(), auth); errRegister != nil {
+		t.Fatalf("register auth: %v", errRegister)
+	}
+
+	model := "gpt-5.4"
+	m.MarkResult(context.Background(), Result{
+		AuthID:   auth.ID,
+		Provider: auth.Provider,
+		Model:    model,
+		Success:  false,
+		Error:    &Error{HTTPStatus: http.StatusBadRequest, Message: "pool empty"},
+	})
+
+	updated, ok := m.GetByID(auth.ID)
+	if !ok || updated == nil {
+		t.Fatalf("expected auth to be present")
+	}
+	state := updated.ModelStates[model]
+	if state == nil {
+		t.Fatalf("expected model state to be present")
+	}
+	wait := state.NextRetryAfter.Sub(state.UpdatedAt)
+	if wait < 59*time.Second || wait > 61*time.Second {
+		t.Fatalf("expected pool empty cooldown near 1m, got %v", wait)
+	}
+}
+
+func TestManager_MarkResult_CodexTokenParseGetsUnauthorizedCooldown(t *testing.T) {
+	m := NewManager(nil, nil, nil)
+
+	auth := &Auth{
+		ID:       "codex-bad-token",
+		Provider: "codex",
+	}
+	if _, errRegister := m.Register(context.Background(), auth); errRegister != nil {
+		t.Fatalf("register auth: %v", errRegister)
+	}
+
+	model := "gpt-5.4"
+	m.MarkResult(context.Background(), Result{
+		AuthID:   auth.ID,
+		Provider: auth.Provider,
+		Model:    model,
+		Success:  false,
+		Error:    &Error{HTTPStatus: http.StatusInternalServerError, Message: `{"detail":"Could not parse your authentication token. Please try signing in again."}`},
+	})
+
+	updated, ok := m.GetByID(auth.ID)
+	if !ok || updated == nil {
+		t.Fatalf("expected auth to be present")
+	}
+	state := updated.ModelStates[model]
+	if state == nil {
+		t.Fatalf("expected model state to be present")
+	}
+	wait := state.NextRetryAfter.Sub(state.UpdatedAt)
+	if wait < 29*time.Minute || wait > 31*time.Minute {
+		t.Fatalf("expected token parse cooldown near 30m, got %v", wait)
+	}
+}

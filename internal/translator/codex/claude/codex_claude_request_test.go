@@ -133,3 +133,48 @@ func TestConvertClaudeRequestToCodex_ParallelToolCalls(t *testing.T) {
 		})
 	}
 }
+
+func TestConvertClaudeRequestToCodex_ClampBuiltinWebSearchReasoningEffort(t *testing.T) {
+	input := `{
+		"model": "claude-opus-4-6",
+		"system": [{"type":"text","text":"You are an assistant for performing a web search tool use"}],
+		"tools": [{"type":"web_search_20250305","name":"web_search","max_uses":8}],
+		"thinking": {"type":"adaptive"},
+		"output_config": {"effort":"max"},
+		"messages": [{"role":"user","content":[{"type":"text","text":"Perform a web search for the query: 张雪峰 去世 辟谣"}]}]
+	}`
+
+	result := ConvertClaudeRequestToCodex("gpt-5.4", []byte(input), true)
+	if got := gjson.GetBytes(result, "reasoning.effort").String(); got != "medium" {
+		t.Fatalf("reasoning.effort = %q, want %q; output=%s", got, "medium", string(result))
+	}
+}
+
+func TestConvertClaudeRequestToCodex_MapsClaudeCodeWebSearchToolToBuiltinSearch(t *testing.T) {
+	input := `{
+		"model": "claude-opus-4-6",
+		"tools": [{
+			"name": "WebSearch",
+			"description": "Allows Claude to search the web and use the results to inform responses",
+			"input_schema": {
+				"type": "object",
+				"properties": {
+					"query": {"type": "string"},
+					"allowed_domains": {"type": "array", "items": {"type": "string"}}
+				},
+				"required": ["query"]
+			}
+		}],
+		"thinking": {"type":"adaptive"},
+		"output_config": {"effort":"max"},
+		"messages": [{"role":"user","content":"2026 张雪峰去世你知道吗，他是怎么死的，为什么？"}]
+	}`
+
+	result := ConvertClaudeRequestToCodex("gpt-5.4", []byte(input), true)
+	if got := gjson.GetBytes(result, "tools.0.type").String(); got != "web_search" {
+		t.Fatalf("tools.0.type = %q, want %q; output=%s", got, "web_search", string(result))
+	}
+	if got := gjson.GetBytes(result, "reasoning.effort").String(); got != "medium" {
+		t.Fatalf("reasoning.effort = %q, want %q; output=%s", got, "medium", string(result))
+	}
+}

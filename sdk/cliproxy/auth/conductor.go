@@ -1744,7 +1744,11 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 					auth.StatusMessage = result.Error.Message
 				}
 
-				statusCode := statusCodeFromResult(result.Error)
+				errorMessage := ""
+				if result.Error != nil {
+					errorMessage = result.Error.Message
+				}
+				statusCode := normalizeProviderFailureStatusCode(statusCodeFromResult(result.Error), errorMessage)
 				backoffLevel := state.Quota.BackoffLevel
 				state.Quota = QuotaState{}
 				if isModelSupportResultError(result.Error) {
@@ -1773,6 +1777,9 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 						shouldSuspendModel = true
 					case 402, 403:
 						next := now.Add(30 * time.Minute)
+						if result.Error != nil && isAccountDeactivatedMessage(result.Error.Message) {
+							next = now.Add(12 * time.Hour)
+						}
 						state.NextRetryAfter = next
 						suspendReason = "payment_required"
 						shouldSuspendModel = true
@@ -2030,6 +2037,24 @@ func isFastRecoveryEligibleStatus(statusCode int) bool {
 	}
 }
 
+func normalizeProviderFailureStatusCode(statusCode int, message string) int {
+	lower := strings.ToLower(strings.TrimSpace(message))
+	switch {
+	case strings.Contains(lower, "pool empty"):
+		return http.StatusServiceUnavailable
+	case strings.Contains(lower, "could not parse your authentication token"):
+		return http.StatusUnauthorized
+	case strings.Contains(lower, "account has been deactivated"):
+		return http.StatusForbidden
+	default:
+		return statusCode
+	}
+}
+
+func isAccountDeactivatedMessage(message string) bool {
+	return strings.Contains(strings.ToLower(strings.TrimSpace(message)), "account has been deactivated")
+}
+
 func fastRecoveryRetryAt(now time.Time, retryAfter *time.Duration, backoffLevel int, disableCooling bool) (time.Time, int) {
 	if disableCooling {
 		return time.Time{}, backoffLevel
@@ -2137,7 +2162,11 @@ func applyAuthFailureState(auth *Auth, resultErr *Error, retryAfter *time.Durati
 			auth.StatusMessage = resultErr.Message
 		}
 	}
-	statusCode := statusCodeFromResult(resultErr)
+	errorMessage := ""
+	if resultErr != nil {
+		errorMessage = resultErr.Message
+	}
+	statusCode := normalizeProviderFailureStatusCode(statusCodeFromResult(resultErr), errorMessage)
 	backoffLevel := auth.Quota.BackoffLevel
 	auth.Quota = QuotaState{}
 	if auth.FastRecoveryEnabled() && isFastRecoveryEligibleStatus(statusCode) {
@@ -2160,6 +2189,10 @@ func applyAuthFailureState(auth *Auth, resultErr *Error, retryAfter *time.Durati
 	case 402, 403:
 		auth.StatusMessage = "payment_required"
 		auth.NextRetryAfter = now.Add(30 * time.Minute)
+		if resultErr != nil && isAccountDeactivatedMessage(resultErr.Message) {
+			auth.StatusMessage = "account_deactivated"
+			auth.NextRetryAfter = now.Add(12 * time.Hour)
+		}
 	case 404:
 		auth.StatusMessage = "not_found"
 		auth.NextRetryAfter = now.Add(12 * time.Hour)
