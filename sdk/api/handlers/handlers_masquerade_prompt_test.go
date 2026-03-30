@@ -26,6 +26,24 @@ func TestApplyClaudeGPTMasqueradePrompt_PrependsAnthropicSystemBlock(t *testing.
 	}
 }
 
+func TestApplyClaudeGPTMasqueradePrompt_UsesCompactPromptForBuiltinWebSearch(t *testing.T) {
+	payload := []byte(`{"model":"claude-opus-4-6","system":[{"type":"text","text":"You are an assistant for performing a web search tool use"}],"messages":[{"role":"user","content":[{"type":"text","text":"Perform a web search for the query: 张雪峰 去世 辟谣"}]}],"tools":[{"type":"web_search_20250305","name":"web_search","max_uses":8}]}`)
+	cfg := &sdkconfig.SDKConfig{
+		ClaudeStyleEnabled: true,
+		ClaudeStylePrompt:  "Respond briefly and directly.",
+	}
+
+	out := applyClaudeGPTMasqueradePrompt(cfg, payload, "claude", "claude-opus-4-6", "gpt-5.4(high)")
+
+	firstText := gjson.GetBytes(out, "system.0.text").String()
+	if !strings.Contains(firstText, "keep pre-tool text minimal") {
+		t.Fatalf("expected compact search prompt, got %q", firstText)
+	}
+	if strings.Contains(firstText, "Respond briefly and directly.") {
+		t.Fatalf("expected compact prompt to skip appended style prompt, got %q", firstText)
+	}
+}
+
 func TestApplyClaudeGPTMasqueradePrompt_IgnoresNonClaudeOrNonGPTRouting(t *testing.T) {
 	payload := []byte(`{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":"hi"}]}`)
 
@@ -49,5 +67,29 @@ func TestApplyClaudeGPTMasqueradePrompt_AppendsClaudeStylePromptWhenEnabled(t *t
 	firstText := gjson.GetBytes(out, "system.0.text").String()
 	if !strings.Contains(firstText, "Respond briefly and directly.") {
 		t.Fatalf("expected custom claude-style prompt to be appended, got %q", firstText)
+	}
+}
+
+func TestClampClaudeGPTSearchTargetModel_DowngradesHighSearchRequests(t *testing.T) {
+	payload := []byte(`{"model":"claude-opus-4-6","messages":[{"role":"user","content":[{"type":"text","text":"Perform a web search for the query: 张雪峰 去世 辟谣"}]}],"tools":[{"type":"web_search_20250305","name":"web_search","max_uses":8}]}`)
+
+	model, out := clampClaudeGPTSearchTargetModel(payload, "claude", "claude-opus-4-6", "gpt-5.4(high)")
+
+	if model != "gpt-5.4(medium)" {
+		t.Fatalf("expected downgraded model, got %q", model)
+	}
+	if got := gjson.GetBytes(out, "model").String(); got != "gpt-5.4(medium)" {
+		t.Fatalf("expected payload model to be rewritten, got %q", got)
+	}
+}
+
+func TestClampClaudeGPTSearchTargetModel_IgnoresNonSearchOrNonClaudeRouting(t *testing.T) {
+	payload := []byte(`{"model":"claude-opus-4-6","messages":[{"role":"user","content":"hi"}]}`)
+
+	if model, out := clampClaudeGPTSearchTargetModel(payload, "claude", "claude-opus-4-6", "gpt-5.4(high)"); model != "gpt-5.4(high)" || string(out) != string(payload) {
+		t.Fatalf("expected non-search request to stay unchanged: model=%q payload=%s", model, string(out))
+	}
+	if model, out := clampClaudeGPTSearchTargetModel(payload, "openai", "claude-opus-4-6", "gpt-5.4(high)"); model != "gpt-5.4(high)" || string(out) != string(payload) {
+		t.Fatalf("expected non-claude handler request to stay unchanged: model=%q payload=%s", model, string(out))
 	}
 }

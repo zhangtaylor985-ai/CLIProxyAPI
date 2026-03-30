@@ -127,6 +127,7 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 
 	requestedModel := payloadRequestedModel(opts, req.Model)
 	body = applyPayloadConfigWithRoot(e.cfg, baseModel, to.String(), "", body, originalTranslated, requestedModel)
+	body = stripEmptyThinkingSignatures(body)
 
 	// Disable thinking if tool_choice forces tool use (Anthropic API constraint)
 	body = disableThinkingIfToolChoiceForced(body)
@@ -293,6 +294,7 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 
 	requestedModel := payloadRequestedModel(opts, req.Model)
 	body = applyPayloadConfigWithRoot(e.cfg, baseModel, to.String(), "", body, originalTranslated, requestedModel)
+	body = stripEmptyThinkingSignatures(body)
 
 	// Disable thinking if tool_choice forces tool use (Anthropic API constraint)
 	body = disableThinkingIfToolChoiceForced(body)
@@ -472,6 +474,7 @@ func (e *ClaudeExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Aut
 	if !strings.HasPrefix(baseModel, "claude-3-5-haiku") {
 		body = checkSystemInstructions(body)
 	}
+	body = stripEmptyThinkingSignatures(body)
 
 	// Keep count_tokens requests compatible with Anthropic cache-control constraints too.
 	body = enforceCacheControlLimit(body, 4)
@@ -635,6 +638,58 @@ func disableThinkingIfToolChoiceForced(body []byte) []byte {
 		}
 	}
 	return body
+}
+
+// stripEmptyThinkingSignatures removes empty/whitespace signatures from Claude
+// thinking history blocks before forwarding to Anthropic. Claude CLI can replay
+// omitted signatures as empty strings, and Anthropic rejects those with
+// "Invalid `signature` in `thinking` block". Missing signatures are tolerated
+// better than explicitly empty ones, so we only delete obviously invalid blanks.
+func stripEmptyThinkingSignatures(body []byte) []byte {
+	if len(body) == 0 || !gjson.ValidBytes(body) {
+		return body
+	}
+
+	messages := gjson.GetBytes(body, "messages")
+	if !messages.IsArray() {
+		return body
+	}
+
+	out := body
+	changed := false
+	messages.ForEach(func(messageKey, message gjson.Result) bool {
+		content := message.Get("content")
+		if !content.IsArray() {
+			return true
+		}
+		content.ForEach(func(contentKey, item gjson.Result) bool {
+			if item.Get("type").String() != "thinking" {
+				return true
+			}
+			signature := item.Get("signature")
+			if !signature.Exists() {
+				return true
+			}
+			if signature.Type == gjson.String && strings.TrimSpace(signature.String()) != "" {
+				return true
+			}
+
+			path := fmt.Sprintf("messages.%d.content.%d.signature", messageKey.Int(), contentKey.Int())
+			next, err := sjson.DeleteBytes(out, path)
+			if err != nil {
+				return true
+			}
+			out = next
+			changed = true
+			return true
+		})
+		return true
+	})
+
+	if !changed {
+		return body
+	}
+	return out
 }
 
 type compositeReadCloser struct {

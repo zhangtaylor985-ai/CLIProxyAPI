@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/thinking"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/translator/gptinclaude"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -243,9 +244,8 @@ func ConvertClaudeRequestToCodex(modelName string, inputRawJSON []byte, _ bool) 
 		shortMap := buildShortNameMap(names)
 		for i := 0; i < len(toolResults); i++ {
 			toolResult := toolResults[i]
-			// Special handling: map Claude web search tool to Codex web_search
-			if toolResult.Get("type").String() == "web_search_20250305" {
-				// Replace the tool content entirely with {"type":"web_search"}
+			// Special handling: map Claude search tools to Codex built-in web_search.
+			if gptinclaude.IsCodexBuiltinWebSearchTool(toolResult) {
 				template, _ = sjson.SetRawBytes(template, "tools.-1", []byte(`{"type":"web_search"}`))
 				continue
 			}
@@ -309,6 +309,7 @@ func ConvertClaudeRequestToCodex(modelName string, inputRawJSON []byte, _ bool) 
 			}
 		}
 	}
+	reasoningEffort = gptinclaude.ClampReasoningEffort(reasoningEffort, gptinclaude.HasBuiltinWebSearch(rawJSON))
 	template, _ = sjson.SetBytes(template, "reasoning.effort", reasoningEffort)
 	template, _ = sjson.SetBytes(template, "reasoning.summary", "auto")
 	template, _ = sjson.SetBytes(template, "stream", true)
