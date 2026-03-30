@@ -17,6 +17,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/billing"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/buildinfo"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/policy"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
 	sdkAuth "github.com/router-for-me/CLIProxyAPI/v6/sdk/auth"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
@@ -45,6 +46,7 @@ type Handler struct {
 	authManager         *coreauth.Manager
 	usageStats          *usage.RequestStatistics
 	billingStore        *billing.SQLiteStore
+	dailyLimiter        *policy.SQLiteDailyLimiter
 	tokenStore          coreauth.Store
 	localPassword       string
 	allowRemoteOverride bool
@@ -117,6 +119,8 @@ func (h *Handler) SetAuthManager(manager *coreauth.Manager) { h.authManager = ma
 func (h *Handler) SetUsageStatistics(stats *usage.RequestStatistics) { h.usageStats = stats }
 
 func (h *Handler) SetBillingStore(store *billing.SQLiteStore) { h.billingStore = store }
+
+func (h *Handler) SetDailyLimiter(limiter *policy.SQLiteDailyLimiter) { h.dailyLimiter = limiter }
 
 // SetLocalPassword configures the runtime-local password accepted for localhost requests.
 func (h *Handler) SetLocalPassword(password string) { h.localPassword = password }

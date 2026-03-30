@@ -3,6 +3,7 @@ package billing
 import (
 	"context"
 	"errors"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -146,6 +147,61 @@ func (p *UsagePersistPlugin) PendingDailyUsageRows(apiKey, dayKey string) []Dail
 	return rows
 }
 
+func (p *UsagePersistPlugin) PendingDailyUsageRowsByRange(apiKey, startDay, endDayExclusive string) []DailyUsageRow {
+	if p == nil {
+		return nil
+	}
+	apiKey = strings.TrimSpace(apiKey)
+	startDay = strings.TrimSpace(startDay)
+	endDayExclusive = strings.TrimSpace(endDayExclusive)
+	if apiKey == "" {
+		return nil
+	}
+
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
+	rowsByKey := make(map[string]DailyUsageRow)
+	for _, item := range p.pending {
+		if item.delta.APIKey != apiKey {
+			continue
+		}
+		if startDay != "" && item.dayKey < startDay {
+			continue
+		}
+		if endDayExclusive != "" && item.dayKey >= endDayExclusive {
+			continue
+		}
+		key := item.dayKey + "|" + item.delta.Model
+		row := rowsByKey[key]
+		row.APIKey = apiKey
+		row.Model = item.delta.Model
+		row.Day = item.dayKey
+		row.Requests += item.delta.Requests
+		row.FailedRequests += item.delta.FailedRequests
+		row.InputTokens += item.delta.InputTokens
+		row.OutputTokens += item.delta.OutputTokens
+		row.ReasoningTokens += item.delta.ReasoningTokens
+		row.CachedTokens += item.delta.CachedTokens
+		row.TotalTokens += item.delta.TotalTokens
+		row.CostMicroUSD += item.delta.CostMicroUSD
+		row.UpdatedAt = nowUnixUTC()
+		rowsByKey[key] = row
+	}
+
+	rows := make([]DailyUsageRow, 0, len(rowsByKey))
+	for _, row := range rowsByKey {
+		rows = append(rows, row)
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].Day == rows[j].Day {
+			return rows[i].Model < rows[j].Model
+		}
+		return rows[i].Day < rows[j].Day
+	})
+	return rows
+}
+
 func (p *UsagePersistPlugin) PendingCostMicroUSDByDayRange(apiKey, startDay, endDayExclusive string) int64 {
 	if p == nil {
 		return 0
@@ -212,6 +268,82 @@ func (p *UsagePersistPlugin) PendingCostMicroUSDByModelPrefix(apiKey, modelPrefi
 		}
 	}
 	return total
+}
+
+func (p *UsagePersistPlugin) PendingUsageEvents(apiKey string, startInclusive, endExclusive time.Time, limit int, desc bool) []UsageEventRow {
+	if p == nil {
+		return nil
+	}
+	apiKey = strings.TrimSpace(apiKey)
+	if apiKey == "" {
+		return nil
+	}
+
+	startUnix := int64(0)
+	endUnix := int64(0)
+	if !startInclusive.IsZero() {
+		startUnix = startInclusive.Unix()
+	}
+	if !endExclusive.IsZero() {
+		endUnix = endExclusive.Unix()
+	}
+
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
+	rows := make([]UsageEventRow, 0)
+	for _, item := range p.pending {
+		if item.event.APIKey != apiKey {
+			continue
+		}
+		if startUnix > 0 && item.event.RequestedAt < startUnix {
+			continue
+		}
+		if endUnix > 0 && item.event.RequestedAt >= endUnix {
+			continue
+		}
+		rows = append(rows, item.event)
+	}
+
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].RequestedAt == rows[j].RequestedAt {
+			if desc {
+				return rows[i].ID > rows[j].ID
+			}
+			return rows[i].ID < rows[j].ID
+		}
+		if desc {
+			return rows[i].RequestedAt > rows[j].RequestedAt
+		}
+		return rows[i].RequestedAt < rows[j].RequestedAt
+	})
+	if limit > 0 && len(rows) > limit {
+		rows = rows[:limit]
+	}
+	return rows
+}
+
+func (p *UsagePersistPlugin) PendingLatestRequestedAt(apiKey string) int64 {
+	if p == nil {
+		return 0
+	}
+	apiKey = strings.TrimSpace(apiKey)
+	if apiKey == "" {
+		return 0
+	}
+
+	var latest int64
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	for _, item := range p.pending {
+		if item.event.APIKey != apiKey {
+			continue
+		}
+		if item.event.RequestedAt > latest {
+			latest = item.event.RequestedAt
+		}
+	}
+	return latest
 }
 
 func (p *UsagePersistPlugin) MergePendingSnapshot(snapshot *internalusage.StatisticsSnapshot) {

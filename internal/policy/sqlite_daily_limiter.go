@@ -96,6 +96,13 @@ type SQLiteDailyLimiter struct {
 	path string
 }
 
+type DailyUsageCountRow struct {
+	APIKey string `json:"api_key"`
+	Model  string `json:"model"`
+	Day    string `json:"day"`
+	Count  int64  `json:"count"`
+}
+
 func NewSQLiteDailyLimiter(path string) (*SQLiteDailyLimiter, error) {
 	trimmed := strings.TrimSpace(path)
 	if trimmed == "" {
@@ -195,4 +202,48 @@ func (l *SQLiteDailyLimiter) Consume(ctx context.Context, apiKey, model, dayKey 
 		return 0, false, fmt.Errorf("sqlite limiter: consume failed: %w", err)
 	}
 	return count, true, nil
+}
+
+func (l *SQLiteDailyLimiter) ListUsageCounts(ctx context.Context, apiKey, dayKey string) ([]DailyUsageCountRow, error) {
+	if l == nil || l.db == nil {
+		return nil, fmt.Errorf("sqlite limiter: not initialized")
+	}
+
+	query := `
+		SELECT api_key, model, day, count
+		FROM api_model_daily_usage
+	`
+	conditions := make([]string, 0, 2)
+	args := make([]any, 0, 2)
+	if trimmed := strings.TrimSpace(apiKey); trimmed != "" {
+		conditions = append(conditions, "api_key = ?")
+		args = append(args, trimmed)
+	}
+	if trimmed := strings.TrimSpace(dayKey); trimmed != "" {
+		conditions = append(conditions, "day = ?")
+		args = append(args, trimmed)
+	}
+	if len(conditions) > 0 {
+		query += " WHERE " + strings.Join(conditions, " AND ")
+	}
+	query += " ORDER BY day ASC, api_key ASC, model ASC"
+
+	rows, err := l.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("sqlite limiter: list usage counts: %w", err)
+	}
+	defer rows.Close()
+
+	result := make([]DailyUsageCountRow, 0)
+	for rows.Next() {
+		var row DailyUsageCountRow
+		if err := rows.Scan(&row.APIKey, &row.Model, &row.Day, &row.Count); err != nil {
+			return nil, fmt.Errorf("sqlite limiter: scan usage count: %w", err)
+		}
+		result = append(result, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("sqlite limiter: usage count rows: %w", err)
+	}
+	return result, nil
 }

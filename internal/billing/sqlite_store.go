@@ -37,9 +37,12 @@ type pendingUsageProvider interface {
 	Stop(ctx context.Context) error
 	PendingDailyCostMicroUSD(apiKey, dayKey string) int64
 	PendingDailyUsageRows(apiKey, dayKey string) []DailyUsageRow
+	PendingDailyUsageRowsByRange(apiKey, startDay, endDayExclusive string) []DailyUsageRow
 	PendingCostMicroUSDByDayRange(apiKey, startDay, endDayExclusive string) int64
 	PendingCostMicroUSDByTimeRange(apiKey string, startInclusive, endExclusive time.Time) int64
 	PendingCostMicroUSDByModelPrefix(apiKey, modelPrefix string) int64
+	PendingUsageEvents(apiKey string, startInclusive, endExclusive time.Time, limit int, desc bool) []UsageEventRow
+	PendingLatestRequestedAt(apiKey string) int64
 	MergePendingSnapshot(snapshot *internalusage.StatisticsSnapshot)
 }
 
@@ -963,6 +966,92 @@ func (s *SQLiteStore) ListDailyUsageRows(ctx context.Context, startDay, endDay s
 	return result, nil
 }
 
+func (s *SQLiteStore) ListDailyUsageRowsByAPIKey(ctx context.Context, apiKey, startDay, endDayExclusive string) ([]DailyUsageRow, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("billing sqlite: not initialized")
+	}
+	apiKey = strings.TrimSpace(apiKey)
+	if apiKey == "" {
+		return nil, fmt.Errorf("billing sqlite: api key is required")
+	}
+
+	query := `
+		SELECT
+			api_key, model, day,
+			requests, failed_requests,
+			input_tokens, output_tokens, reasoning_tokens, cached_tokens, total_tokens,
+			cost_micro_usd, updated_at
+		FROM api_key_model_daily_usage
+		WHERE api_key = ?
+	`
+	args := []any{apiKey}
+	if trimmed := strings.TrimSpace(startDay); trimmed != "" {
+		query += " AND day >= ?"
+		args = append(args, trimmed)
+	}
+	if trimmed := strings.TrimSpace(endDayExclusive); trimmed != "" {
+		query += " AND day < ?"
+		args = append(args, trimmed)
+	}
+	query += " ORDER BY day ASC, model ASC"
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("billing sqlite: list daily usage rows by api key: %w", err)
+	}
+	defer rows.Close()
+
+	result := make([]DailyUsageRow, 0)
+	indexByKey := make(map[string]int)
+	for rows.Next() {
+		var row DailyUsageRow
+		if err := rows.Scan(
+			&row.APIKey, &row.Model, &row.Day,
+			&row.Requests, &row.FailedRequests,
+			&row.InputTokens, &row.OutputTokens, &row.ReasoningTokens, &row.CachedTokens, &row.TotalTokens,
+			&row.CostMicroUSD, &row.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("billing sqlite: scan daily usage row: %w", err)
+		}
+		key := row.Day + "|" + row.Model
+		indexByKey[key] = len(result)
+		result = append(result, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("billing sqlite: daily usage rows by api key: %w", err)
+	}
+
+	if provider := s.getPendingUsageProvider(); provider != nil {
+		for _, row := range provider.PendingDailyUsageRowsByRange(apiKey, startDay, endDayExclusive) {
+			key := row.Day + "|" + row.Model
+			if idx, ok := indexByKey[key]; ok {
+				result[idx].Requests += row.Requests
+				result[idx].FailedRequests += row.FailedRequests
+				result[idx].InputTokens += row.InputTokens
+				result[idx].OutputTokens += row.OutputTokens
+				result[idx].ReasoningTokens += row.ReasoningTokens
+				result[idx].CachedTokens += row.CachedTokens
+				result[idx].TotalTokens += row.TotalTokens
+				result[idx].CostMicroUSD += row.CostMicroUSD
+				if row.UpdatedAt > result[idx].UpdatedAt {
+					result[idx].UpdatedAt = row.UpdatedAt
+				}
+				continue
+			}
+			indexByKey[key] = len(result)
+			result = append(result, row)
+		}
+		sort.Slice(result, func(i, j int) bool {
+			if result[i].Day == result[j].Day {
+				return result[i].Model < result[j].Model
+			}
+			return result[i].Day < result[j].Day
+		})
+	}
+
+	return result, nil
+}
+
 func (s *SQLiteStore) ListUsageEvents(ctx context.Context, startAt, endAt time.Time) ([]UsageEventRow, error) {
 	if s == nil || s.db == nil {
 		return nil, fmt.Errorf("billing sqlite: not initialized")
@@ -1025,6 +1114,128 @@ func (s *SQLiteStore) ListUsageEvents(ctx context.Context, startAt, endAt time.T
 		return nil, fmt.Errorf("billing sqlite: usage event rows: %w", err)
 	}
 	return result, nil
+}
+
+func (s *SQLiteStore) ListUsageEventsByAPIKey(ctx context.Context, apiKey string, startAt, endAt time.Time, limit int, desc bool) ([]UsageEventRow, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("billing sqlite: not initialized")
+	}
+	apiKey = strings.TrimSpace(apiKey)
+	if apiKey == "" {
+		return nil, fmt.Errorf("billing sqlite: api key is required")
+	}
+
+	query := `
+		SELECT
+			id, requested_at, api_key, source, auth_index, model, failed,
+			input_tokens, output_tokens, reasoning_tokens, cached_tokens, total_tokens,
+			cost_micro_usd, updated_at
+		FROM usage_events
+		WHERE api_key = ?
+	`
+	args := []any{apiKey}
+	if !startAt.IsZero() {
+		query += " AND requested_at >= ?"
+		args = append(args, startAt.Unix())
+	}
+	if !endAt.IsZero() {
+		query += " AND requested_at < ?"
+		args = append(args, endAt.Unix())
+	}
+	orderDirection := "ASC"
+	if desc {
+		orderDirection = "DESC"
+	}
+	query += " ORDER BY requested_at " + orderDirection + ", id " + orderDirection
+	if limit > 0 {
+		query += " LIMIT ?"
+		args = append(args, limit)
+	}
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("billing sqlite: list usage events by api key: %w", err)
+	}
+	defer rows.Close()
+
+	result := make([]UsageEventRow, 0)
+	for rows.Next() {
+		var row UsageEventRow
+		var failed int64
+		if err := rows.Scan(
+			&row.ID,
+			&row.RequestedAt,
+			&row.APIKey,
+			&row.Source,
+			&row.AuthIndex,
+			&row.Model,
+			&failed,
+			&row.InputTokens,
+			&row.OutputTokens,
+			&row.ReasoningTokens,
+			&row.CachedTokens,
+			&row.TotalTokens,
+			&row.CostMicroUSD,
+			&row.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("billing sqlite: scan usage event by api key: %w", err)
+		}
+		row.Failed = failed > 0
+		result = append(result, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("billing sqlite: usage event rows by api key: %w", err)
+	}
+
+	if provider := s.getPendingUsageProvider(); provider != nil {
+		result = append(result, provider.PendingUsageEvents(apiKey, startAt, endAt, 0, desc)...)
+		sort.Slice(result, func(i, j int) bool {
+			if result[i].RequestedAt == result[j].RequestedAt {
+				if desc {
+					return result[i].ID > result[j].ID
+				}
+				return result[i].ID < result[j].ID
+			}
+			if desc {
+				return result[i].RequestedAt > result[j].RequestedAt
+			}
+			return result[i].RequestedAt < result[j].RequestedAt
+		})
+		if limit > 0 && len(result) > limit {
+			result = result[:limit]
+		}
+	}
+
+	return result, nil
+}
+
+func (s *SQLiteStore) GetLatestUsageEventTime(ctx context.Context, apiKey string) (time.Time, bool, error) {
+	if s == nil || s.db == nil {
+		return time.Time{}, false, fmt.Errorf("billing sqlite: not initialized")
+	}
+	apiKey = strings.TrimSpace(apiKey)
+	if apiKey == "" {
+		return time.Time{}, false, fmt.Errorf("billing sqlite: api key is required")
+	}
+
+	row := s.db.QueryRowContext(ctx, `
+		SELECT COALESCE(MAX(requested_at), 0)
+		FROM usage_events
+		WHERE api_key = ?
+	`, apiKey)
+	var latest int64
+	if err := row.Scan(&latest); err != nil {
+		return time.Time{}, false, fmt.Errorf("billing sqlite: latest usage event time: %w", err)
+	}
+	if provider := s.getPendingUsageProvider(); provider != nil {
+		if pendingLatest := provider.PendingLatestRequestedAt(apiKey); pendingLatest > latest {
+			latest = pendingLatest
+		}
+	}
+	if latest <= 0 {
+		return time.Time{}, false, nil
+	}
+	return time.Unix(latest, 0), true, nil
 }
 
 func (s *SQLiteStore) ListUsageEventAggregateRows(ctx context.Context) ([]UsageEventAggregateRow, error) {
