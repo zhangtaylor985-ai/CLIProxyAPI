@@ -128,6 +128,50 @@ func TestInferBuiltinWebSearchQuery_ExtractsArgumentsFromSkillWrappedPrompt(t *t
 	}
 }
 
+func TestShouldPreEmitBuiltinWebSearchProgress_ExplicitSearchPrompt(t *testing.T) {
+	raw := []byte(`{
+		"messages": [
+			{"role": "user", "content": "用 websearch 搜索今天的新闻"}
+		],
+		"tools": [
+			{
+				"name": "WebSearch",
+				"input_schema": {
+					"type": "object",
+					"properties": {"query": {"type": "string"}},
+					"required": ["query"]
+				}
+			}
+		]
+	}`)
+
+	if !ShouldPreEmitBuiltinWebSearchProgress(raw) {
+		t.Fatalf("ShouldPreEmitBuiltinWebSearchProgress() = false, want true")
+	}
+}
+
+func TestShouldPreEmitBuiltinWebSearchProgress_CodeAnalysisPrompt(t *testing.T) {
+	raw := []byte(`{
+		"messages": [
+			{"role": "user", "content": "看一下当前的项目代码，帮我简单分析一下即可"}
+		],
+		"tools": [
+			{
+				"name": "WebSearch",
+				"input_schema": {
+					"type": "object",
+					"properties": {"query": {"type": "string"}},
+					"required": ["query"]
+				}
+			}
+		]
+	}`)
+
+	if ShouldPreEmitBuiltinWebSearchProgress(raw) {
+		t.Fatalf("ShouldPreEmitBuiltinWebSearchProgress() = true, want false")
+	}
+}
+
 func TestShouldSurfaceReasoningSummaryAsThinking(t *testing.T) {
 	tests := []struct {
 		kind ClientKind

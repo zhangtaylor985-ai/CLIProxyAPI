@@ -82,6 +82,19 @@ func ShouldEmitVSCodeWebSearchProgress(kind ClientKind) bool {
 	}
 }
 
+// ShouldPreEmitBuiltinWebSearchProgress restricts early synthetic progress to
+// prompts that explicitly ask for a web search. Claude Code often advertises
+// WebSearch as an available tool even for normal coding tasks, and eagerly
+// showing "Searching the web." on response.created causes false positives in
+// the CLI experience.
+func ShouldPreEmitBuiltinWebSearchProgress(rawJSON []byte) bool {
+	if !HasBuiltinWebSearch(rawJSON) {
+		return false
+	}
+
+	return hasExplicitBuiltinWebSearchIntent(extractLatestUserText(rawJSON))
+}
+
 // BuildVSCodeWebSearchProgressThinking renders a short, factual progress message
 // for VSCode-style clients. Unlike synthetic <tool_call> text, this keeps the
 // UI concise and avoids leaking implementation details into the chat transcript.
@@ -276,6 +289,16 @@ func InferBuiltinWebSearchQuery(rawJSON []byte) string {
 		return ""
 	}
 
+	if text := extractLatestUserText(rawJSON); text != "" {
+		if query := normalizeLikelyWebSearchQuery(text); query != "" {
+			return query
+		}
+	}
+
+	return ""
+}
+
+func extractLatestUserText(rawJSON []byte) string {
 	messages := gjson.GetBytes(rawJSON, "messages")
 	if !messages.IsArray() {
 		return ""
@@ -289,24 +312,57 @@ func InferBuiltinWebSearchQuery(rawJSON []byte) string {
 
 		content := message.Get("content")
 		if content.Type == gjson.String {
-			if query := normalizeLikelyWebSearchQuery(content.String()); query != "" {
-				return query
-			}
+			return content.String()
 		}
 		if content.IsArray() {
 			parts := content.Array()
 			for j := len(parts) - 1; j >= 0; j-- {
 				part := parts[j]
 				if strings.EqualFold(strings.TrimSpace(part.Get("type").String()), "text") {
-					if query := normalizeLikelyWebSearchQuery(part.Get("text").String()); query != "" {
-						return query
-					}
+					return part.Get("text").String()
 				}
 			}
 		}
 	}
 
 	return ""
+}
+
+func hasExplicitBuiltinWebSearchIntent(text string) bool {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return false
+	}
+
+	if extractExplicitSearchQuery(text) != "" {
+		return true
+	}
+
+	lower := strings.ToLower(text)
+	intentFragments := []string{
+		"perform a web search",
+		"web search for",
+		"search the web",
+		"websearch",
+		"latest news",
+		"today news",
+		"today's news",
+		"news headlines",
+		"top stories",
+		"搜索今天的新闻",
+		"搜索一下",
+		"请搜索",
+		"帮我搜索",
+		"用 websearch",
+		"网页搜索",
+	}
+	for _, fragment := range intentFragments {
+		if strings.Contains(lower, fragment) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // BuildSyntheticWebSearchToolCallTextFromRequest synthesizes a Claude-compatible

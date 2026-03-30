@@ -79,7 +79,7 @@ func ConvertCodexResponseToClaude(ctx context.Context, _ string, originalRequest
 		template, _ = sjson.SetBytes(template, "message.id", rootResult.Get("response.id").String())
 
 		output = translatorcommon.AppendSSEEventBytes(output, "message_start", template, 2)
-		if gptinclaude.ShouldEmitSyntheticWebSearchTag(clientKind) {
+		if gptinclaude.ShouldEmitSyntheticWebSearchTag(clientKind) && gptinclaude.ShouldPreEmitBuiltinWebSearchProgress(originalRequestRawJSON) {
 			syntheticText := gptinclaude.BuildSyntheticWebSearchToolCallTextFromRequest(originalRequestRawJSON)
 			if syntheticText != "" {
 				blockIndex := (*param).(*ConvertCodexResponseToClaudeParams).BlockIndex
@@ -100,7 +100,7 @@ func ConvertCodexResponseToClaude(ctx context.Context, _ string, originalRequest
 				(*param).(*ConvertCodexResponseToClaudeParams).BlockIndex++
 				(*param).(*ConvertCodexResponseToClaudeParams).SkipNextSyntheticWebSearchStart = true
 			}
-		} else if gptinclaude.ShouldEmitVSCodeWebSearchProgress(clientKind) && gptinclaude.HasBuiltinWebSearch(originalRequestRawJSON) {
+		} else if gptinclaude.ShouldEmitVSCodeWebSearchProgress(clientKind) && gptinclaude.ShouldPreEmitBuiltinWebSearchProgress(originalRequestRawJSON) {
 			progressThinking := gptinclaude.BuildVSCodeWebSearchProgressThinking(
 				gjson.Result{},
 				(*param).(*ConvertCodexResponseToClaudeParams).LastBuiltinWebSearchQuery,
