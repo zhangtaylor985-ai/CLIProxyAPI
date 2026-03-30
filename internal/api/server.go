@@ -282,6 +282,9 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 	if s.billingStore != nil {
 		s.mgmt.SetBillingStore(s.billingStore)
 	}
+	if s.dailyLimiter != nil {
+		s.mgmt.SetDailyLimiter(s.dailyLimiter)
+	}
 	if optionState.localPassword != "" {
 		s.mgmt.SetLocalPassword(optionState.localPassword)
 	}
@@ -414,6 +417,7 @@ func (s *Server) setupRoutes() {
 			},
 		})
 	})
+	s.engine.POST("/v0/api-key-insights/query", s.mgmt.QueryAPIKeyInsights)
 	s.engine.POST("/v1internal:method", geminiCLIHandlers.CLIHandler)
 
 	// OAuth callback endpoints (reuse main server port)
@@ -604,6 +608,12 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.DELETE("/model-prices", s.mgmt.DeleteModelPrice)
 
 		mgmt.GET("/api-key-usage", s.mgmt.GetAPIKeyDailyUsage)
+		mgmt.GET("/api-key-records", s.mgmt.ListAPIKeyRecords)
+		mgmt.POST("/api-key-records", s.mgmt.CreateAPIKeyRecord)
+		mgmt.GET("/api-key-records/:apiKey", s.mgmt.GetAPIKeyRecord)
+		mgmt.PATCH("/api-key-records/:apiKey", s.mgmt.UpdateAPIKeyRecord)
+		mgmt.DELETE("/api-key-records/:apiKey", s.mgmt.DeleteAPIKeyRecord)
+		mgmt.GET("/api-key-records/:apiKey/events", s.mgmt.ListAPIKeyRecordEvents)
 
 		mgmt.GET("/gemini-api-key", s.mgmt.GetGeminiKeys)
 		mgmt.PUT("/gemini-api-key", s.mgmt.PutGeminiKeys)
