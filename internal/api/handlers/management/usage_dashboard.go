@@ -182,9 +182,23 @@ func maskDashboardAPIKey(apiKey string) string {
 }
 
 func historicalDashboardTimestamp(day string) time.Time {
-	parsed, err := time.ParseInLocation("2006-01-02 15:04:05", strings.TrimSpace(day)+" 23:59:59", chinaDashboardLocation())
+	return historicalDashboardTimestampAt(day, time.Now().In(chinaDashboardLocation()))
+}
+
+func historicalDashboardTimestampAt(day string, now time.Time) time.Time {
+	loc := chinaDashboardLocation()
+	now = now.In(loc)
+	trimmedDay := strings.TrimSpace(day)
+	if trimmedDay == "" {
+		return now
+	}
+
+	parsed, err := time.ParseInLocation("2006-01-02 15:04:05", trimmedDay+" 23:59:59", loc)
 	if err != nil {
-		return time.Now().In(chinaDashboardLocation())
+		return now
+	}
+	if parsed.After(now) && policy.DayKeyChina(parsed) == policy.DayKeyChina(now) {
+		return now
 	}
 	return parsed
 }

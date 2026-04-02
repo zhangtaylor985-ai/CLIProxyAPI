@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -124,23 +123,7 @@ func TestQueryAPIKeyInsightsFiltersInvalidKeys(t *testing.T) {
 
 func newAPIKeyRecordsTestHandler(t *testing.T, cfg *config.Config) (*Handler, func()) {
 	t.Helper()
-
-	tempDir := t.TempDir()
-	store, err := billing.NewSQLiteStore(filepath.Join(tempDir, "usage.sqlite"))
-	if err != nil {
-		t.Fatalf("NewSQLiteStore: %v", err)
-	}
-	limiter, err := policy.NewSQLiteDailyLimiter(filepath.Join(tempDir, "limits.sqlite"))
-	if err != nil {
-		t.Fatalf("NewSQLiteDailyLimiter: %v", err)
-	}
-
-	handler := &Handler{cfg: cfg, billingStore: store, dailyLimiter: limiter}
-	cleanup := func() {
-		_ = store.Close()
-		_ = limiter.Close()
-	}
-	return handler, cleanup
+	return newPostgresManagementTestHandler(t, cfg)
 }
 
 func seedUsage(t *testing.T, handler *Handler, apiKey, model string, requestedAt time.Time, costMicroUSD, totalTokens int64) error {

@@ -107,15 +107,109 @@ func (h *Handler) deleteFromStringList(c *gin.Context, target *[]string, after f
 // api-keys
 func (h *Handler) GetAPIKeys(c *gin.Context) { c.JSON(200, gin.H{"api-keys": h.cfg.APIKeys}) }
 func (h *Handler) PutAPIKeys(c *gin.Context) {
-	h.putStringList(c, func(v []string) {
-		h.cfg.APIKeys = append([]string(nil), v...)
-	}, nil)
+	data, err := c.GetRawData()
+	if err != nil {
+		c.JSON(400, gin.H{"error": "failed to read body"})
+		return
+	}
+	var arr []string
+	if err = json.Unmarshal(data, &arr); err != nil {
+		var obj struct {
+			Items []string `json:"items"`
+		}
+		if err2 := json.Unmarshal(data, &obj); err2 != nil {
+			c.JSON(400, gin.H{"error": "invalid body"})
+			return
+		}
+		arr = obj.Items
+	}
+	h.cfg.APIKeys = normalizeUniqueAPIKeys(arr)
+	h.persistAPIKeyConfig(c)
 }
 func (h *Handler) PatchAPIKeys(c *gin.Context) {
-	h.patchStringList(c, &h.cfg.APIKeys, func() {})
+	var body struct {
+		Old    *string   `json:"old"`
+		New    *string   `json:"new"`
+		Index  *int      `json:"index"`
+		Value  *string   `json:"value"`
+		Add    *[]string `json:"add"`
+		Remove *[]string `json:"remove"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(400, gin.H{"error": "invalid body"})
+		return
+	}
+	if body.Index != nil && body.Value != nil && *body.Index >= 0 && *body.Index < len(h.cfg.APIKeys) {
+		h.cfg.APIKeys[*body.Index] = strings.TrimSpace(*body.Value)
+		h.cfg.APIKeys = normalizeUniqueAPIKeys(h.cfg.APIKeys)
+		h.persistAPIKeyConfig(c)
+		return
+	}
+	if body.Old != nil && body.New != nil {
+		oldValue := strings.TrimSpace(*body.Old)
+		newValue := strings.TrimSpace(*body.New)
+		for i := range h.cfg.APIKeys {
+			if strings.TrimSpace(h.cfg.APIKeys[i]) == oldValue {
+				h.cfg.APIKeys[i] = newValue
+				h.cfg.APIKeys = normalizeUniqueAPIKeys(h.cfg.APIKeys)
+				h.persistAPIKeyConfig(c)
+				return
+			}
+		}
+		h.cfg.APIKeys = normalizeUniqueAPIKeys(append(h.cfg.APIKeys, newValue))
+		h.persistAPIKeyConfig(c)
+		return
+	}
+	if body.Value != nil && body.Index == nil && body.Add == nil && body.Remove == nil {
+		h.cfg.APIKeys = normalizeUniqueAPIKeys(append(h.cfg.APIKeys, strings.TrimSpace(*body.Value)))
+		h.persistAPIKeyConfig(c)
+		return
+	}
+	if body.Add != nil {
+		h.cfg.APIKeys = normalizeUniqueAPIKeys(append(h.cfg.APIKeys, (*body.Add)...))
+	}
+	if body.Remove != nil {
+		for _, item := range *body.Remove {
+			h.cfg.APIKeys = removeAPIKeyValue(h.cfg.APIKeys, item)
+		}
+	}
+	h.persistAPIKeyConfig(c)
 }
 func (h *Handler) DeleteAPIKeys(c *gin.Context) {
-	h.deleteFromStringList(c, &h.cfg.APIKeys, func() {})
+	if idxStr := c.Query("index"); idxStr != "" {
+		var idx int
+		_, err := fmt.Sscanf(idxStr, "%d", &idx)
+		if err == nil && idx >= 0 && idx < len(h.cfg.APIKeys) {
+			h.cfg.APIKeys = append(h.cfg.APIKeys[:idx], h.cfg.APIKeys[idx+1:]...)
+			h.persistAPIKeyConfig(c)
+			return
+		}
+	}
+	if val := strings.TrimSpace(c.Query("value")); val != "" {
+		h.cfg.APIKeys = removeAPIKeyValue(h.cfg.APIKeys, val)
+		h.persistAPIKeyConfig(c)
+		return
+	}
+	var body struct {
+		Value *string   `json:"value"`
+		Items *[]string `json:"items"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(400, gin.H{"error": "invalid body"})
+		return
+	}
+	switch {
+	case body.Value != nil:
+		h.cfg.APIKeys = removeAPIKeyValue(h.cfg.APIKeys, *body.Value)
+	case body.Items != nil:
+		for _, item := range *body.Items {
+			h.cfg.APIKeys = removeAPIKeyValue(h.cfg.APIKeys, item)
+		}
+	default:
+		c.JSON(400, gin.H{"error": "invalid body"})
+		return
+	}
+	h.persistAPIKeyConfig(c)
 }
 
 // gemini-api-key: []GeminiKey

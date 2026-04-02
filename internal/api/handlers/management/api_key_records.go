@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/apikeygroup"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/billing"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/policy"
@@ -19,6 +20,8 @@ import (
 
 type apiKeyPolicyView struct {
 	APIKey                string                     `json:"api_key"`
+	GroupID               string                     `json:"group_id"`
+	GroupName             string                     `json:"group_name"`
 	FastMode              bool                       `json:"fast_mode"`
 	EnableClaudeModels    bool                       `json:"enable_claude_models"`
 	ClaudeUsageLimitUSD   float64                    `json:"claude_usage_limit_usd"`
@@ -119,6 +122,8 @@ type apiKeyEventView struct {
 type apiKeyRecordSummaryView struct {
 	APIKey             string                 `json:"api_key"`
 	MaskedAPIKey       string                 `json:"masked_api_key"`
+	GroupID            string                 `json:"group_id"`
+	GroupName          string                 `json:"group_name"`
 	Registered         bool                   `json:"registered"`
 	HasExplicitPolicy  bool                   `json:"has_explicit_policy"`
 	LastUsedAt         *time.Time             `json:"last_used_at,omitempty"`
@@ -139,6 +144,7 @@ type apiKeyRecordDetailView struct {
 	EffectivePolicy apiKeyPolicyView        `json:"effective_policy"`
 	TodayReport     apiKeyUsageTotals       `json:"today_report"`
 	CurrentPeriod   apiKeyUsageTotals       `json:"current_period_report"`
+	Group           *apiKeyGroupView        `json:"group,omitempty"`
 	RecentDays      []apiKeyRecentDayView   `json:"recent_days"`
 	ModelUsage      []apiKeyModelUsageView  `json:"model_usage"`
 	DailyLimits     []apiKeyDailyLimitView  `json:"daily_limits"`
@@ -253,7 +259,7 @@ func (h *Handler) CreateAPIKeyRecord(c *gin.Context) {
 		upsertAPIKeyPolicy(&h.cfg.APIKeyPolicies, viewToPolicy(apiKey, body.Policy))
 	}
 	h.cfg.SanitizeAPIKeyPolicies()
-	h.persist(c)
+	h.persistAPIKeyConfig(c)
 }
 
 func (h *Handler) UpdateAPIKeyRecord(c *gin.Context) {
@@ -305,7 +311,7 @@ func (h *Handler) UpdateAPIKeyRecord(c *gin.Context) {
 		removeDuplicatePolicyAlias(&h.cfg.APIKeyPolicies, currentKey, newKey)
 	}
 	h.cfg.SanitizeAPIKeyPolicies()
-	h.persist(c)
+	h.persistAPIKeyConfig(c)
 }
 
 func (h *Handler) DeleteAPIKeyRecord(c *gin.Context) {
@@ -323,7 +329,7 @@ func (h *Handler) DeleteAPIKeyRecord(c *gin.Context) {
 	h.cfg.APIKeys = removeAPIKeyValue(h.cfg.APIKeys, apiKey)
 	removeAPIKeyPolicy(&h.cfg.APIKeyPolicies, apiKey)
 	h.cfg.SanitizeAPIKeyPolicies()
-	h.persist(c)
+	h.persistAPIKeyConfig(c)
 }
 
 func (h *Handler) QueryAPIKeyInsights(c *gin.Context) {
@@ -410,8 +416,16 @@ func (h *Handler) buildAPIKeyRecordDetail(ctx context.Context, apiKey string, no
 	if err != nil {
 		return apiKeyRecordDetailView{}, err
 	}
-	explicitPolicy := policyToView(apiKey, h.cfg.FindAPIKeyPolicy(apiKey))
-	effectivePolicy := policyToView(apiKey, h.cfg.EffectiveAPIKeyPolicy(apiKey))
+	explicitPolicyEntry, explicitGroup, err := h.resolvePolicyWithGroup(ctx, h.cfg.FindAPIKeyPolicy(apiKey))
+	if err != nil {
+		return apiKeyRecordDetailView{}, err
+	}
+	effectivePolicyEntry, effectiveGroup, err := h.resolvePolicyWithGroup(ctx, h.cfg.EffectiveAPIKeyPolicy(apiKey))
+	if err != nil {
+		return apiKeyRecordDetailView{}, err
+	}
+	explicitPolicy := policyToView(apiKey, explicitPolicyEntry, explicitGroup)
+	effectivePolicy := policyToView(apiKey, effectivePolicyEntry, effectiveGroup)
 
 	todayReport, err := h.loadDayTotals(ctx, apiKey, policy.DayKeyChina(now))
 	if err != nil {
@@ -428,7 +442,7 @@ func (h *Handler) buildAPIKeyRecordDetail(ctx context.Context, apiKey string, no
 		return apiKeyRecordDetailView{}, err
 	}
 	modelUsage := buildModelUsageViews(periodRows)
-	dailyLimits, err := h.buildDailyLimitViews(ctx, apiKey, now, h.cfg.EffectiveAPIKeyPolicy(apiKey))
+	dailyLimits, err := h.buildDailyLimitViews(ctx, apiKey, now, effectivePolicyEntry)
 	if err != nil {
 		return apiKeyRecordDetailView{}, err
 	}
@@ -443,6 +457,7 @@ func (h *Handler) buildAPIKeyRecordDetail(ctx context.Context, apiKey string, no
 		EffectivePolicy: effectivePolicy,
 		TodayReport:     todayReport,
 		CurrentPeriod:   totalsFromRows(periodRows),
+		Group:           h.optionalGroupView(effectiveGroup),
 		RecentDays:      recentDays,
 		ModelUsage:      modelUsage,
 		DailyLimits:     dailyLimits,
@@ -462,7 +477,10 @@ func (h *Handler) buildAPIKeySummary(ctx context.Context, apiKey string, now tim
 	}
 	currentPeriodTotals := totalsFromRows(currentPeriodRows)
 
-	effectivePolicy := h.cfg.EffectiveAPIKeyPolicy(apiKey)
+	effectivePolicy, effectiveGroup, err := h.resolvePolicyWithGroup(ctx, h.cfg.EffectiveAPIKeyPolicy(apiKey))
+	if err != nil {
+		return apiKeyRecordSummaryView{}, err
+	}
 	dailyBudget, err := h.buildDailyBudgetWindow(ctx, apiKey, now, effectivePolicy)
 	if err != nil {
 		return apiKeyRecordSummaryView{}, err
@@ -484,6 +502,8 @@ func (h *Handler) buildAPIKeySummary(ctx context.Context, apiKey string, now tim
 	summary := apiKeyRecordSummaryView{
 		APIKey:             apiKey,
 		MaskedAPIKey:       util.HideAPIKey(apiKey),
+		GroupID:            "",
+		GroupName:          "",
 		Registered:         h.apiKeyExists(apiKey),
 		HasExplicitPolicy:  explicitPolicy != nil,
 		LastUsedAt:         lastUsedAt,
@@ -498,10 +518,14 @@ func (h *Handler) buildAPIKeySummary(ctx context.Context, apiKey string, now tim
 		FastMode:           false,
 	}
 	if effectivePolicy != nil {
+		summary.GroupID = strings.TrimSpace(effectivePolicy.GroupID)
 		summary.DailyLimitCount = len(effectivePolicy.DailyLimits)
 		summary.PolicyFamily = effectivePolicy.ClaudeGPTTargetFamilyOrDefault()
 		summary.EnableClaudeModels = effectivePolicy.ClaudeModelsEnabled()
 		summary.FastMode = effectivePolicy.FastModeEnabled()
+	}
+	if effectiveGroup != nil {
+		summary.GroupName = effectiveGroup.Name
 	}
 
 	_ = rangeDays
@@ -510,7 +534,10 @@ func (h *Handler) buildAPIKeySummary(ctx context.Context, apiKey string, now tim
 
 func (h *Handler) loadCurrentPeriodRows(ctx context.Context, apiKey string, now time.Time) ([]billing.DailyUsageRow, error) {
 	start, end := policy.WeekBoundsChina(now)
-	effectivePolicy := h.cfg.EffectiveAPIKeyPolicy(apiKey)
+	effectivePolicy, _, err := h.resolvePolicyWithGroup(ctx, h.cfg.EffectiveAPIKeyPolicy(apiKey))
+	if err != nil {
+		return nil, err
+	}
 	if effectivePolicy != nil {
 		start, end = effectivePolicy.WeeklyBudgetBounds(now)
 	}
@@ -542,9 +569,19 @@ func (h *Handler) loadDayTotals(ctx context.Context, apiKey, dayKey string) (api
 func (h *Handler) buildDailyBudgetWindow(ctx context.Context, apiKey string, now time.Time, p *config.APIKeyPolicy) (apiKeyBudgetWindowView, error) {
 	start := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, policy.ChinaLocation())
 	end := start.Add(24 * time.Hour)
-	usedMicro, err := h.billingStore.GetDailyCostMicroUSD(ctx, apiKey, policy.DayKeyChina(now))
-	if err != nil {
-		return apiKeyBudgetWindowView{}, err
+	usedMicro := int64(0)
+	var err error
+	if p != nil && p.TokenPackageEnabled() {
+		state, errState := billing.ComputeBudgetReplayState(ctx, h.billingStore, apiKey, now, p)
+		if errState != nil {
+			return apiKeyBudgetWindowView{}, errState
+		}
+		usedMicro = state.DailyUsedMicro
+	} else {
+		usedMicro, err = h.billingStore.GetDailyCostMicroUSD(ctx, apiKey, policy.DayKeyChina(now))
+		if err != nil {
+			return apiKeyBudgetWindowView{}, err
+		}
 	}
 	limitUSD := 0.0
 	if p != nil {
@@ -563,7 +600,13 @@ func (h *Handler) buildWeeklyBudgetWindow(ctx context.Context, apiKey string, no
 
 	var usedMicro int64
 	var err error
-	if p != nil && strings.TrimSpace(p.WeeklyBudgetAnchorAt) != "" {
+	if p != nil && p.TokenPackageEnabled() {
+		state, errState := billing.ComputeBudgetReplayState(ctx, h.billingStore, apiKey, now, p)
+		if errState != nil {
+			return apiKeyBudgetWindowView{}, errState
+		}
+		usedMicro = state.WeeklyUsedMicro
+	} else if p != nil && strings.TrimSpace(p.WeeklyBudgetAnchorAt) != "" {
 		usedMicro, err = h.billingStore.GetCostMicroUSDByTimeRange(ctx, apiKey, start, end)
 	} else {
 		usedMicro, err = h.billingStore.GetCostMicroUSDByDayRange(ctx, apiKey, policy.DayKeyChina(start), policy.DayKeyChina(end))
@@ -591,11 +634,11 @@ func (h *Handler) buildTokenPackageView(ctx context.Context, apiKey string, now 
 		}, nil
 	}
 
-	usedMicro, err := h.billingStore.GetCostMicroUSDByTimeRange(ctx, apiKey, startedAt, now.Add(time.Second))
+	state, err := billing.ComputeBudgetReplayState(ctx, h.billingStore, apiKey, now, p)
 	if err != nil {
 		return apiKeyTokenPackageView{}, err
 	}
-	usedUSD := microUSDToUSD(usedMicro)
+	usedUSD := microUSDToUSD(state.PackageUsedMicro)
 	remainingUSD := p.TokenPackageUSD - usedUSD
 	if remainingUSD < 0 {
 		remainingUSD = 0
@@ -758,9 +801,26 @@ func collectKnownAPIKeys(cfg *config.Config) []string {
 	return keys
 }
 
-func policyToView(apiKey string, p *config.APIKeyPolicy) apiKeyPolicyView {
+func (h *Handler) resolvePolicyWithGroup(ctx context.Context, p *config.APIKeyPolicy) (*config.APIKeyPolicy, *apikeygroup.Group, error) {
+	if p == nil {
+		return nil, nil, nil
+	}
+	return apikeygroup.ApplyGroupBudget(ctx, h.groupStore, p)
+}
+
+func (h *Handler) optionalGroupView(group *apikeygroup.Group) *apiKeyGroupView {
+	if group == nil {
+		return nil
+	}
+	view := h.groupToView(*group)
+	return &view
+}
+
+func policyToView(apiKey string, p *config.APIKeyPolicy, group *apikeygroup.Group) apiKeyPolicyView {
 	view := apiKeyPolicyView{
 		APIKey:              apiKey,
+		GroupID:             "",
+		GroupName:           "",
 		AllowClaudeOpus46:   true,
 		DailyLimits:         map[string]int{},
 		ExcludedModels:      nil,
@@ -771,6 +831,10 @@ func policyToView(apiKey string, p *config.APIKeyPolicy) apiKeyPolicyView {
 		return view
 	}
 	view.APIKey = strings.TrimSpace(p.APIKey)
+	view.GroupID = strings.TrimSpace(p.GroupID)
+	if group != nil {
+		view.GroupName = group.Name
+	}
 	view.FastMode = p.FastMode
 	view.EnableClaudeModels = p.ClaudeModelsEnabled()
 	view.ClaudeUsageLimitUSD = p.ClaudeUsageLimitUSD
@@ -798,6 +862,7 @@ func viewToPolicy(apiKey string, view apiKeyPolicyView) config.APIKeyPolicy {
 	allowClaudeOpus46 := view.AllowClaudeOpus46
 	return config.APIKeyPolicy{
 		APIKey:                apiKey,
+		GroupID:               strings.TrimSpace(view.GroupID),
 		FastMode:              view.FastMode,
 		EnableClaudeModels:    &enableClaudeModels,
 		ClaudeUsageLimitUSD:   view.ClaudeUsageLimitUSD,
@@ -916,7 +981,8 @@ func copyDailyLimits(src map[string]int) map[string]int {
 }
 
 func isEmptyPolicyView(view apiKeyPolicyView) bool {
-	return !view.FastMode &&
+	return strings.TrimSpace(view.GroupID) == "" &&
+		!view.FastMode &&
 		!view.EnableClaudeModels &&
 		view.ClaudeUsageLimitUSD == 0 &&
 		strings.TrimSpace(view.ClaudeGPTTargetFamily) == "" &&

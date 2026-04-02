@@ -75,4 +75,10 @@ type DailyUsageReport struct {
 	GeneratedAtUnix int64           `json:"generated_at_unix"`
 }
 
+type usagePersistRecord struct {
+	dayKey string
+	delta  DailyUsageRow
+	event  UsageEventRow
+}
+
 func nowUnixUTC() int64 { return time.Now().UTC().Unix() }

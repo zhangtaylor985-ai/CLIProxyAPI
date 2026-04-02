@@ -208,3 +208,48 @@ func TestDefaultRequestLoggerFactory_UsesResolvedLogDirectory(t *testing.T) {
 		}
 	}
 }
+
+func TestResolveBillingPostgresConfigPrefersPolicyEnv(t *testing.T) {
+	t.Setenv("APIKEY_POLICY_PG_DSN", "postgres://policy-user:pass@127.0.0.1:5432/policy_db?sslmode=disable")
+	t.Setenv("APIKEY_POLICY_PG_SCHEMA", "policy_schema")
+	t.Setenv("APIKEY_BILLING_PG_DSN", "")
+	t.Setenv("APIKEY_BILLING_PG_SCHEMA", "")
+	t.Setenv("PGSTORE_DSN", "")
+	t.Setenv("PGSTORE_SCHEMA", "")
+
+	dsn, schema := resolveBillingPostgresConfig()
+	if dsn != "postgres://policy-user:pass@127.0.0.1:5432/policy_db?sslmode=disable" {
+		t.Fatalf("dsn = %q, want policy env", dsn)
+	}
+	if schema != "policy_schema" {
+		t.Fatalf("schema = %q, want policy_schema", schema)
+	}
+}
+
+func TestResolveBillingPostgresConfigFallsBackToBillingThenPGStoreEnv(t *testing.T) {
+	t.Setenv("APIKEY_POLICY_PG_DSN", "")
+	t.Setenv("APIKEY_POLICY_PG_SCHEMA", "")
+	t.Setenv("APIKEY_BILLING_PG_DSN", "postgres://billing-user:pass@127.0.0.1:5432/billing_db?sslmode=disable")
+	t.Setenv("APIKEY_BILLING_PG_SCHEMA", "billing_schema")
+	t.Setenv("PGSTORE_DSN", "postgres://pgstore-user:pass@127.0.0.1:5432/pgstore_db?sslmode=disable")
+	t.Setenv("PGSTORE_SCHEMA", "pgstore_schema")
+
+	dsn, schema := resolveBillingPostgresConfig()
+	if dsn != "postgres://billing-user:pass@127.0.0.1:5432/billing_db?sslmode=disable" {
+		t.Fatalf("dsn = %q, want billing env", dsn)
+	}
+	if schema != "billing_schema" {
+		t.Fatalf("schema = %q, want billing_schema", schema)
+	}
+
+	t.Setenv("APIKEY_BILLING_PG_DSN", "")
+	t.Setenv("APIKEY_BILLING_PG_SCHEMA", "")
+
+	dsn, schema = resolveBillingPostgresConfig()
+	if dsn != "postgres://pgstore-user:pass@127.0.0.1:5432/pgstore_db?sslmode=disable" {
+		t.Fatalf("dsn = %q, want pgstore env", dsn)
+	}
+	if schema != "pgstore_schema" {
+		t.Fatalf("schema = %q, want pgstore_schema", schema)
+	}
+}

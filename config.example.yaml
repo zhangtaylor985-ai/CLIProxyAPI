@@ -53,7 +53,10 @@ api-keys:
 # - token-package-usd / token-package-started-at: one-time prepaid spend allowance for the API key.
 #   While package balance remains, daily/weekly spend budgets are bypassed. Once exhausted,
 #   daily/weekly spend budgets resume counting only from the depletion point forward.
-# - Storage: daily counters are persisted in SQLite at APIKEY_POLICY_SQLITE_PATH (or a default path under the writable directory).
+# - Storage:
+#   - api-key policies / top-level api-keys can be persisted in Postgres via
+#     APIKEY_POLICY_PG_DSN / APIKEY_POLICY_PG_SCHEMA.
+#   - daily counters and billing data require Postgres-backed persistence.
 api-key-policies:
   - api-key: "your-api-key-1"
     # Optional: override upstream base URL for this client API key.

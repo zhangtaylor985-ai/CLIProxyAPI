@@ -37,7 +37,7 @@ func TestAPIKeyUpstreamProxyMiddleware_ForwardsGETModels_BaseWithoutV1(t *testin
 		c.Set("apiKey", "k")
 		c.Next()
 	})
-	r.Use(APIKeyPolicyMiddleware(func() *config.Config { return cfg }, nil, nil))
+	r.Use(APIKeyPolicyMiddleware(func() *config.Config { return cfg }, nil, nil, nil))
 	r.Use(APIKeyUpstreamProxyMiddleware(func() *config.Config { return cfg }))
 	r.GET("/v1/models", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"local": true})
@@ -79,7 +79,7 @@ func TestAPIKeyUpstreamProxyMiddleware_ForwardsGETModels_BaseWithV1(t *testing.T
 		c.Set("apiKey", "k")
 		c.Next()
 	})
-	r.Use(APIKeyPolicyMiddleware(func() *config.Config { return cfg }, nil, nil))
+	r.Use(APIKeyPolicyMiddleware(func() *config.Config { return cfg }, nil, nil, nil))
 	r.Use(APIKeyUpstreamProxyMiddleware(func() *config.Config { return cfg }))
 	r.GET("/v1/models", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"local": true})
@@ -111,7 +111,7 @@ func TestAPIKeyUpstreamProxyMiddleware_PassthroughWhenUnset(t *testing.T) {
 		c.Set("apiKey", "k")
 		c.Next()
 	})
-	r.Use(APIKeyPolicyMiddleware(func() *config.Config { return cfg }, nil, nil))
+	r.Use(APIKeyPolicyMiddleware(func() *config.Config { return cfg }, nil, nil, nil))
 	r.Use(APIKeyUpstreamProxyMiddleware(func() *config.Config { return cfg }))
 	r.GET("/v1/models", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"local": true})

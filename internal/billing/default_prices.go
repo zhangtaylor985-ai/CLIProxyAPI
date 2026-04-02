@@ -58,3 +58,21 @@ var DefaultPrices = map[string]PriceMicroUSDPer1M{
 		Cached:     250_000,    // $0.25 / 1M
 	},
 }
+
+// ResolveDefaultPrice returns the built-in fallback price for a model,
+// including support for "-thinking" variants mapping to their base model.
+func ResolveDefaultPrice(model string) (PriceMicroUSDPer1M, bool) {
+	modelKey := policy.NormaliseModelKey(model)
+	if modelKey == "" {
+		return PriceMicroUSDPer1M{}, false
+	}
+	if price, ok := DefaultPrices[modelKey]; ok {
+		return price, true
+	}
+	baseKey := policy.StripThinkingVariant(modelKey)
+	if baseKey != "" && baseKey != modelKey {
+		price, ok := DefaultPrices[baseKey]
+		return price, ok
+	}
+	return PriceMicroUSDPer1M{}, false
+}

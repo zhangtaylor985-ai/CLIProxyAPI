@@ -22,7 +22,7 @@ const (
 )
 
 type UsagePersistPlugin struct {
-	store *SQLiteStore
+	store Store
 
 	flushInterval time.Duration
 	maxBatchSize  int
@@ -39,7 +39,7 @@ type UsagePersistPlugin struct {
 	pendingDailyCost map[string]map[string]int64
 }
 
-func NewUsagePersistPlugin(store *SQLiteStore) *UsagePersistPlugin {
+func NewUsagePersistPlugin(store Store) *UsagePersistPlugin {
 	plugin := &UsagePersistPlugin{
 		store:            store,
 		flushInterval:    usagePersistFlushInterval,
@@ -575,13 +575,6 @@ func (p *UsagePersistPlugin) buildPersistRecord(record coreusage.Record) (usageP
 }
 
 func boolToInt64(v bool) int64 {
-	if v {
-		return 1
-	}
-	return 0
-}
-
-func boolToSQLiteInt(v bool) int64 {
 	if v {
 		return 1
 	}

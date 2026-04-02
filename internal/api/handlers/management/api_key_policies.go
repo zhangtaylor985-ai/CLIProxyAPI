@@ -44,7 +44,7 @@ func (h *Handler) PutAPIKeyPolicies(c *gin.Context) {
 
 	h.cfg.APIKeyPolicies = append([]config.APIKeyPolicy(nil), arr...)
 	h.cfg.SanitizeAPIKeyPolicies()
-	h.persist(c)
+	h.persistAPIKeyConfig(c)
 }
 
 func (h *Handler) PatchAPIKeyPolicies(c *gin.Context) {
@@ -65,6 +65,7 @@ func (h *Handler) PatchAPIKeyPolicies(c *gin.Context) {
 		Claude *providerFailoverPatch `json:"claude"`
 	}
 	type policyPatch struct {
+		GroupID               *string            `json:"group-id"`
 		FastMode              *bool              `json:"fast-mode"`
 		EnableClaudeModels    *bool              `json:"enable-claude-models"`
 		ClaudeUsageLimitUSD   *float64           `json:"claude-usage-limit-usd"`
@@ -117,7 +118,7 @@ func (h *Handler) PatchAPIKeyPolicies(c *gin.Context) {
 			if targetIndex >= 0 {
 				h.cfg.APIKeyPolicies = append(h.cfg.APIKeyPolicies[:targetIndex], h.cfg.APIKeyPolicies[targetIndex+1:]...)
 				h.cfg.SanitizeAPIKeyPolicies()
-				h.persist(c)
+				h.persistAPIKeyConfig(c)
 				return
 			}
 			c.JSON(http.StatusBadRequest, gin.H{"error": "api-key cannot be empty"})
@@ -129,6 +130,9 @@ func (h *Handler) PatchAPIKeyPolicies(c *gin.Context) {
 	if body.Value.EnableClaudeModels != nil {
 		v := *body.Value.EnableClaudeModels
 		entry.EnableClaudeModels = &v
+	}
+	if body.Value.GroupID != nil {
+		entry.GroupID = strings.TrimSpace(*body.Value.GroupID)
 	}
 	if body.Value.ClaudeUsageLimitUSD != nil {
 		entry.ClaudeUsageLimitUSD = *body.Value.ClaudeUsageLimitUSD
@@ -217,7 +221,7 @@ func (h *Handler) PatchAPIKeyPolicies(c *gin.Context) {
 		h.cfg.APIKeyPolicies = append(h.cfg.APIKeyPolicies, entry)
 	}
 	h.cfg.SanitizeAPIKeyPolicies()
-	h.persist(c)
+	h.persistAPIKeyConfig(c)
 }
 
 func (h *Handler) DeleteAPIKeyPolicies(c *gin.Context) {
@@ -244,7 +248,7 @@ func (h *Handler) DeleteAPIKeyPolicies(c *gin.Context) {
 		}
 		h.cfg.APIKeyPolicies = out
 		h.cfg.SanitizeAPIKeyPolicies()
-		h.persist(c)
+		h.persistAPIKeyConfig(c)
 		return
 	}
 

@@ -6,7 +6,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
+	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -32,7 +33,7 @@ func TestAPIKeyPolicyMiddleware_DowngradesOpus46(t *testing.T) {
 		c.Set("apiKey", "k")
 		c.Next()
 	})
-	r.Use(APIKeyPolicyMiddleware(func() *config.Config { return cfg }, nil, nil))
+	r.Use(APIKeyPolicyMiddleware(func() *config.Config { return cfg }, nil, nil, nil))
 	r.POST("/v1/chat/completions", func(c *gin.Context) {
 		body, _ := io.ReadAll(c.Request.Body)
 		model := gjson.GetBytes(body, "model").String()
@@ -62,7 +63,7 @@ func TestAPIKeyPolicyMiddleware_StripsClaudeOpus1MSignalsWhenGloballyDisabled(t 
 		c.Set("apiKey", "k")
 		c.Next()
 	})
-	r.Use(APIKeyPolicyMiddleware(func() *config.Config { return cfg }, nil, nil))
+	r.Use(APIKeyPolicyMiddleware(func() *config.Config { return cfg }, nil, nil, nil))
 	r.POST("/v1/messages", func(c *gin.Context) {
 		body, _ := io.ReadAll(c.Request.Body)
 		c.JSON(200, gin.H{
@@ -110,7 +111,7 @@ func TestAPIKeyPolicyMiddleware_PreservesClaudeOpus1MSignalsForPerKeyOverride(t 
 		c.Set("apiKey", "k")
 		c.Next()
 	})
-	r.Use(APIKeyPolicyMiddleware(func() *config.Config { return cfg }, nil, nil))
+	r.Use(APIKeyPolicyMiddleware(func() *config.Config { return cfg }, nil, nil, nil))
 	r.POST("/v1/messages", func(c *gin.Context) {
 		body, _ := io.ReadAll(c.Request.Body)
 		c.JSON(200, gin.H{
@@ -154,7 +155,7 @@ func TestAPIKeyPolicyMiddleware_ExcludedModelDenied(t *testing.T) {
 		c.Set("apiKey", "k")
 		c.Next()
 	})
-	r.Use(APIKeyPolicyMiddleware(func() *config.Config { return cfg }, nil, nil))
+	r.Use(APIKeyPolicyMiddleware(func() *config.Config { return cfg }, nil, nil, nil))
 	r.POST("/v1/messages", func(c *gin.Context) {
 		c.JSON(200, gin.H{"ok": true})
 	})
@@ -182,7 +183,7 @@ func TestAPIKeyPolicyMiddleware_ExcludedChatGPTWildcardDenied(t *testing.T) {
 		c.Set("apiKey", "k")
 		c.Next()
 	})
-	r.Use(APIKeyPolicyMiddleware(func() *config.Config { return cfg }, nil, nil))
+	r.Use(APIKeyPolicyMiddleware(func() *config.Config { return cfg }, nil, nil, nil))
 	r.POST("/v1/chat/completions", func(c *gin.Context) {
 		c.JSON(200, gin.H{"ok": true})
 	})
@@ -210,7 +211,7 @@ func TestAPIKeyPolicyMiddleware_FastModeSetsPriorityServiceTier(t *testing.T) {
 		c.Set("apiKey", "k")
 		c.Next()
 	})
-	r.Use(APIKeyPolicyMiddleware(func() *config.Config { return cfg }, nil, nil))
+	r.Use(APIKeyPolicyMiddleware(func() *config.Config { return cfg }, nil, nil, nil))
 	r.POST("/v1/chat/completions", func(c *gin.Context) {
 		body, _ := io.ReadAll(c.Request.Body)
 		trace := requesttrace.APIKeyPolicyTraceFromGin(c)
@@ -273,7 +274,7 @@ func TestAPIKeyPolicyMiddleware_ExcludedRequestedCategoryDoesNotBlockRoutingTarg
 		c.Set("apiKey", "k")
 		c.Next()
 	})
-	r.Use(APIKeyPolicyMiddleware(func() *config.Config { return cfg }, nil, nil))
+	r.Use(APIKeyPolicyMiddleware(func() *config.Config { return cfg }, nil, nil, nil))
 	r.POST("/v1/chat/completions", func(c *gin.Context) {
 		body, _ := io.ReadAll(c.Request.Body)
 		model := gjson.GetBytes(body, "model").String()
@@ -294,13 +295,7 @@ func TestAPIKeyPolicyMiddleware_ExcludedRequestedCategoryDoesNotBlockRoutingTarg
 
 func TestAPIKeyPolicyMiddleware_DailyLimit(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "limits.sqlite")
-	limiter, err := policy.NewSQLiteDailyLimiter(dbPath)
-	if err != nil {
-		t.Fatalf("NewSQLiteDailyLimiter: %v", err)
-	}
-	defer limiter.Close()
+	limiter := &testDailyLimiter{}
 
 	cfg := &config.Config{
 		APIKeyPolicies: []config.APIKeyPolicy{
@@ -317,7 +312,7 @@ func TestAPIKeyPolicyMiddleware_DailyLimit(t *testing.T) {
 		c.Set("apiKey", "k")
 		c.Next()
 	})
-	r.Use(APIKeyPolicyMiddleware(func() *config.Config { return cfg }, limiter, nil))
+	r.Use(APIKeyPolicyMiddleware(func() *config.Config { return cfg }, limiter, nil, nil))
 	r.POST("/v1/chat/completions", func(c *gin.Context) {
 		c.JSON(200, gin.H{"ok": true})
 	})
@@ -338,12 +333,53 @@ func TestAPIKeyPolicyMiddleware_DailyLimit(t *testing.T) {
 	}
 }
 
+type testDailyLimiter struct {
+	counts map[string]int
+}
+
+func (l *testDailyLimiter) Close() error { return nil }
+
+func (l *testDailyLimiter) Consume(_ context.Context, apiKey, model, dayKey string, limit int) (count int, allowed bool, err error) {
+	if l.counts == nil {
+		l.counts = make(map[string]int)
+	}
+	key := apiKey + "|" + model + "|" + dayKey
+	l.counts[key]++
+	count = l.counts[key]
+	return count, count <= limit, nil
+}
+
+func (l *testDailyLimiter) ListUsageCounts(_ context.Context, apiKey, dayKey string) ([]policy.DailyUsageCountRow, error) {
+	rows := make([]policy.DailyUsageCountRow, 0, len(l.counts))
+	for key, count := range l.counts {
+		parts := strings.SplitN(key, "|", 3)
+		if len(parts) != 3 {
+			continue
+		}
+		row := policy.DailyUsageCountRow{
+			APIKey: parts[0],
+			Model:  parts[1],
+			Day:    parts[2],
+		}
+		if apiKey != "" && row.APIKey != apiKey {
+			continue
+		}
+		if dayKey != "" && row.Day != dayKey {
+			continue
+		}
+		row.Count = int64(count)
+		rows = append(rows, row)
+	}
+	return rows, nil
+}
+
 type stubCostReader struct {
 	dailyCost         int64
 	weeklyCost        int64
 	timeCost          int64
 	modelPrefixCost   int64
 	priceSource       string
+	events            []billing.UsageEventRow
 	err               error
 	dailyCostFn       func(ctx context.Context, apiKey, dayKey string) (int64, error)
 	dayRangeCostFn    func(ctx context.Context, apiKey, startDay, endDayExclusive string) (int64, error)
@@ -391,6 +427,39 @@ func (s stubCostReader) ResolvePriceMicro(ctx context.Context, model string) (bi
 	return billing.PriceMicroUSDPer1M{Prompt: 1}, source, 0, s.err
 }
 
+func (s stubCostReader) ListUsageEventsByAPIKey(ctx context.Context, apiKey string, startAt, endAt time.Time, limit int, desc bool) ([]billing.UsageEventRow, error) {
+	result := make([]billing.UsageEventRow, 0, len(s.events))
+	for _, item := range s.events {
+		if apiKey != "" && item.APIKey != apiKey {
+			continue
+		}
+		ts := time.Unix(item.RequestedAt, 0)
+		if !startAt.IsZero() && ts.Before(startAt) {
+			continue
+		}
+		if !endAt.IsZero() && !ts.Before(endAt) {
+			continue
+		}
+		result = append(result, item)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].RequestedAt == result[j].RequestedAt {
+			if desc {
+				return result[i].ID > result[j].ID
+			}
+			return result[i].ID < result[j].ID
+		}
+		if desc {
+			return result[i].RequestedAt > result[j].RequestedAt
+		}
+		return result[i].RequestedAt < result[j].RequestedAt
+	})
+	if limit > 0 && len(result) > limit {
+		result = result[:limit]
+	}
+	return result, s.err
+}
+
 func firstRoutingTarget(p *config.APIKeyPolicy) string {
 	if p == nil || len(p.ModelRouting.Rules) == 0 {
 		return ""
@@ -415,7 +484,7 @@ func TestAPIKeyPolicyMiddleware_DailyBudget(t *testing.T) {
 		c.Set("apiKey", "k")
 		c.Next()
 	})
-	r.Use(APIKeyPolicyMiddleware(func() *config.Config { return cfg }, nil, reader))
+	r.Use(APIKeyPolicyMiddleware(func() *config.Config { return cfg }, nil, reader, nil))
 	r.POST("/v1/chat/completions", func(c *gin.Context) {
 		c.JSON(200, gin.H{"ok": true})
 	})
@@ -451,7 +520,7 @@ func TestAPIKeyPolicyMiddleware_ClaudeUsageLimitFallsBackToGlobalRouting(t *test
 		c.Set("apiKey", "k")
 		c.Next()
 	})
-	r.Use(APIKeyPolicyMiddleware(func() *config.Config { return cfg }, nil, reader))
+	r.Use(APIKeyPolicyMiddleware(func() *config.Config { return cfg }, nil, reader, nil))
 	r.POST("/v1/chat/completions", func(c *gin.Context) {
 		policyValue, _ := c.Get(apiKeyPolicyContextKey)
 		policyEntry, _ := policyValue.(*config.APIKeyPolicy)
@@ -494,7 +563,7 @@ func TestAPIKeyPolicyMiddleware_WeeklyBudget(t *testing.T) {
 		c.Set("apiKey", "k")
 		c.Next()
 	})
-	r.Use(APIKeyPolicyMiddleware(func() *config.Config { return cfg }, nil, reader))
+	r.Use(APIKeyPolicyMiddleware(func() *config.Config { return cfg }, nil, reader, nil))
 	r.POST("/v1/chat/completions", func(c *gin.Context) {
 		c.JSON(200, gin.H{"ok": true})
 	})
@@ -529,7 +598,7 @@ func TestAPIKeyPolicyMiddleware_WeeklyBudgetAnchoredWindow(t *testing.T) {
 		c.Set("apiKey", "k")
 		c.Next()
 	})
-	r.Use(APIKeyPolicyMiddleware(func() *config.Config { return cfg }, nil, reader))
+	r.Use(APIKeyPolicyMiddleware(func() *config.Config { return cfg }, nil, reader, nil))
 	r.POST("/v1/chat/completions", func(c *gin.Context) {
 		c.JSON(200, gin.H{"ok": true})
 	})
@@ -564,7 +633,7 @@ func TestAPIKeyPolicyMiddleware_BudgetedModelRequiresPrice(t *testing.T) {
 		c.Set("apiKey", "k")
 		c.Next()
 	})
-	r.Use(APIKeyPolicyMiddleware(func() *config.Config { return cfg }, nil, reader))
+	r.Use(APIKeyPolicyMiddleware(func() *config.Config { return cfg }, nil, reader, nil))
 	r.POST("/v1/chat/completions", func(c *gin.Context) {
 		c.JSON(200, gin.H{"ok": true})
 	})
@@ -596,14 +665,9 @@ func TestAPIKeyPolicyMiddleware_TokenPackageBypassesDailyAndWeeklyBudgets(t *tes
 	cfg.SanitizeAPIKeyPolicies()
 
 	reader := stubCostReader{
-		dailyCost:   999_000_000,
-		weeklyCost:  999_000_000,
 		priceSource: "saved",
-		timeRangeCostFn: func(ctx context.Context, apiKey string, startInclusive, endExclusive time.Time) (int64, error) {
-			if startInclusive.Equal(startedAt) {
-				return 500_000_000, nil
-			}
-			return 0, nil
+		events: []billing.UsageEventRow{
+			{ID: 1, APIKey: "k", RequestedAt: startedAt.Add(2 * time.Hour).Unix(), CostMicroUSD: 25_000_000},
 		},
 	}
 	var _ billing.DailyCostReader = reader
@@ -613,7 +677,7 @@ func TestAPIKeyPolicyMiddleware_TokenPackageBypassesDailyAndWeeklyBudgets(t *tes
 		c.Set("apiKey", "k")
 		c.Next()
 	})
-	r.Use(APIKeyPolicyMiddleware(func() *config.Config { return cfg }, nil, reader))
+	r.Use(APIKeyPolicyMiddleware(func() *config.Config { return cfg }, nil, reader, nil))
 	r.POST("/v1/chat/completions", func(c *gin.Context) {
 		c.JSON(200, gin.H{"ok": true})
 	})
@@ -631,8 +695,6 @@ func TestAPIKeyPolicyMiddleware_TokenPackageExhaustionStartsDailyBudgetAfterDepl
 	gin.SetMode(gin.TestMode)
 	now := time.Now().UTC().Truncate(time.Hour)
 	startedAt := now.Add(-6 * time.Hour)
-	depletionBoundary := now.Add(-1 * time.Hour)
-	partialBoundary := now.Add(-3 * time.Hour)
 	cfg := &config.Config{
 		APIKeyPolicies: []config.APIKeyPolicy{
 			{
@@ -646,25 +708,9 @@ func TestAPIKeyPolicyMiddleware_TokenPackageExhaustionStartsDailyBudgetAfterDepl
 	cfg.SanitizeAPIKeyPolicies()
 
 	reader := stubCostReader{
-		dailyCost:   12_000_000,
 		priceSource: "saved",
-		timeRangeCostFn: func(ctx context.Context, apiKey string, startInclusive, endExclusive time.Time) (int64, error) {
-			if startInclusive.Equal(startedAt) {
-				switch {
-				case endExclusive.Unix() <= startedAt.Add(time.Hour).Unix():
-					return 0, nil
-				case endExclusive.Unix() <= partialBoundary.Unix():
-					return 5_000_000, nil
-				case endExclusive.Unix() <= depletionBoundary.Unix():
-					return 9_000_000, nil
-				default:
-					return 12_000_000, nil
-				}
-			}
-			if startInclusive.Unix() >= depletionBoundary.Unix()+1 {
-				return 2_000_000, nil
-			}
-			return 0, nil
+		events: []billing.UsageEventRow{
+			{ID: 1, APIKey: "k", RequestedAt: startedAt.Add(2 * time.Hour).Unix(), CostMicroUSD: 11_000_000},
 		},
 	}
 	var _ billing.DailyCostReader = reader
@@ -674,7 +720,7 @@ func TestAPIKeyPolicyMiddleware_TokenPackageExhaustionStartsDailyBudgetAfterDepl
 		c.Set("apiKey", "k")
 		c.Next()
 	})
-	r.Use(APIKeyPolicyMiddleware(func() *config.Config { return cfg }, nil, reader))
+	r.Use(APIKeyPolicyMiddleware(func() *config.Config { return cfg }, nil, reader, nil))
 	r.POST("/v1/chat/completions", func(c *gin.Context) {
 		c.JSON(200, gin.H{"ok": true})
 	})
@@ -692,7 +738,6 @@ func TestAPIKeyPolicyMiddleware_TokenPackageExhaustionStartsWeeklyBudgetAfterDep
 	gin.SetMode(gin.TestMode)
 	now := time.Now().UTC().Truncate(time.Hour)
 	startedAt := now.Add(-24 * time.Hour)
-	depletionBoundary := now.Add(-2 * time.Hour)
 	cfg := &config.Config{
 		APIKeyPolicies: []config.APIKeyPolicy{
 			{
@@ -707,23 +752,9 @@ func TestAPIKeyPolicyMiddleware_TokenPackageExhaustionStartsWeeklyBudgetAfterDep
 	cfg.SanitizeAPIKeyPolicies()
 
 	reader := stubCostReader{
-		weeklyCost:  12_000_000,
 		priceSource: "saved",
-		timeRangeCostFn: func(ctx context.Context, apiKey string, startInclusive, endExclusive time.Time) (int64, error) {
-			if startInclusive.Equal(startedAt) {
-				switch {
-				case endExclusive.Unix() <= startedAt.Add(4*time.Hour).Unix():
-					return 4_000_000, nil
-				case endExclusive.Unix() <= depletionBoundary.Unix():
-					return 9_000_000, nil
-				default:
-					return 16_000_000, nil
-				}
-			}
-			if startInclusive.Unix() >= depletionBoundary.Unix()+1 {
-				return 6_000_000, nil
-			}
-			return 0, nil
+		events: []billing.UsageEventRow{
+			{ID: 1, APIKey: "k", RequestedAt: startedAt.Add(3 * time.Hour).Unix(), CostMicroUSD: 16_000_000},
 		},
 	}
 	var _ billing.DailyCostReader = reader
@@ -733,7 +764,7 @@ func TestAPIKeyPolicyMiddleware_TokenPackageExhaustionStartsWeeklyBudgetAfterDep
 		c.Set("apiKey", "k")
 		c.Next()
 	})
-	r.Use(APIKeyPolicyMiddleware(func() *config.Config { return cfg }, nil, reader))
+	r.Use(APIKeyPolicyMiddleware(func() *config.Config { return cfg }, nil, reader, nil))
 	r.POST("/v1/chat/completions", func(c *gin.Context) {
 		c.JSON(200, gin.H{"ok": true})
 	})

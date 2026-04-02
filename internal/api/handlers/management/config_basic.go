@@ -1,6 +1,7 @@
 package management
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/apikeyconfig"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/policy"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
@@ -149,25 +151,38 @@ func (h *Handler) PutConfigYAML(c *gin.Context) {
 		return
 	}
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	if WriteConfig(h.configFilePath, body) != nil {
+		h.mu.Unlock()
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "write_failed", "message": "failed to write config"})
 		return
 	}
 	// Reload into handler to keep memory in sync
 	newCfg, err := config.LoadConfig(h.configFilePath)
 	if err != nil {
+		h.mu.Unlock()
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "reload_failed", "message": err.Error()})
 		return
 	}
+	if h.apiKeyConfigStore != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		if err = h.apiKeyConfigStore.SaveState(ctx, apikeyconfig.StateFromConfig(newCfg)); err != nil {
+			cancel()
+			h.mu.Unlock()
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "persist_failed", "message": err.Error()})
+			return
+		}
+		cancel()
+	}
 	h.cfg = newCfg
+	h.mu.Unlock()
+	h.notifyConfigUpdated(newCfg)
 	c.JSON(http.StatusOK, gin.H{"ok": true, "changed": []string{"config"}})
 }
 
 // GetConfigYAML returns the raw config.yaml file bytes without re-encoding.
 // It preserves comments and original formatting/styles.
 func (h *Handler) GetConfigYAML(c *gin.Context) {
-	data, err := os.ReadFile(h.configFilePath)
+	data, err := h.renderConfigYAML()
 	if err != nil {
 		if os.IsNotExist(err) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "not_found", "message": "config file not found"})
@@ -181,6 +196,46 @@ func (h *Handler) GetConfigYAML(c *gin.Context) {
 	c.Header("X-Content-Type-Options", "nosniff")
 	// Write raw bytes as-is
 	_, _ = c.Writer.Write(data)
+}
+
+func (h *Handler) renderConfigYAML() ([]byte, error) {
+	if h == nil {
+		return nil, os.ErrNotExist
+	}
+	if h.apiKeyConfigStore == nil || h.cfg == nil {
+		return os.ReadFile(h.configFilePath)
+	}
+	_, errStat := os.Stat(h.configFilePath)
+	if errStat != nil {
+		if os.IsNotExist(errStat) {
+			return yaml.Marshal(h.cfg)
+		}
+		return nil, errStat
+	}
+	tmpFile, err := os.CreateTemp(filepath.Dir(h.configFilePath), "config-render-*.yaml")
+	if err != nil {
+		return nil, err
+	}
+	tmpPath := tmpFile.Name()
+	if err := tmpFile.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return nil, err
+	}
+	defer func() { _ = os.Remove(tmpPath) }()
+	original, err := os.ReadFile(h.configFilePath)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(tmpPath, original, 0o600); err != nil {
+		return nil, err
+	}
+	cfgCopy := *h.cfg
+	cfgCopy.APIKeys = append([]string(nil), h.cfg.APIKeys...)
+	cfgCopy.APIKeyPolicies = append([]config.APIKeyPolicy(nil), h.cfg.APIKeyPolicies...)
+	if err := config.SaveConfigPreserveComments(tmpPath, &cfgCopy); err != nil {
+		return nil, err
+	}
+	return os.ReadFile(tmpPath)
 }
 
 // Debug

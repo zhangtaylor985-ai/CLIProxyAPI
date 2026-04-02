@@ -25,6 +25,8 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/api/middleware"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/api/modules"
 	ampmodule "github.com/router-for-me/CLIProxyAPI/v6/internal/api/modules/amp"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/apikeyconfig"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/apikeygroup"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/billing"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/logging"
@@ -173,8 +175,10 @@ type Server struct {
 
 	localPassword string
 
-	dailyLimiter *policy.SQLiteDailyLimiter
-	billingStore *billing.SQLiteStore
+	dailyLimiter      policy.DailyLimiter
+	billingStore      billing.Store
+	groupStore        apikeygroup.Store
+	apiKeyConfigStore apikeyconfig.Store
 
 	keepAliveEnabled   bool
 	keepAliveTimeout   time.Duration
@@ -247,6 +251,7 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 	envAdminPassword, envAdminPasswordSet := os.LookupEnv("MANAGEMENT_PASSWORD")
 	envAdminPassword = strings.TrimSpace(envAdminPassword)
 	envManagementSecret := envAdminPasswordSet && envAdminPassword != ""
+	apiKeyConfigStore := initAPIKeyConfigStore(cfg)
 
 	// Create server instance
 	s := &Server{
@@ -260,9 +265,11 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 		currentPath:         wd,
 		envManagementSecret: envManagementSecret,
 		wsRoutes:            make(map[string]struct{}),
+		apiKeyConfigStore:   apiKeyConfigStore,
 	}
-	s.dailyLimiter = s.initDailyLimiter(configFilePath)
-	s.billingStore = s.initBillingStore(configFilePath)
+	s.dailyLimiter = s.initDailyLimiter()
+	s.billingStore = s.initBillingStore()
+	s.groupStore = s.initGroupStore()
 	if s.billingStore != nil {
 		plugin := billing.NewUsagePersistPlugin(s.billingStore)
 		s.billingStore.SetPendingUsageProvider(plugin)
@@ -279,11 +286,22 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 	auth.SetQuotaCooldownDisabled(cfg.DisableCooling)
 	// Initialize management handler
 	s.mgmt = managementHandlers.NewHandler(cfg, configFilePath, authManager)
+	s.mgmt.SetConfigUpdatedCallback(func(updated *config.Config) {
+		if updated != nil {
+			s.UpdateClients(updated)
+		}
+	})
+	if s.apiKeyConfigStore != nil {
+		s.mgmt.SetAPIKeyConfigStore(s.apiKeyConfigStore)
+	}
 	if s.billingStore != nil {
 		s.mgmt.SetBillingStore(s.billingStore)
 	}
 	if s.dailyLimiter != nil {
 		s.mgmt.SetDailyLimiter(s.dailyLimiter)
+	}
+	if s.groupStore != nil {
+		s.mgmt.SetGroupStore(s.groupStore)
 	}
 	if optionState.localPassword != "" {
 		s.mgmt.SetLocalPassword(optionState.localPassword)
@@ -335,40 +353,121 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 	return s
 }
 
-func (s *Server) initDailyLimiter(configFilePath string) *policy.SQLiteDailyLimiter {
-	// Always initialize limiter so management can enable limits without restart.
-	// If initialization fails, policy middleware will surface the error when limits are configured.
-	path := resolvePolicySQLitePath(configFilePath)
-	limiter, err := policy.NewSQLiteDailyLimiter(path)
-	if err != nil {
-		log.WithError(err).Warnf("failed to initialize api key policy daily limiter (sqlite): %s", path)
+func (s *Server) initDailyLimiter() policy.DailyLimiter {
+	dsn, schema := resolveAPIKeyPolicyPostgresConfig()
+	if dsn == "" {
+		log.Warn("api key policy daily limiter disabled: postgres DSN not configured")
 		return nil
 	}
-	log.Infof("api key policy daily limiter enabled (sqlite): %s", path)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	limiter, err := policy.NewPostgresDailyLimiter(ctx, policy.PostgresDailyLimiterConfig{
+		DSN:    dsn,
+		Schema: schema,
+	})
+	if err != nil {
+		log.WithError(err).Warn("failed to initialize api key policy daily limiter (postgres)")
+		return nil
+	}
+	log.Infof("api key policy daily limiter enabled (postgres)")
 	return limiter
 }
 
-func (s *Server) initBillingStore(configFilePath string) *billing.SQLiteStore {
-	path := resolvePolicySQLitePath(configFilePath)
-	store, err := billing.NewSQLiteStore(path)
-	if err != nil {
-		log.WithError(err).Warnf("failed to initialize billing store (sqlite): %s", path)
+func (s *Server) initBillingStore() billing.Store {
+	dsn, schema := resolveBillingPostgresConfig()
+	if dsn == "" {
+		log.Warn("billing store disabled: postgres DSN not configured")
 		return nil
 	}
-	log.Infof("billing store enabled (sqlite): %s", path)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	store, err := billing.NewPostgresStore(ctx, billing.PostgresStoreConfig{
+		DSN:    dsn,
+		Schema: schema,
+	})
+	if err != nil {
+		log.WithError(err).Warn("failed to initialize billing store (postgres)")
+		return nil
+	}
+	log.Infof("billing store enabled (postgres)")
 	return store
 }
 
-func resolvePolicySQLitePath(configFilePath string) string {
-	path := strings.TrimSpace(os.Getenv("APIKEY_POLICY_SQLITE_PATH"))
-	if path != "" {
-		return path
+func (s *Server) initGroupStore() apikeygroup.Store {
+	dsn, schema := resolveBillingPostgresConfig()
+	if dsn == "" {
+		return nil
 	}
-	base := util.WritablePath()
-	if base == "" {
-		base = filepath.Dir(configFilePath)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	store, err := apikeygroup.NewPostgresStore(ctx, apikeygroup.PostgresStoreConfig{
+		DSN:    dsn,
+		Schema: schema,
+	})
+	if err != nil {
+		log.WithError(err).Warn("failed to initialize api key group store (postgres)")
+		return nil
 	}
-	return filepath.Join(base, "api_key_policy_limits.sqlite")
+	if err := store.SeedDefaults(ctx); err != nil {
+		_ = store.Close()
+		log.WithError(err).Warn("failed to prepare api key group store schema (postgres)")
+		return nil
+	}
+	log.Infof("api key group store enabled (postgres)")
+	return store
+}
+
+func resolveSharedPostgresConfig() (dsn string, schema string) {
+	return apikeyconfig.ResolvePostgresConfigFromEnv()
+}
+
+func resolveBillingPostgresConfig() (dsn string, schema string) {
+	return resolveSharedPostgresConfig()
+}
+
+func resolveAPIKeyPolicyPostgresConfig() (dsn string, schema string) {
+	return resolveSharedPostgresConfig()
+}
+
+func initAPIKeyConfigStore(cfg *config.Config) apikeyconfig.Store {
+	dsn, schema := resolveAPIKeyPolicyPostgresConfig()
+	if dsn == "" {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	store, err := apikeyconfig.NewPostgresStore(ctx, apikeyconfig.PostgresStoreConfig{
+		DSN:    dsn,
+		Schema: schema,
+	})
+	if err != nil {
+		log.WithError(err).Warn("failed to initialize api key config store (postgres), falling back to config.yaml")
+		return nil
+	}
+	if cfg != nil {
+		if _, err := applyAPIKeyConfigOverlay(ctx, store, cfg); err != nil {
+			_ = store.Close()
+			log.WithError(err).Warn("failed to load api key config from postgres, falling back to config.yaml")
+			return nil
+		}
+	}
+	log.Infof("api key config store enabled (postgres)")
+	return store
+}
+
+func applyAPIKeyConfigOverlay(ctx context.Context, store apikeyconfig.Store, cfg *config.Config) (bool, error) {
+	if store == nil || cfg == nil {
+		return false, nil
+	}
+	state, found, err := store.LoadState(ctx)
+	if err != nil {
+		return false, err
+	}
+	if !found {
+		return false, nil
+	}
+	state.ApplyToConfig(cfg)
+	return true, nil
 }
 
 // setupRoutes configures the API routes for the server.
@@ -384,7 +483,7 @@ func (s *Server) setupRoutes() {
 	// OpenAI compatible API routes
 	v1 := s.engine.Group("/v1")
 	v1.Use(AuthMiddleware(s.accessManager))
-	v1.Use(middleware.APIKeyPolicyMiddleware(func() *config.Config { return s.cfg }, s.dailyLimiter, s.billingStore))
+	v1.Use(middleware.APIKeyPolicyMiddleware(func() *config.Config { return s.cfg }, s.dailyLimiter, s.billingStore, s.groupStore))
 	v1.Use(middleware.APIKeyUpstreamProxyMiddleware(func() *config.Config { return s.cfg }))
 	{
 		v1.GET("/models", s.unifiedModelsHandler(openaiHandlers, claudeCodeHandlers))
@@ -399,7 +498,7 @@ func (s *Server) setupRoutes() {
 	// Gemini compatible API routes
 	v1beta := s.engine.Group("/v1beta")
 	v1beta.Use(AuthMiddleware(s.accessManager))
-	v1beta.Use(middleware.APIKeyPolicyMiddleware(func() *config.Config { return s.cfg }, s.dailyLimiter, s.billingStore))
+	v1beta.Use(middleware.APIKeyPolicyMiddleware(func() *config.Config { return s.cfg }, s.dailyLimiter, s.billingStore, s.groupStore))
 	{
 		v1beta.GET("/models", geminiHandlers.GeminiModels)
 		v1beta.POST("/models/*action", geminiHandlers.GeminiHandler)
@@ -600,6 +699,10 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.PUT("/api-key-policies", s.mgmt.PutAPIKeyPolicies)
 		mgmt.PATCH("/api-key-policies", s.mgmt.PatchAPIKeyPolicies)
 		mgmt.DELETE("/api-key-policies", s.mgmt.DeleteAPIKeyPolicies)
+		mgmt.GET("/api-key-groups", s.mgmt.ListAPIKeyGroups)
+		mgmt.POST("/api-key-groups", s.mgmt.CreateAPIKeyGroup)
+		mgmt.PUT("/api-key-groups/:id", s.mgmt.UpdateAPIKeyGroup)
+		mgmt.DELETE("/api-key-groups/:id", s.mgmt.DeleteAPIKeyGroup)
 
 		mgmt.GET("/model-prices", s.mgmt.GetModelPrices)
 		mgmt.GET("/model-prices/export", s.mgmt.ExportModelPrices)
@@ -1050,6 +1153,16 @@ func (s *Server) Stop(ctx context.Context) error {
 			log.WithError(err).Warn("failed to close billing store")
 		}
 	}
+	if s.groupStore != nil {
+		if err := s.groupStore.Close(); err != nil {
+			log.WithError(err).Warn("failed to close api key group store")
+		}
+	}
+	if s.apiKeyConfigStore != nil {
+		if err := s.apiKeyConfigStore.Close(); err != nil {
+			log.WithError(err).Warn("failed to close api key config store")
+		}
+	}
 
 	log.Debug("API server stopped")
 	return nil
@@ -1091,6 +1204,14 @@ func (s *Server) applyAccessConfig(oldCfg, newCfg *config.Config) {
 //   - clients: The new slice of AI service clients
 //   - cfg: The new application configuration
 func (s *Server) UpdateClients(cfg *config.Config) {
+	if s != nil && s.apiKeyConfigStore != nil && cfg != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		if _, err := applyAPIKeyConfigOverlay(ctx, s.apiKeyConfigStore, cfg); err != nil {
+			log.WithError(err).Warn("failed to refresh api key config from postgres during reload")
+		}
+		cancel()
+	}
+
 	// Reconstruct old config from YAML snapshot to avoid reference sharing issues
 	var oldCfg *config.Config
 	if len(s.oldConfigYaml) > 0 {
@@ -1187,6 +1308,10 @@ func (s *Server) UpdateClients(cfg *config.Config) {
 	s.oldConfigYaml, _ = yaml.Marshal(cfg)
 
 	s.handlers.UpdateClients(&cfg.SDKConfig)
+	if s.handlers != nil && s.handlers.AuthManager != nil {
+		s.handlers.AuthManager.SetConfig(cfg)
+		s.handlers.AuthManager.SetOAuthModelAlias(cfg.OAuthModelAlias)
+	}
 
 	if s.mgmt != nil {
 		s.mgmt.SetConfig(cfg)

@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/apikeyconfig"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/apikeygroup"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/billing"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/buildinfo"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
@@ -45,14 +47,17 @@ type Handler struct {
 	failedAttempts      map[string]*attemptInfo // keyed by client IP
 	authManager         *coreauth.Manager
 	usageStats          *usage.RequestStatistics
-	billingStore        *billing.SQLiteStore
-	dailyLimiter        *policy.SQLiteDailyLimiter
+	billingStore        billing.Store
+	dailyLimiter        policy.DailyLimiter
+	groupStore          apikeygroup.Store
+	apiKeyConfigStore   apikeyconfig.Store
 	tokenStore          coreauth.Store
 	localPassword       string
 	allowRemoteOverride bool
 	envSecret           string
 	logDir              string
 	postAuthHook        func(context.Context, *coreauth.Auth) error
+	configUpdated       func(*config.Config)
 }
 
 // NewHandler creates a new management handler instance.
@@ -118,9 +123,13 @@ func (h *Handler) SetAuthManager(manager *coreauth.Manager) { h.authManager = ma
 // SetUsageStatistics allows replacing the usage statistics reference.
 func (h *Handler) SetUsageStatistics(stats *usage.RequestStatistics) { h.usageStats = stats }
 
-func (h *Handler) SetBillingStore(store *billing.SQLiteStore) { h.billingStore = store }
+func (h *Handler) SetBillingStore(store billing.Store) { h.billingStore = store }
 
-func (h *Handler) SetDailyLimiter(limiter *policy.SQLiteDailyLimiter) { h.dailyLimiter = limiter }
+func (h *Handler) SetDailyLimiter(limiter policy.DailyLimiter) { h.dailyLimiter = limiter }
+
+func (h *Handler) SetGroupStore(store apikeygroup.Store) { h.groupStore = store }
+
+func (h *Handler) SetAPIKeyConfigStore(store apikeyconfig.Store) { h.apiKeyConfigStore = store }
 
 // SetLocalPassword configures the runtime-local password accepted for localhost requests.
 func (h *Handler) SetLocalPassword(password string) { h.localPassword = password }
@@ -139,6 +148,8 @@ func (h *Handler) SetLogDirectory(dir string) {
 }
 
 func (h *Handler) SetPostAuthHook(hook coreauth.PostAuthHook) { h.postAuthHook = hook }
+
+func (h *Handler) SetConfigUpdatedCallback(callback func(*config.Config)) { h.configUpdated = callback }
 
 // Middleware enforces access control for management endpoints.
 // All requests (local and remote) require a valid management key.
@@ -282,14 +293,45 @@ func (h *Handler) Middleware() gin.HandlerFunc {
 // persist saves the current in-memory config to disk.
 func (h *Handler) persist(c *gin.Context) bool {
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	// Preserve comments when writing
 	if err := config.SaveConfigPreserveComments(h.configFilePath, h.cfg); err != nil {
+		h.mu.Unlock()
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to save config: %v", err)})
 		return false
 	}
+	currentCfg := h.cfg
+	h.mu.Unlock()
+	h.notifyConfigUpdated(currentCfg)
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	return true
+}
+
+func (h *Handler) persistAPIKeyConfig(c *gin.Context) bool {
+	h.mu.Lock()
+	if h.apiKeyConfigStore == nil {
+		h.mu.Unlock()
+		return h.persist(c)
+	}
+	currentCfg := h.cfg
+	state := apikeyconfig.StateFromConfig(currentCfg)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	err := h.apiKeyConfigStore.SaveState(ctx, state)
+	cancel()
+	h.mu.Unlock()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to save api key config: %v", err)})
+		return false
+	}
+	h.notifyConfigUpdated(currentCfg)
+	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	return true
+}
+
+func (h *Handler) notifyConfigUpdated(cfg *config.Config) {
+	if h == nil || h.configUpdated == nil || cfg == nil {
+		return
+	}
+	h.configUpdated(cfg)
 }
 
 // Helper methods for simple types

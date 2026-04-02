@@ -21,6 +21,10 @@ var defaultClientHiddenGPTModelPatterns = []string{
 type APIKeyPolicy struct {
 	APIKey string `yaml:"api-key" json:"api-key"`
 
+	// GroupID binds the API key to a managed account group stored in Postgres.
+	// When set, daily/weekly base budgets are resolved from that group.
+	GroupID string `yaml:"group-id,omitempty" json:"group-id,omitempty"`
+
 	// FastMode forces OpenAI-compatible upstream requests for this client API key
 	// to use the priority service tier when the target model supports it.
 	FastMode bool `yaml:"fast-mode,omitempty" json:"fast-mode,omitempty"`
@@ -335,6 +339,13 @@ func (p *APIKeyPolicy) FastModeEnabled() bool {
 	return p.FastMode
 }
 
+func (p *APIKeyPolicy) UsesGroupBudget() bool {
+	if p == nil {
+		return false
+	}
+	return strings.TrimSpace(p.GroupID) != ""
+}
+
 func (p *APIKeyPolicy) TokenPackageEnabled() bool {
 	if p == nil {
 		return false
@@ -534,6 +545,7 @@ func (cfg *Config) SanitizeAPIKeyPolicies() {
 		if entry.APIKey == "" {
 			continue
 		}
+		entry.GroupID = strings.TrimSpace(entry.GroupID)
 
 		entry.UpstreamBaseURL = strings.TrimSpace(entry.UpstreamBaseURL)
 		entry.ClaudeGPTTargetFamily = policy.NormalizeClaudeGPTTargetBase(entry.ClaudeGPTTargetFamily)
