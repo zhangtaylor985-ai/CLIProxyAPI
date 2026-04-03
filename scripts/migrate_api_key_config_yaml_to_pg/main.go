@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/apikeyconfig"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/apikeygroup"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 )
 
@@ -76,7 +77,26 @@ func run(cfg apiKeyConfigMigrateConfig) error {
 	}
 	defer store.Close()
 
-	state := apikeyconfig.StateFromConfig(cfgFile)
+	groupStore, err := apikeygroup.NewPostgresStore(ctx, apikeygroup.PostgresStoreConfig{
+		DSN:    cfg.PostgresDSN,
+		Schema: cfg.PostgresSchema,
+	})
+	if err != nil {
+		return fmt.Errorf("prepare postgres api key group store: %w", err)
+	}
+	defer groupStore.Close()
+	if err := groupStore.SeedDefaults(ctx); err != nil {
+		return fmt.Errorf("seed postgres api key groups: %w", err)
+	}
+
+	existingState, found, err := store.LoadState(ctx)
+	if err != nil {
+		return fmt.Errorf("load existing api key config state: %w", err)
+	}
+
+	state, stats := apikeyconfig.ReconcileStates(existingState, apikeyconfig.StateFromConfig(cfgFile), apikeyconfig.ReconcileOptions{
+		AssignBudgetGroups: true,
+	})
 	if err := store.SaveState(ctx, state); err != nil {
 		return fmt.Errorf("save api key config state: %w", err)
 	}
@@ -87,7 +107,13 @@ func run(cfg apiKeyConfigMigrateConfig) error {
 	} else {
 		log.Printf("target postgres schema: %s", cfg.PostgresSchema)
 	}
+	log.Printf("existing postgres state found: %t", found)
+	log.Printf("yaml api-keys: %d", stats.YAMLAPIKeys)
+	log.Printf("yaml api-key-policies: %d", stats.YAMLAPIKeyPolicies)
 	log.Printf("migrated api-keys: %d", len(state.APIKeys))
 	log.Printf("migrated api-key-policies: %d", len(state.APIKeyPolicies))
+	log.Printf("group-assigned policies: %d (double=%d triple=%d quad=%d)", stats.GroupAssignedPolicies, stats.DoubleGroupPolicyCount, stats.TripleGroupPolicyCount, stats.QuadGroupPolicyCount)
+	log.Printf("policies with token packages: %d", stats.TokenPackagePolicyCount)
+	log.Printf("preserved pg-only policies: %d", stats.PreservedPGOnlyPolicyCount)
 	return nil
 }

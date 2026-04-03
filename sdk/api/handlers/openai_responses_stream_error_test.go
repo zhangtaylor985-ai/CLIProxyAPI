@@ -46,3 +46,18 @@ func TestBuildOpenAIResponsesStreamErrorChunkExtractsHTTPErrorBody(t *testing.T)
 		t.Fatalf("message = %v, want %q", payload["message"], "oops")
 	}
 }
+
+func TestBuildOpenAIResponsesStreamErrorChunkSanitizesUnknownProviderLeak(t *testing.T) {
+	chunk := BuildOpenAIResponsesStreamErrorChunk(
+		http.StatusBadGateway,
+		`{"error":{"message":"unknown provider for model gpt-5.4(medium)","type":"server_error","code":"internal_server_error"}}`,
+		0,
+	)
+	var payload map[string]any
+	if err := json.Unmarshal(chunk, &payload); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if payload["message"] != "upstream model temporarily unavailable, please retry later" {
+		t.Fatalf("message = %v", payload["message"])
+	}
+}

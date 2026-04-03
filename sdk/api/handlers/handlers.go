@@ -108,6 +108,9 @@ func BuildErrorResponseBody(status int, errText string) []byte {
 	if strings.TrimSpace(errText) == "" {
 		errText = http.StatusText(status)
 	}
+	if sanitized, ok := sanitizeClientErrorText(status, errText); ok {
+		errText = sanitized
+	}
 
 	trimmed := strings.TrimSpace(errText)
 	if trimmed != "" && json.Valid([]byte(trimmed)) {
@@ -147,6 +150,25 @@ func BuildErrorResponseBody(status int, errText string) []byte {
 		return []byte(fmt.Sprintf(`{"error":{"message":%q,"type":"server_error","code":"internal_server_error"}}`, errText))
 	}
 	return payload
+}
+
+func sanitizeClientErrorText(status int, errText string) (string, bool) {
+	raw := strings.TrimSpace(errText)
+	if raw == "" {
+		return "", false
+	}
+	if status < http.StatusBadGateway {
+		return "", false
+	}
+
+	combined := strings.ToLower(strings.TrimSpace(strings.Join([]string{
+		raw,
+		extractErrorMessage(raw),
+	}, " ")))
+	if strings.Contains(combined, "unknown provider for model") {
+		return "upstream model temporarily unavailable, please retry later", true
+	}
+	return "", false
 }
 
 // StreamingKeepAliveInterval returns the SSE keep-alive interval for this server.

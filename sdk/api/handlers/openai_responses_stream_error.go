@@ -90,6 +90,9 @@ func BuildOpenAIResponsesStreamErrorChunk(status int, errText string, sequenceNu
 			}
 		}
 	}
+	if sanitized, ok := sanitizeClientErrorText(status, message); ok {
+		message = sanitized
+	}
 
 	if strings.TrimSpace(code) == "" {
 		code = "unknown_error"

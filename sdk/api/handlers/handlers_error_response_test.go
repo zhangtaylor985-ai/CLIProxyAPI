@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -64,5 +65,27 @@ func TestWriteErrorResponse_AddonHeadersEnabled(t *testing.T) {
 	}
 	if got := recorder.Header().Values("X-Request-Id"); !reflect.DeepEqual(got, []string{"new-1", "new-2"}) {
 		t.Fatalf("X-Request-Id = %#v, want %#v", got, []string{"new-1", "new-2"})
+	}
+}
+
+func TestBuildErrorResponseBody_SanitizesUnknownProviderLeak(t *testing.T) {
+	body := BuildErrorResponseBody(http.StatusBadGateway, "unknown provider for model gpt-5.4(medium)")
+	var payload ErrorResponse
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if payload.Error.Message != "upstream model temporarily unavailable, please retry later" {
+		t.Fatalf("message = %q", payload.Error.Message)
+	}
+}
+
+func TestBuildErrorResponseBody_SanitizesUnknownProviderLeakFromJSON(t *testing.T) {
+	body := BuildErrorResponseBody(http.StatusBadGateway, `{"error":{"message":"unknown provider for model gpt-5.4(medium)","type":"server_error","code":"internal_server_error"}}`)
+	var payload ErrorResponse
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if payload.Error.Message != "upstream model temporarily unavailable, please retry later" {
+		t.Fatalf("message = %q", payload.Error.Message)
 	}
 }
