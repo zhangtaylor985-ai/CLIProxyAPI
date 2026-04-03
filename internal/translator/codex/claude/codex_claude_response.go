@@ -194,18 +194,18 @@ func ConvertCodexResponseToClaude(ctx context.Context, _ string, originalRequest
 		if itemType == "function_call" {
 			(*param).(*ConvertCodexResponseToClaudeParams).HasToolCall = true
 			(*param).(*ConvertCodexResponseToClaudeParams).HasReceivedArgumentsDelta = false
+			toolName := itemResult.Get("name").String()
+			{
+				// Restore original tool name if shortened
+				rev := buildReverseMapFromClaudeOriginalShortToOriginal(originalRequestRawJSON)
+				if orig, ok := rev[toolName]; ok {
+					toolName = orig
+				}
+			}
 			template = []byte(`{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"","name":"","input":{}}}`)
 			template, _ = sjson.SetBytes(template, "index", (*param).(*ConvertCodexResponseToClaudeParams).BlockIndex)
 			template, _ = sjson.SetBytes(template, "content_block.id", util.SanitizeClaudeToolID(itemResult.Get("call_id").String()))
-			{
-				// Restore original tool name if shortened
-				name := itemResult.Get("name").String()
-				rev := buildReverseMapFromClaudeOriginalShortToOriginal(originalRequestRawJSON)
-				if orig, ok := rev[name]; ok {
-					name = orig
-				}
-				template, _ = sjson.SetBytes(template, "content_block.name", name)
-			}
+			template, _ = sjson.SetBytes(template, "content_block.name", toolName)
 
 			output = translatorcommon.AppendSSEEventBytes(output, "content_block_start", template, 2)
 
@@ -227,31 +227,19 @@ func ConvertCodexResponseToClaude(ctx context.Context, _ string, originalRequest
 				}
 				return [][]byte{output}
 			}
-			syntheticText := ""
 			if gptinclaude.ShouldEmitSyntheticWebSearchTag(clientKind) {
-				syntheticText = gptinclaude.BuildSyntheticWebSearchToolCallTextFromRequest(originalRequestRawJSON)
-			}
-			if syntheticText != "" {
-				blockIndex := (*param).(*ConvertCodexResponseToClaudeParams).BlockIndex
-
-				template = []byte(`{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`)
-				template, _ = sjson.SetBytes(template, "index", blockIndex)
-				output = translatorcommon.AppendSSEEventBytes(output, "content_block_start", template, 2)
-
-				template = []byte(`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":""}}`)
-				template, _ = sjson.SetBytes(template, "index", blockIndex)
-				template, _ = sjson.SetBytes(template, "delta.text", syntheticText)
-				output = translatorcommon.AppendSSEEventBytes(output, "content_block_delta", template, 2)
-
-				template = []byte(`{"type":"content_block_stop","index":0}`)
-				template, _ = sjson.SetBytes(template, "index", blockIndex)
-				output = translatorcommon.AppendSSEEventBytes(output, "content_block_stop", template, 2)
-
-				(*param).(*ConvertCodexResponseToClaudeParams).BlockIndex++
+				// For the real Claude CLI path, a response.created preamble already
+				// gives early feedback for explicit search prompts. Emitting another
+				// generic "Searching the web." for every added item makes the
+				// transcript much noisier than Codex CLI, especially when the model
+				// performs several search rounds. Keep only the concrete completion
+				// events ("Searched: ...") and suppress per-item start spam here.
 				if itemID != "" {
 					(*param).(*ConvertCodexResponseToClaudeParams).EmittedSyntheticWebSearchStarts[itemID] = struct{}{}
 				}
-			} else if gptinclaude.ShouldEmitVSCodeWebSearchProgress(clientKind) {
+				return [][]byte{output}
+			}
+			if gptinclaude.ShouldEmitVSCodeWebSearchProgress(clientKind) {
 				blockIndex := (*param).(*ConvertCodexResponseToClaudeParams).BlockIndex
 				progressThinking := gptinclaude.BuildVSCodeWebSearchProgressThinking(
 					itemResult.Get("action"),
@@ -390,6 +378,9 @@ func ConvertCodexResponseToClaudeNonStream(ctx context.Context, _ string, origin
 		output.ForEach(func(_, item gjson.Result) bool {
 			switch item.Get("type").String() {
 			case "reasoning":
+				if !gptinclaude.ShouldSurfaceReasoningSummaryAsThinking(clientKind) {
+					return true
+				}
 				thinkingBuilder := strings.Builder{}
 				if summary := item.Get("summary"); summary.Exists() {
 					if summary.IsArray() {

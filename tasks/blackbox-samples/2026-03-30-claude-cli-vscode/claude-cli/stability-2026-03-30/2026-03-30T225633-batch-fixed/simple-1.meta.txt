@@ -1,0 +1,12 @@
+name=simple-1
+rc=0
+elapsed_seconds=144
+stdout_lines=2005
+stderr_bytes=0
+result_subtype=success
+result_count=1
+api_error_count=0
+web_text_count=1
+code_progress_count=5
+read_progress_count=3
+bash_progress_count=1

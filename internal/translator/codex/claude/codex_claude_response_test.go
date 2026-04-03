@@ -65,7 +65,7 @@ func TestConvertCodexResponseToClaude_WebSearchCallDoneEmitsSyntheticToolCallTex
 	}
 }
 
-func TestConvertCodexResponseToClaude_WebSearchCallAddedEmitsEarlySyntheticToolCallText(t *testing.T) {
+func TestConvertCodexResponseToClaude_WebSearchCallAddedIsSuppressedForClaudeCLI(t *testing.T) {
 	originalRequest := []byte(`{"model":"claude-opus-4-6","messages":[{"role":"user","content":[{"type":"text","text":"Perform a web search for the query: 2026 张雪峰 去世 怎么死的 辟谣"}]}],"tools":[{"type":"web_search_20250305","name":"web_search","max_uses":8}]}`)
 	raw := []byte(`data: {"type":"response.output_item.added","item":{"id":"ws_123","type":"web_search_call","status":"in_progress"},"output_index":1,"sequence_number":4}`)
 
@@ -76,17 +76,11 @@ func TestConvertCodexResponseToClaude_WebSearchCallAddedEmitsEarlySyntheticToolC
 	}
 
 	chunk := string(out[0])
-	if !strings.Contains(chunk, "Searching the web.") {
-		t.Fatalf("expected visible searching progress text, got %q", chunk)
-	}
-	if !strings.Contains(chunk, "\\u003ctool_call\\u003e") {
-		t.Fatalf("expected early synthetic <tool_call> marker, got %q", chunk)
-	}
-	if !strings.Contains(chunk, "\\\"query\\\":\\\"2026 张雪峰 去世 怎么死的 辟谣\\\"") {
-		t.Fatalf("expected inferred web search query, got %q", chunk)
+	if strings.TrimSpace(chunk) != "" {
+		t.Fatalf("expected claude cli added event to be suppressed, got %q", chunk)
 	}
 	if _, ok := param.(*ConvertCodexResponseToClaudeParams).EmittedSyntheticWebSearchStarts["ws_123"]; !ok {
-		t.Fatalf("expected synthetic web search call marker to be tracked")
+		t.Fatalf("expected suppressed web search start to be tracked")
 	}
 }
 
@@ -179,7 +173,7 @@ func TestConvertCodexResponseToClaude_ResponseCreatedDoesNotPreEmitSearchForCode
 	}
 }
 
-func TestConvertCodexResponseToClaude_WebSearchCallAddedEmitsEarlySyntheticToolCallTextForClaudeCodeTool(t *testing.T) {
+func TestConvertCodexResponseToClaude_WebSearchCallAddedIsSuppressedForClaudeCodeTool(t *testing.T) {
 	originalRequest := []byte(`{"model":"claude-opus-4-6","messages":[{"role":"user","content":"2026 张雪峰去世你知道吗，他是怎么死的，为什么？"}],"tools":[{"name":"WebSearch","input_schema":{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}}]}`)
 	raw := []byte(`data: {"type":"response.output_item.added","item":{"id":"ws_123","type":"web_search_call","status":"in_progress"},"output_index":1,"sequence_number":4}`)
 
@@ -190,14 +184,8 @@ func TestConvertCodexResponseToClaude_WebSearchCallAddedEmitsEarlySyntheticToolC
 	}
 
 	chunk := string(out[0])
-	if !strings.Contains(chunk, "Searching the web.") {
-		t.Fatalf("expected visible searching progress text, got %q", chunk)
-	}
-	if !strings.Contains(chunk, "\\u003ctool_call\\u003e") {
-		t.Fatalf("expected early synthetic <tool_call> marker, got %q", chunk)
-	}
-	if !strings.Contains(chunk, "\\\"query\\\":\\\"2026 张雪峰去世你知道吗，他是怎么死的，为什么？\\\"") {
-		t.Fatalf("expected inferred search query from generic WebSearch tool, got %q", chunk)
+	if strings.TrimSpace(chunk) != "" {
+		t.Fatalf("expected claude cli added event to be suppressed for generic WebSearch tool, got %q", chunk)
 	}
 }
 
@@ -216,6 +204,70 @@ func TestConvertCodexResponseToClaude_WebSearchCallDoneStillEmitsCompletedProgre
 	chunk := string(out[0])
 	if !strings.Contains(chunk, "Searched: 2026 张雪峰 去世 怎么死的 辟谣") {
 		t.Fatalf("expected completed search progress to be emitted, got %q", chunk)
+	}
+}
+
+func TestConvertCodexResponseToClaude_ClaudeCLIMultiSearchKeepsSingleGenericStart(t *testing.T) {
+	originalRequest := []byte(`{"model":"claude-opus-4-6","messages":[{"role":"user","content":[{"type":"text","text":"Perform a web search for the query: today's top news"}]}],"tools":[{"type":"web_search_20250305","name":"web_search","max_uses":8}]}`)
+	events := [][]byte{
+		[]byte(`data: {"type":"response.created","response":{"id":"resp_123","model":"gpt-5.4","status":"in_progress"}}`),
+		[]byte(`data: {"type":"response.output_item.added","item":{"id":"ws_1","type":"web_search_call","status":"in_progress"},"output_index":1,"sequence_number":4}`),
+		[]byte(`data: {"type":"response.output_item.done","item":{"id":"ws_1","type":"web_search_call","status":"completed","action":{"type":"search","query":"today top news Reuters"}},"output_index":1,"sequence_number":8}`),
+		[]byte(`data: {"type":"response.output_item.added","item":{"id":"ws_2","type":"web_search_call","status":"in_progress"},"output_index":2,"sequence_number":9}`),
+		[]byte(`data: {"type":"response.output_item.done","item":{"id":"ws_2","type":"web_search_call","status":"completed","action":{"type":"search","query":"site:reuters.com/world today top news"}},"output_index":2,"sequence_number":12}`),
+	}
+
+	var param any
+	var transcript strings.Builder
+	for _, event := range events {
+		out := ConvertCodexResponseToClaude(claudeCLICtx(), "gpt-5.4", originalRequest, nil, event, &param)
+		if len(out) != 1 {
+			t.Fatalf("expected 1 output chunk, got %d", len(out))
+		}
+		transcript.WriteString(string(out[0]))
+	}
+
+	got := transcript.String()
+	if count := strings.Count(got, "Searching the web."); count != 1 {
+		t.Fatalf("expected single generic search start, got %d transcript=%q", count, got)
+	}
+	if count := strings.Count(got, "Searched: "); count != 2 {
+		t.Fatalf("expected two concrete searched progress lines, got %d transcript=%q", count, got)
+	}
+}
+
+func TestConvertCodexResponseToClaude_FunctionCallStreamingUnaffected(t *testing.T) {
+	added := []byte(`data: {"type":"response.output_item.added","item":{"type":"function_call","call_id":"call_123","name":"ReadFile"},"output_index":0,"sequence_number":1}`)
+	argsDone := []byte(`data: {"type":"response.function_call_arguments.done","arguments":"{\"path\":\"README.md\"}","item_id":"call_123","output_index":0,"sequence_number":2}`)
+	done := []byte(`data: {"type":"response.output_item.done","item":{"type":"function_call","call_id":"call_123","name":"ReadFile"},"output_index":0,"sequence_number":3}`)
+
+	var param any
+	addedOut := ConvertCodexResponseToClaude(claudeCLICtx(), "gpt-5.4", nil, nil, added, &param)
+	if len(addedOut) != 1 {
+		t.Fatalf("expected 1 added output chunk, got %d", len(addedOut))
+	}
+	addedChunk := string(addedOut[0])
+	if !strings.Contains(addedChunk, "\"type\":\"tool_use\"") {
+		t.Fatalf("expected function call to still become tool_use, got %q", addedChunk)
+	}
+	if !strings.Contains(addedChunk, "\"name\":\"ReadFile\"") {
+		t.Fatalf("expected tool name to be preserved, got %q", addedChunk)
+	}
+
+	argsOut := ConvertCodexResponseToClaude(claudeCLICtx(), "gpt-5.4", nil, nil, argsDone, &param)
+	if len(argsOut) != 1 {
+		t.Fatalf("expected 1 arguments output chunk, got %d", len(argsOut))
+	}
+	if !strings.Contains(string(argsOut[0]), "\\\"path\\\":\\\"README.md\\\"") {
+		t.Fatalf("expected function call arguments delta to be preserved, got %q", string(argsOut[0]))
+	}
+
+	doneOut := ConvertCodexResponseToClaude(claudeCLICtx(), "gpt-5.4", nil, nil, done, &param)
+	if len(doneOut) != 1 {
+		t.Fatalf("expected 1 done output chunk, got %d", len(doneOut))
+	}
+	if !strings.Contains(string(doneOut[0]), "event: content_block_stop") {
+		t.Fatalf("expected function call completion to emit content_block_stop, got %q", string(doneOut[0]))
 	}
 }
 
@@ -281,5 +333,30 @@ func TestConvertCodexResponseToClaude_ReasoningSummarySuppressedForClaudeVSCode(
 	}
 	if got := strings.TrimSpace(string(out[0])); got != "" {
 		t.Fatalf("expected Claude VSCode path to suppress reasoning summary thinking, got %q", got)
+	}
+}
+
+func TestConvertCodexResponseToClaude_ReasoningSummarySuppressedForClaudeCLI(t *testing.T) {
+	raw := []byte(`data: {"type":"response.reasoning_summary_text.delta","delta":"Considering which files to inspect first","item_id":"rs_1","output_index":1,"sequence_number":11,"summary_index":0}`)
+
+	var param any
+	out := ConvertCodexResponseToClaude(claudeCLICtx(), "gpt-5.4", nil, nil, raw, &param)
+	if len(out) != 1 {
+		t.Fatalf("expected 1 output chunk, got %d", len(out))
+	}
+	if got := strings.TrimSpace(string(out[0])); got != "" {
+		t.Fatalf("expected Claude CLI path to suppress reasoning summary thinking, got %q", got)
+	}
+}
+
+func TestConvertCodexResponseToClaudeNonStream_SuppressesReasoningForClaudeCLI(t *testing.T) {
+	raw := []byte(`{"type":"response.completed","response":{"id":"resp_1","model":"gpt-5.4","usage":{"input_tokens":10,"output_tokens":20},"output":[{"type":"reasoning","summary":[{"text":"Inspecting files and planning test command"}]},{"type":"message","content":[{"type":"output_text","text":"done"}]}]}}`)
+
+	out := ConvertCodexResponseToClaudeNonStream(claudeCLICtx(), "gpt-5.4", nil, nil, raw, nil)
+	if got := gjson.GetBytes(out, "content.#").Int(); got != 1 {
+		t.Fatalf("expected only final text content block, got %d; out=%s", got, string(out))
+	}
+	if got := gjson.GetBytes(out, "content.0.type").String(); got != "text" {
+		t.Fatalf("expected remaining content block to be text, got %q; out=%s", got, string(out))
 	}
 }

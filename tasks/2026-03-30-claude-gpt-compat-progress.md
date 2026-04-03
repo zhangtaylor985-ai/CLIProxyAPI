@@ -414,3 +414,506 @@
 - “后置 fake thinking”这一展示问题，本轮已明显收敛
 - 但 VSCode 扩展的 stall 检测仍未彻底通过，因为扩展显然不把 `ping` 计入有效进展
 - 所以 VSCode 体验仍未达到“可直接宣称上线稳定”的标准
+
+### 9.8 已完成：Claude CLI 多轮 websearch 去掉重复 generic start，普通 tools 回归通过
+
+用户最新反馈针对的是 `claude-cli` 搜索题：
+
+- 一次“今天的新闻”类问题里会连续出现很多次 `Searching the web.`
+- 中间夹着少量 `Searched: ...`
+- 整体观感明显比 `codex cli` 更碎，更像协议模拟痕迹，而不是自然的搜索进度
+
+本轮没有调整请求侧 `WebSearch -> web_search` 工具映射，只收敛响应展示层：
+
+- `claude-cli` 保留：
+  - `response.created` 阶段的首个早期搜索提示
+  - `response.output_item.done` 阶段的真实 `Searched: ...`
+- `claude-cli` 去掉：
+  - 每个 `response.output_item.added` 上重复发出的 generic `Searching the web.`
+
+这样处理后的目标形态更接近 `codex cli`：
+
+- 只保留一次通用“开始搜索”信号
+- 后续主要展示带 query 的真实完成态
+- 避免多轮搜索时被一串 generic start 刷屏
+
+本轮额外做了本机侧对比核查：
+
+- 本机 `codex-cli 0.117.0` 安装目录内未检出 `Searching the web` / `<tool_call>` 这类字符串
+- 当前项目里这些文案来自 Claude 兼容层的 synthetic 注入逻辑，而不是 Codex 原生 CLI 行为
+
+新增回归覆盖：
+
+- `claude-cli`：
+  - `web_search_call added` 默认静默
+  - 多轮搜索只保留一次 generic `Searching the web.`
+  - 后续 `Searched: query` 仍正常输出
+- 普通 tool call：
+  - `function_call -> tool_use`
+  - arguments delta / done
+  - `content_block_stop`
+  - 均保持不变
+- 非搜索代码分析题：
+  - 仍不会在 `response.created` 阶段误发 `Searching the web.`
+
+本轮验证：
+
+- `go test ./internal/translator/gptinclaude ./internal/translator/codex/claude`
+- `go test ./internal/translator/codex/...`
+- 定向用例通过：
+  - `TestConvertCodexResponseToClaude_ClaudeCLIMultiSearchKeepsSingleGenericStart`
+  - `TestConvertCodexResponseToClaude_FunctionCallStreamingUnaffected`
+
+影响边界：
+
+- 仅修改 `Claude -> Codex` 兼容路径里 `claude-cli` 的 websearch start 展示
+- 未改动原生 `codex cli -> GPT` 路径
+- 未改动原生 `claude -> Claude` 路径
+- 未改动请求侧搜索工具透传策略
+
+### 9.9 已完成：复杂工具调用任务对齐 Codex，关闭 Claude CLI 的 fake thinking 暴露
+
+本轮目标不是 websearch，而是继续把 `claude-cli -> GPT/Codex` 的复杂工具调用体验向 `codex cli` 收敛。
+
+#### 9.9.1 真实 CLI 黑盒对比方式
+
+使用本机真实安装版本直接对比：
+
+- `codex-cli 0.117.0`
+- `claude code 2.1.76`
+
+当前本机真实路由：
+
+- `codex`
+  - `~/.codex/config.toml`
+  - provider: `syntra`
+  - base url: `https://syntra-staging.trustdev.network/v1`
+- `claude`
+  - `~/.claude/settings.json`
+  - base url 指向本机代理 `127.0.0.1:53841`
+
+对比 prompt 采用“复杂但低风险的多工具仓库分析题”：
+
+- 读取 `AGENTS.md`
+- 定位：
+  - HTTP server 入口
+  - Claude -> Codex websearch response 翻译
+  - 一个 function/tool call streaming 测试
+- 再运行一条最小 translator test 命令
+
+#### 9.9.2 真实黑盒观察结果
+
+`codex exec --json` 的可见事件形态：
+
+- 直接输出结构化事件：
+  - `item:agent_message`
+  - `item:command_execution started/completed`
+- 本次样本统计：
+  - `agent_message`: 6
+  - `command_execution`: 30 组 started/completed
+- 未观察到额外的 reasoning / thinking 事件外露
+- 体感上更像：
+  - 简短计划
+  - 明确工具执行
+  - 工具结果
+  - 最终答复
+
+`claude -p --output-format stream-json --verbose` 的可见事件形态：
+
+- 首包先输出一个很重的 `system/init`
+- 包含：
+  - tools 列表
+  - skills / plugins / slash commands
+  - session metadata
+- 在更收敛的工具集合测试里，前 15 秒内未观察到后续有效事件
+
+当前可以明确确认的“兼容层偏离点”：
+
+- `Claude -> Codex` 兼容路径此前仍会把 Codex `response.reasoning_summary_*` 映射成 Claude `thinking`
+- 这类内容本质更接近 Codex 的后置 reasoning summary，而不是原生 Claude 的实时 thinking
+- 在复杂工具调用题上会表现成：
+  - 额外的 `Thinking`
+  - 更碎的可见过程
+  - 比 `codex cli` 更吵
+
+#### 9.9.3 本轮收敛策略
+
+为把副影响压到最小，本轮没有改 tool_use / function_call / websearch / ping，只改一条映射：
+
+- 对 `claude-cli`：
+  - 不再把 Codex `reasoning_summary_*` 转成 Claude `thinking`
+
+同时补齐非流式一致性：
+
+- `ConvertCodexResponseToClaudeNonStream` 也对 `claude-cli` 同步抑制 reasoning block
+
+代码落点：
+
+- `internal/translator/gptinclaude/gptinclaude.go`
+- `internal/translator/gptinclaude/gptinclaude_test.go`
+- `internal/translator/codex/claude/codex_claude_response.go`
+- `internal/translator/codex/claude/codex_claude_response_test.go`
+
+#### 9.9.4 为什么这次改动风险较低
+
+因为只影响下面这个很窄的条件交集：
+
+- 仅 `Claude -> Codex` 兼容路径
+- 仅客户端识别为 `claude-cli`
+- 仅 Codex `reasoning_summary` 到 Claude `thinking` 的展示映射
+
+明确未改：
+
+- `function_call -> tool_use`
+- `response.function_call_arguments.delta/done`
+- websearch synthetic text 逻辑
+- VSCode 已有抑制策略
+- 原生 `codex cli -> GPT`
+- 原生 `claude -> Claude`
+
+#### 9.9.5 本轮验证
+
+定向回归：
+
+- `go test ./internal/translator/gptinclaude ./internal/translator/codex/claude`
+- `go test ./internal/translator/codex/claude -run 'ReasoningSummarySuppressedForClaudeCLI|ReasoningSummarySuppressedForClaudeVSCode|NonStream_SuppressesReasoningForClaudeCLI|FunctionCallStreamingUnaffected' -v`
+
+全量 translator 回归：
+
+- `go test ./internal/translator/...`
+
+新增/更新用例覆盖：
+
+- `TestShouldSurfaceReasoningSummaryAsThinking`
+- `TestConvertCodexResponseToClaude_ReasoningSummarySuppressedForClaudeCLI`
+- `TestConvertCodexResponseToClaudeNonStream_SuppressesReasoningForClaudeCLI`
+- 继续保留：
+  - `TestConvertCodexResponseToClaude_FunctionCallStreamingUnaffected`
+
+当前结论：
+
+- 对复杂工具调用任务，`claude-cli` 的可见行为已进一步向 `codex cli` 收敛
+- 最大的“fake thinking”偏离点已收掉
+- 在当前测试覆盖下，未观察到对普通 tool streaming 的回归
+
+### 9.10 已完成：Claude CLI 复杂工具任务补步骤级进度，黑盒样本目录落盘
+
+用户进一步指出的真实体验差异不是搜索，而是普通复杂任务：
+
+- `claude-cli` 往往长时间只显示类似：
+  - `Searched for 9 patterns, read 4 files`
+- 用户会误以为：
+  - Claude CLI 更慢
+  - 后端没有实时工作
+- 对比 `codex cli`，用户更能看到：
+  - 正在搜代码
+  - 正在读文件
+  - 正在跑验证命令
+
+#### 9.10.1 本轮设计原则
+
+继续坚持“副影响尽可能小”：
+
+- 不恢复 fake thinking
+- 不改 tool 协议
+- 不改 websearch 逻辑
+- 不改原生 `codex cli -> GPT`
+- 不改原生 `claude -> Claude`
+
+只在 `Claude -> Codex` 兼容路径里，对真实 `claude-cli` 的常见工具类别补非常短的阶段提示。
+
+#### 9.10.2 当前补的进度类型
+
+仅对下面几类高频工具补短文本进度：
+
+- `Grep` / `Glob`
+  - `Searching the codebase.`
+- `Read`
+  - `Reading relevant files.`
+- `Bash` / `shell`
+  - `Running a verification command.`
+
+并且按“工具类别”去重：
+
+- 连续多个 `Read`
+  - 只提示一次 `Reading relevant files.`
+- 从 `Read` 切到 `Bash`
+  - 再提示一次 `Running a verification command.`
+
+这样做的目的：
+
+- 让 `claude-cli` 更早、更持续地显示“正在做事”
+- 但又不把每个 tool call 都展开成噪音
+- 更接近 `codex cli` 的步骤级过程感
+
+#### 9.10.3 代码落点
+
+- `internal/translator/gptinclaude/gptinclaude.go`
+  - 新增 `BuildClaudeCLIToolProgressText`
+- `internal/translator/codex/claude/codex_claude_response.go`
+  - 在 `function_call added` 阶段，为 `claude-cli` 注入短文本进度
+  - 同时保留原有 `tool_use` 事件
+
+#### 9.10.4 为什么风险仍然可控
+
+因为这次改动依然只命中很窄的交集：
+
+- 仅 `Claude -> Codex` 兼容路径
+- 仅 `claude-cli`
+- 仅 `function_call added` 阶段
+- 仅特定高频工具类别
+
+明确未改：
+
+- `tool_use` 本身
+- arguments delta / done
+- stop reason
+- websearch synthetic tag
+- VSCode 路径
+
+#### 9.10.5 本轮验证
+
+定向回归：
+
+- `go test ./internal/translator/gptinclaude ./internal/translator/codex/claude`
+- `go test ./internal/translator/codex/claude -run 'ClaudeCLIToolProgressTextEmittedOnCategoryTransition|FunctionCallStreamingUnaffected|ReasoningSummarySuppressedForClaudeCLI' -v`
+
+全量 translator 回归：
+
+- `go test ./internal/translator/...`
+
+新增覆盖：
+
+- `TestBuildClaudeCLIToolProgressText`
+- `TestConvertCodexResponseToClaude_ClaudeCLIToolProgressTextEmittedOnCategoryTransition`
+
+结论：
+
+- `claude-cli` 在复杂工具调用题上的“过程可见性”进一步改善
+- 当前兼容层策略已从“靠 fake thinking 填空”切到“基于真实 tool call 补短进度”
+- 在现有测试下，未观察到对普通 `tool_use` 流程的回归
+
+#### 9.10.6 黑盒样本目录
+
+为后续继续积累真实 CLI 长会话样本，统一归档到：
+
+- `tasks/blackbox-samples/2026-03-30-claude-cli-vscode/`
+
+本轮新增 codex 对比样本：
+
+- `tasks/blackbox-samples/2026-03-30-claude-cli-vscode/codex-cli/2026-03-30-complex-tooling-prompt.txt`
+- `tasks/blackbox-samples/2026-03-30-claude-cli-vscode/codex-cli/2026-03-30-complex-tooling-observations_CN.md`
+
+后续新样本统一追加到这个黑盒目录下，避免样本目录分叉。
+
+### 9.11 已完成：真实 Claude CLI 再跑复杂仓库分析题，确认已出现连续阶段提示
+
+前面那批“只见 `init` / timeout / `ConnectionRefused`”样本，需要补一个前置条件澄清：
+
+- 当时 `claude-cli` 配置的 base URL 仍指向 `http://127.0.0.1:53841`
+- 但本机 `53841` 端口并未监听
+- 因此那批样本不能直接用来判断“兼容层有没有把阶段提示发出来”
+
+本轮先把本地代理重新启动到 `:53841`，再用真实 `claude-cli` 重新做黑盒回归。
+
+#### 9.11.1 本轮真实回归样本
+
+复杂工具调用题 1：
+
+- `tasks/blackbox-samples/2026-03-30-claude-cli-vscode/claude-cli/2026-03-30T223418-complex-analysis-1.stream.jsonl`
+- `tasks/blackbox-samples/2026-03-30-claude-cli-vscode/claude-cli/2026-03-30T223418-complex-analysis-1.err`
+
+复杂工具调用题 2：
+
+- `tasks/blackbox-samples/2026-03-30-claude-cli-vscode/claude-cli/2026-03-30T223715-complex-analysis-2.stream.jsonl`
+- `tasks/blackbox-samples/2026-03-30-claude-cli-vscode/claude-cli/2026-03-30T223715-complex-analysis-2.err`
+
+普通代码分析题：
+
+- `tasks/blackbox-samples/2026-03-30-claude-cli-vscode/claude-cli/2026-03-30T223727-code-analysis-2.stream.jsonl`
+- `tasks/blackbox-samples/2026-03-30-claude-cli-vscode/claude-cli/2026-03-30T223727-code-analysis-2.err`
+
+对应 request logs 已一起归档到：
+
+- `tasks/blackbox-samples/2026-03-30-claude-cli-vscode/claude-cli/request-logs/`
+
+#### 9.11.2 复杂题下看到的真实阶段提示
+
+在真实 `claude-cli` 输出流里，已经能稳定看到短阶段提示，而不再只有最后的聚合摘要：
+
+- `Searching the codebase.`
+- `Reading relevant files.`
+- `Running a verification command.`
+
+同时还观察到真实 CLI 自己也会穿插更具体的自然语言步骤提示，例如：
+
+- `Reading startup wiring.`
+- `Running the narrow test.`
+
+这说明当前体验已不再是“长时间只有一句 `Searched for 9 patterns, read 4 files`”。
+
+#### 9.11.3 普通代码分析题的边界结论
+
+普通题 `看一下当前的项目代码，帮我简单分析一下即可` 的真实样本表现为：
+
+- 会出现 `Searching the codebase.` / `Reading relevant files.`
+- 未出现 `Searching the web.`
+- stderr 为空
+- 任务正常结束并返回最终分析结果
+
+结合本轮 request log 复核：
+
+- 未观察到真实 `web_search_call` 事件
+- 说明“普通代码分析题误报 websearch”这一条，在本轮真实 CLI 回归里没有复现
+
+#### 9.11.4 复杂题的稳定性结论
+
+两轮复杂仓库分析题都正常完成：
+
+- 返回码 `rc=0`
+- stderr 为空
+- 能看到多轮 `tool_use`
+- 能看到阶段提示文本
+- 能看到最终结果块 `result subtype=success`
+
+因此至少在“本地代理已正常监听”的前提下，本轮 `Claude -> Codex` 兼容路径已经具备：
+
+- 连续阶段提示
+- 不误报 websearch
+- 普通复杂工具流可正常结束
+
+#### 9.11.5 当前仍保留的风险边界
+
+仍需区分两类问题，不应混为一谈：
+
+1. 本机代理未监听时，`claude-cli` 会表现成连接失败或挂起。
+2. 代理正常监听后，兼容层是否能提供足够接近 Codex 的过程可见性。
+
+本轮验证已经覆盖第 2 类，并给出正向结果；此前负向样本主要属于第 1 类。
+
+### 9.12 已完成：真实 Claude CLI 稳定性补跑与否定式 websearch 误判修复
+
+这一轮继续做真实 `claude-cli` 黑盒，目标不是看答案内容，而是区分：
+
+- 会不会突然中断
+- 会不会多轮聊着聊着断掉
+- 会不会把“不要用 web search”误判成真实搜索
+
+#### 9.12.1 稳定性批次结果
+
+新增样本：
+
+- `tasks/blackbox-samples/2026-03-30-claude-cli-vscode/claude-cli/stability-2026-03-30/2026-03-30T225633-batch-fixed/summary.tsv`
+- `tasks/blackbox-samples/2026-03-30-claude-cli-vscode/claude-cli/stability-2026-03-30/2026-03-30T231143-stability-round2/summary.tsv`
+- `tasks/blackbox-samples/2026-03-30-claude-cli-vscode/claude-cli/2026-03-30-real-claude-cli-stability-round3_CN.md`
+
+结论：
+
+- 多组独立单轮任务均为：
+  - `rc=0`
+  - `stderr=0`
+  - `result subtype=success`
+- 当前没有复现“流在中途突然结束但没有 result”的情况
+
+同时确认：
+
+- 直接重复使用同一个 `--session-id` 会报：
+  - `Session ID ... is already in use.`
+- 这更像 CLI 会话锁限制，不是代理兼容层异常
+
+#### 9.12.2 真实多轮 `resume` 结论
+
+多轮样本已验证：
+
+- 首轮 `--session-id`
+- 后续轮次 `-r/--resume`
+
+可以稳定成功结束。
+
+其中一条样本：
+
+- `resume-negated-turn-1`
+
+耗时达到：
+
+- `463s`
+
+但仍满足：
+
+- `rc=0`
+- `stderr=0`
+- `has_result_success=1`
+
+因此当前更需要把它归类为：
+
+- 明显长尾时延
+
+而不是：
+
+- 突然中断
+
+#### 9.12.3 新发现并修复的真实问题
+
+在补跑黑盒时，重新观察到一个真实误判：
+
+- 普通代码分析题如果提示词带：
+  - `不要用 web search`
+- 或多轮提示带：
+  - `do not use web search`
+
+真实输出前面仍会出现：
+
+- `Searching the web.`
+
+这说明当前的 built-in websearch 意图识别，把“否定式提到搜索”误判成了“显式要求搜索”。
+
+修复落点：
+
+- `internal/translator/gptinclaude/gptinclaude.go`
+- `internal/translator/gptinclaude/gptinclaude_test.go`
+
+修复方式：
+
+- 对常见中英文否定片段做早期拦截
+- 保持显式搜索题仍能正常进入 websearch 预进度
+
+#### 9.12.4 修复后黑盒回归结果
+
+新增样本：
+
+- `tasks/blackbox-samples/2026-03-30-claude-cli-vscode/claude-cli/stability-2026-03-30/2026-03-30T232040-negation-fix-check/summary.tsv`
+- `tasks/blackbox-samples/2026-03-30-claude-cli-vscode/claude-cli/stability-2026-03-30/2026-03-30T233225-resume-negation-smoke/summary.tsv`
+
+修复后观察到：
+
+- `negated-cn`：
+  - `actual_web_progress=0`
+- `negated-en`：
+  - `actual_web_progress=0`
+- `resume-negated-turn-1`：
+  - `actual_web_progress=0`
+- `resume-negated-turn-2`：
+  - `actual_web_progress=0`
+- `search-control`：
+  - `actual_web_progress=1`
+
+这说明：
+
+- 否定式 prompt 的误报已经在真实 CLI 黑盒里收住
+- 显式搜索题没有被一起误伤
+
+#### 9.12.5 本轮验证命令
+
+- `go test ./internal/translator/gptinclaude`
+- `go test ./internal/translator/codex/claude`
+
+#### 9.12.6 当前判断
+
+截至本轮：
+
+- 真实 `claude-cli` 在当前代理兼容层上总体稳定，可连续完成单轮和正确 `resume` 多轮
+- 尚未复现“聊着聊着突然断了”
+- 已修复一个真实生产体验问题：
+  - 否定式 websearch 误报
+- 当前最需要继续观察的不是突然断流，而是：
+  - 首个 `resume` 轮次偶发明显长尾

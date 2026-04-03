@@ -127,7 +127,7 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 
 	requestedModel := payloadRequestedModel(opts, req.Model)
 	body = applyPayloadConfigWithRoot(e.cfg, baseModel, to.String(), "", body, originalTranslated, requestedModel)
-	body = stripEmptyThinkingSignatures(body)
+	body = sanitizeThinkingHistory(body)
 
 	// Disable thinking if tool_choice forces tool use (Anthropic API constraint)
 	body = disableThinkingIfToolChoiceForced(body)
@@ -294,7 +294,7 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 
 	requestedModel := payloadRequestedModel(opts, req.Model)
 	body = applyPayloadConfigWithRoot(e.cfg, baseModel, to.String(), "", body, originalTranslated, requestedModel)
-	body = stripEmptyThinkingSignatures(body)
+	body = sanitizeThinkingHistory(body)
 
 	// Disable thinking if tool_choice forces tool use (Anthropic API constraint)
 	body = disableThinkingIfToolChoiceForced(body)
@@ -474,7 +474,7 @@ func (e *ClaudeExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Aut
 	if !strings.HasPrefix(baseModel, "claude-3-5-haiku") {
 		body = checkSystemInstructions(body)
 	}
-	body = stripEmptyThinkingSignatures(body)
+	body = sanitizeThinkingHistory(body)
 
 	// Keep count_tokens requests compatible with Anthropic cache-control constraints too.
 	body = enforceCacheControlLimit(body, 4)
@@ -640,12 +640,17 @@ func disableThinkingIfToolChoiceForced(body []byte) []byte {
 	return body
 }
 
-// stripEmptyThinkingSignatures removes empty/whitespace signatures from Claude
-// thinking history blocks before forwarding to Anthropic. Claude CLI can replay
-// omitted signatures as empty strings, and Anthropic rejects those with
-// "Invalid `signature` in `thinking` block". Missing signatures are tolerated
-// better than explicitly empty ones, so we only delete obviously invalid blanks.
-func stripEmptyThinkingSignatures(body []byte) []byte {
+// sanitizeThinkingHistory removes replay-only Claude thinking blocks from older
+// turns before forwarding to Anthropic. Anthropic only requires the previous
+// assistant thinking blocks to remain intact while the immediate follow-up
+// tool_result turn is being sent; older thinking can be omitted safely, which
+// avoids proxy-side signature validation failures during resume/continue flows.
+//
+// Only preserve thinking when the latest replayed message is the user
+// tool_result that continues the same assistant trajectory. Once that
+// trajectory has completed and the user sends a normal follow-up, all older
+// thinking blocks can be dropped safely.
+func sanitizeThinkingHistory(body []byte) []byte {
 	if len(body) == 0 || !gjson.ValidBytes(body) {
 		return body
 	}
@@ -655,41 +660,82 @@ func stripEmptyThinkingSignatures(body []byte) []byte {
 		return body
 	}
 
+	messageItems := messages.Array()
+	preservedAssistantIndexes := map[int]struct{}{}
+	if n := len(messageItems); n >= 2 &&
+		messageContainsToolResult(messageItems[n-1]) &&
+		strings.EqualFold(strings.TrimSpace(messageItems[n-2].Get("role").String()), "assistant") {
+		preservedAssistantIndexes[n-2] = struct{}{}
+	}
+
 	out := body
 	changed := false
-	messages.ForEach(func(messageKey, message gjson.Result) bool {
+	for messageIndex, message := range messageItems {
 		content := message.Get("content")
 		if !content.IsArray() {
-			return true
+			continue
 		}
-		content.ForEach(func(contentKey, item gjson.Result) bool {
+		contentItems := content.Array()
+		for contentIndex := len(contentItems) - 1; contentIndex >= 0; contentIndex-- {
+			item := contentItems[contentIndex]
 			if item.Get("type").String() != "thinking" {
-				return true
-			}
-			signature := item.Get("signature")
-			if !signature.Exists() {
-				return true
-			}
-			if signature.Type == gjson.String && strings.TrimSpace(signature.String()) != "" {
-				return true
+				continue
 			}
 
-			path := fmt.Sprintf("messages.%d.content.%d.signature", messageKey.Int(), contentKey.Int())
+			path := fmt.Sprintf("messages.%d.content.%d", messageIndex, contentIndex)
+			if _, keep := preservedAssistantIndexes[messageIndex]; !keep {
+				next, err := sjson.DeleteBytes(out, path)
+				if err != nil {
+					continue
+				}
+				out = next
+				changed = true
+				continue
+			}
+
+			signature := item.Get("signature")
+			if !signature.Exists() {
+				continue
+			}
+			if signature.Type == gjson.String && strings.TrimSpace(signature.String()) != "" {
+				continue
+			}
+
+			path = path + ".signature"
 			next, err := sjson.DeleteBytes(out, path)
 			if err != nil {
-				return true
+				continue
 			}
 			out = next
 			changed = true
-			return true
-		})
-		return true
-	})
+		}
+	}
 
 	if !changed {
 		return body
 	}
 	return out
+}
+
+func messageContainsToolResult(message gjson.Result) bool {
+	if !strings.EqualFold(strings.TrimSpace(message.Get("role").String()), "user") {
+		return false
+	}
+
+	content := message.Get("content")
+	if !content.IsArray() {
+		return false
+	}
+
+	found := false
+	content.ForEach(func(_, item gjson.Result) bool {
+		if item.Get("type").String() == "tool_result" {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
 }
 
 type compositeReadCloser struct {

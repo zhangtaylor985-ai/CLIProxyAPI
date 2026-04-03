@@ -1,0 +1,14 @@
+{
+  "command": [
+    "claude",
+    "-p",
+    "--verbose",
+    "--model",
+    "opus",
+    "2+2=? just answer with number"
+  ],
+  "timeout_seconds": 20,
+  "result": "timeout",
+  "returncode": -9,
+  "elapsed_seconds": 20.03
+}

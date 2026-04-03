@@ -1,0 +1,29 @@
+我用 websearch 查了今天（**2026-03-30**）的新闻，但搜索结果质量一般，很多是聚合站或二次转载，不如直接看 Reuters / AP 首页稳定。基于当前能检索到的结果，今天比较突出的方向是：
+
+1. **中东局势继续主导全球新闻**
+   - 多条 Reuters 转载结果显示，**伊朗战争/霍尔木兹海峡风险** 仍是今天最重要的国际新闻主线。
+   - 市场层面已经受到明显影响，亚洲股市走弱、油价继续高位波动。  
+   来源：
+   - https://www.brecorder.com/news/40413785/stocks-dive-in-asia-brent-crude-heads-for-record-monthly-rise
+   - https://www.brecorder.com/news/40413752/wall-street-week-ahead-us-jobs-data-to-give-economic-view-for-war-gripped-markets
+   - https://www.brecorder.com/live/iran-israel-war
+
+2. **美国国内政治抗议在继续发酵**
+   - 搜索结果里出现了 **“No Kings” protests**，说明美国各地的反政府抗议/示威仍是今天的一个热点。  
+   来源：
+   - https://en.wikipedia.org/wiki/2026_No_Kings_protests
+
+3. **能源与金融市场联动**
+   - 因中东风险上升，关于**绕开霍尔木兹海峡的石油运输、油价上涨、避险情绪增强**的报道很多。
+   - 这意味着今天商业/财经新闻的核心仍然是：**地缘政治 -> 油价 -> 全球市场**。  
+   来源：
+   - https://www.brecorder.com/news/40413587/saudi-pipeline-pumping-7-million-bpd-of-oil-bypassing-hormuz-bloomberg-news-reports
+   - https://www.brecorder.com/news/40413785/stocks-dive-in-asia-brent-crude-heads-for-record-monthly-rise
+
+如果你愿意，我可以继续用 websearch **按类别** 给你整理一版更实用的：
+- **国际要闻**
+- **美国新闻**
+- **科技新闻**
+- **财经新闻**
+
+也可以直接给你做成一份“**今天新闻 10 条摘要**”。

@@ -1,0 +1,7 @@
+Analyze the current repository with tools:
+1. Identify the file that decides whether Codex reasoning summaries become Claude thinking.
+2. Identify the file that emits Claude-compatible tool_use blocks for function calls.
+3. Identify one test that verifies repeated tool categories do not spam progress text.
+4. Run one focused go test command for the translator layer.
+Return a short answer with paths and what you verified.
+Do not use web search.

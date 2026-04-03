@@ -495,14 +495,29 @@ func (a App) connectWithPassword(password string) tea.Cmd {
 
 // Run starts the TUI application.
 // output specifies where bubbletea renders. If nil, defaults to os.Stdout.
-func Run(port int, secretKey string, hook *LogHook, output io.Writer) error {
+func Run(port int, secretKey string, hook *LogHook, output io.Writer, altScreenOverride *bool) error {
 	if output == nil {
 		output = os.Stdout
 	}
 	app := NewApp(port, secretKey, hook)
-	p := tea.NewProgram(app, tea.WithAltScreen(), tea.WithOutput(output))
+	options := []tea.ProgramOption{tea.WithOutput(output)}
+	if shouldUseAltScreen(altScreenOverride) {
+		options = append(options, tea.WithAltScreen())
+	}
+	p := tea.NewProgram(app, options...)
 	_, err := p.Run()
 	return err
+}
+
+func shouldUseAltScreen(altScreenOverride *bool) bool {
+	if altScreenOverride != nil {
+		return *altScreenOverride
+	}
+	return !isVSCodeTerminal()
+}
+
+func isVSCodeTerminal() bool {
+	return strings.EqualFold(strings.TrimSpace(os.Getenv("TERM_PROGRAM")), "vscode")
 }
 
 func (a App) broadcastToAllTabs(msg tea.Msg) (tea.Model, tea.Cmd) {

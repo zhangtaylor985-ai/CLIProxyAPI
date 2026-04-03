@@ -1,0 +1,6 @@
+name	rc	elapsed_seconds	stderr_bytes	has_result_success	actual_web_progress	code_progress	read_progress	bash_progress
+negated-cn	0	89	0	1	0	2	2	0
+negated-en	0	105	0	1	0	5	2	0
+search-control	0	116	0	1	1	0	0	0
+resume-negated-turn-1	0	463	0	1	0	7	8	2
+resume-negated-turn-2	0	16	0	1	0	0	0	0

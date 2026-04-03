@@ -1,0 +1,7 @@
+Inspect the current repository and use tools as needed:
+1. Find the main API server startup path.
+2. Find where Claude CLI web search progress is synthesized or suppressed.
+3. Find one translator test covering function call argument streaming.
+4. Run the smallest relevant translator test command you need.
+Return a concise summary with file paths and verification result.
+Do not use web search.

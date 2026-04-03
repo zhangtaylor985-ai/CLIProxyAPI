@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -75,6 +76,8 @@ func main() {
 	var tuiMode bool
 	var standalone bool
 	var localModel bool
+	var tuiAltScreen bool
+	var tuiAltScreenSet bool
 
 	// Define command-line flags for different operation modes.
 	flag.BoolVar(&login, "login", false, "Login Google Account")
@@ -95,6 +98,15 @@ func main() {
 	flag.BoolVar(&tuiMode, "tui", false, "Start with terminal management UI")
 	flag.BoolVar(&standalone, "standalone", false, "In TUI mode, start an embedded local server")
 	flag.BoolVar(&localModel, "local-model", false, "Use embedded model catalog only, skip remote model fetching")
+	flag.BoolFunc("tui-alt-screen", "Force enable or disable Bubble Tea alt screen for TUI compatibility (for example in VSCode terminal search)", func(value string) error {
+		parsed, errParse := strconv.ParseBool(strings.TrimSpace(value))
+		if errParse != nil {
+			return fmt.Errorf("invalid boolean value for -tui-alt-screen: %w", errParse)
+		}
+		tuiAltScreen = parsed
+		tuiAltScreenSet = true
+		return nil
+	})
 
 	flag.CommandLine.Usage = func() {
 		out := flag.CommandLine.Output()
@@ -497,6 +509,10 @@ func main() {
 			log.Info("Local model mode: using embedded model catalog, remote model updates disabled")
 		}
 		if tuiMode {
+			var tuiAltScreenOverride *bool
+			if tuiAltScreenSet {
+				tuiAltScreenOverride = &tuiAltScreen
+			}
 			if standalone {
 				// Standalone mode: start an embedded local server and connect TUI client to it.
 				managementasset.StartAutoUpdater(context.Background(), configFilePath)
@@ -556,7 +572,7 @@ func main() {
 					return
 				}
 
-				if errRun := tui.Run(cfg.Port, password, hook, origStdout); errRun != nil {
+				if errRun := tui.Run(cfg.Port, password, hook, origStdout, tuiAltScreenOverride); errRun != nil {
 					restoreIO()
 					fmt.Fprintf(os.Stderr, "TUI error: %v\n", errRun)
 				} else {
@@ -568,7 +584,7 @@ func main() {
 			} else {
 				// Default TUI mode: pure management client.
 				// The proxy server must already be running.
-				if errRun := tui.Run(cfg.Port, password, nil, os.Stdout); errRun != nil {
+				if errRun := tui.Run(cfg.Port, password, nil, os.Stdout, tuiAltScreenOverride); errRun != nil {
 					fmt.Fprintf(os.Stderr, "TUI error: %v\n", errRun)
 				}
 			}

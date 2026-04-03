@@ -3,7 +3,9 @@ package gptinclaude
 import (
 	"context"
 	"encoding/json"
+	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/thinking"
 	"github.com/tidwall/gjson"
@@ -16,6 +18,21 @@ const (
 	ClientClaudeCLI    ClientKind = "claude-cli"
 	ClientClaudeVSCode ClientKind = "claude_vscode"
 	ClientCodexVSCode  ClientKind = "codex_exec_vscode"
+)
+
+var (
+	webSearchIntentMatchers = []*regexp.Regexp{
+		regexp.MustCompile(`(?i)\bweb\s*search\b`),
+		regexp.MustCompile(`(?i)\bsearch(?:\s+the)?\s+web\b`),
+		regexp.MustCompile(`(?i)\bwebsearch\b`),
+		regexp.MustCompile(`网页搜索|联网搜索|网上搜索|用网搜索`),
+		regexp.MustCompile(`(?:请|帮我|麻烦|去)?搜索(?:一下)?`),
+		regexp.MustCompile(`搜一下|查一下`),
+	}
+	webSearchNegationMatchers = []*regexp.Regexp{
+		regexp.MustCompile(`(?i)\b(?:do\s+not|don't|dont|without|avoid|skip|no|not)\b`),
+		regexp.MustCompile(`不要|不用|别|无需|不需要|不用再|别再`),
+	}
 )
 
 type headerGetter interface {
@@ -63,7 +80,7 @@ func ShouldEmitSyntheticWebSearchTag(kind ClientKind) bool {
 // summaries usually arrive after the actual search work has already happened.
 func ShouldSurfaceReasoningSummaryAsThinking(kind ClientKind) bool {
 	switch kind {
-	case ClientClaudeVSCode, ClientCodexVSCode:
+	case ClientClaudeCLI, ClientClaudeVSCode, ClientCodexVSCode:
 		return false
 	default:
 		return true
@@ -338,31 +355,58 @@ func hasExplicitBuiltinWebSearchIntent(text string) bool {
 		return true
 	}
 
-	lower := strings.ToLower(text)
-	intentFragments := []string{
-		"perform a web search",
-		"web search for",
-		"search the web",
-		"websearch",
-		"latest news",
-		"today news",
-		"today's news",
-		"news headlines",
-		"top stories",
-		"搜索今天的新闻",
-		"搜索一下",
-		"请搜索",
-		"帮我搜索",
-		"用 websearch",
-		"网页搜索",
-	}
-	for _, fragment := range intentFragments {
-		if strings.Contains(lower, fragment) {
+	for _, matcher := range webSearchIntentMatchers {
+		indexes := matcher.FindAllStringIndex(text, -1)
+		for _, idx := range indexes {
+			if hasNearbyWebSearchNegation(text, idx[0], idx[1]) {
+				continue
+			}
 			return true
 		}
 	}
 
 	return false
+}
+
+func hasNearbyWebSearchNegation(text string, start, end int) bool {
+	window := snippetAround(text, start, end, 18)
+	if window == "" {
+		return false
+	}
+	for _, matcher := range webSearchNegationMatchers {
+		if matcher.FindStringIndex(window) != nil {
+			return true
+		}
+	}
+	return false
+}
+
+func snippetAround(text string, start, end, radius int) string {
+	if text == "" {
+		return ""
+	}
+	runes := []rune(text)
+	startRune := utf8.RuneCountInString(text[:clampByteIndex(text, start)])
+	endRune := utf8.RuneCountInString(text[:clampByteIndex(text, end)])
+	left := startRune - radius
+	if left < 0 {
+		left = 0
+	}
+	right := endRune + radius
+	if right > len(runes) {
+		right = len(runes)
+	}
+	return string(runes[left:right])
+}
+
+func clampByteIndex(text string, idx int) int {
+	if idx < 0 {
+		return 0
+	}
+	if idx > len(text) {
+		return len(text)
+	}
+	return idx
 }
 
 // BuildSyntheticWebSearchToolCallTextFromRequest synthesizes a Claude-compatible

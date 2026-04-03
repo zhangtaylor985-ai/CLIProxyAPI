@@ -1,0 +1,7 @@
+Read the project instructions in AGENTS.md, then inspect the current repository and answer this task using tools as needed:
+1. Identify the main HTTP server entrypoint.
+2. Identify where Claude -> Codex web search response translation happens.
+3. Identify one focused translator test that covers function/tool call streaming.
+4. Run the smallest relevant translator test command you think is necessary to validate your answer.
+Return a concise summary with file paths and what you verified.
+Do not use web search.

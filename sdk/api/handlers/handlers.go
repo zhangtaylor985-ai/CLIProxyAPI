@@ -55,7 +55,7 @@ const idempotencyKeyMetadataKey = "idempotency_key"
 const (
 	defaultStreamingKeepAliveSeconds = 0
 	defaultStreamingBootstrapRetries = 0
-	effectiveModelHeaderKey          = "X-CPA-Effective-Model"
+	effectiveModelHeaderKey          = "cpa_effective_model"
 	failoverProviderContextKey       = "cpa_failover_provider"
 	masqueradePromptMarker           = "Identity policy for Claude compatibility:"
 )
@@ -454,7 +454,7 @@ func setEffectiveModelHeader(ctx context.Context, requestedModel, effectiveModel
 	if !ok || ginCtx == nil {
 		return
 	}
-	ginCtx.Header(effectiveModelHeaderKey, req)
+	ginCtx.Set(effectiveModelHeaderKey, eff)
 }
 
 func markFailoverProvider(ctx context.Context, provider string) {

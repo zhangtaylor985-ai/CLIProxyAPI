@@ -1,9 +1,12 @@
 package handlers
 
 import (
+	"context"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/gin-gonic/gin"
 	sdkconfig "github.com/router-for-me/CLIProxyAPI/v6/sdk/config"
 	"github.com/tidwall/gjson"
 )
@@ -91,5 +94,27 @@ func TestClampClaudeGPTSearchTargetModel_IgnoresNonSearchOrNonClaudeRouting(t *t
 	}
 	if model, out := clampClaudeGPTSearchTargetModel(payload, "openai", "claude-opus-4-6", "gpt-5.4(high)"); model != "gpt-5.4(high)" || string(out) != string(payload) {
 		t.Fatalf("expected non-claude handler request to stay unchanged: model=%q payload=%s", model, string(out))
+	}
+}
+
+func TestSetEffectiveModelHeader_KeepsEffectiveModelInternalOnly(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	ginCtx, _ := gin.CreateTestContext(recorder)
+	ctx := context.WithValue(context.Background(), "gin", ginCtx)
+
+	setEffectiveModelHeader(ctx, "claude-opus-4-6", "gpt-5.4(high)")
+
+	if got := recorder.Header().Get("X-CPA-Effective-Model"); got != "" {
+		t.Fatalf("expected no client-visible effective model header, got %q", got)
+	}
+	if got := recorder.Header().Get(effectiveModelHeaderKey); got != "" {
+		t.Fatalf("expected no client-visible handler key header, got %q", got)
+	}
+	value, exists := ginCtx.Get(effectiveModelHeaderKey)
+	if !exists {
+		t.Fatal("expected effective model to remain available in gin context")
+	}
+	if got, ok := value.(string); !ok || got != "gpt-5.4(high)" {
+		t.Fatalf("expected stored effective model %q, got %#v", "gpt-5.4(high)", value)
 	}
 }

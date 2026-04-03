@@ -1,0 +1,482 @@
+2026-04-02T04:13:26.894Z [DEBUG] MDM settings load completed in 0ms
+2026-04-02T04:13:26.905Z [DEBUG] Broken symlink or missing file encountered for settings.json at path: /Library/Application Support/ClaudeCode/managed-settings.json
+2026-04-02T04:13:26.906Z [DEBUG] Broken symlink or missing file encountered for settings.json at path: /Users/taylor/code/tools/CLIProxyAPI-ori/.claude/settings.json
+2026-04-02T04:13:26.906Z [DEBUG] Broken symlink or missing file encountered for settings.json at path: /Users/taylor/code/tools/CLIProxyAPI-ori/.claude/settings.local.json
+2026-04-02T04:13:26.906Z [DEBUG] Broken symlink or missing file encountered for settings.json at path: /Library/Application Support/ClaudeCode/managed-settings.json
+2026-04-02T04:13:26.906Z [DEBUG] CA certs: Config fallback - globalEnv keys: , settingsEnv keys: ANTHROPIC_AUTH_TOKEN,ANTHROPIC_BASE_URL,DISABLE_AUTOUPDATER,BASH_DEFAULT_TIMEOUT_MS,BASH_MAX_TIMEOUT_MS
+2026-04-02T04:13:26.937Z [DEBUG] [init] configureGlobalMTLS starting
+2026-04-02T04:13:26.937Z [DEBUG] [init] configureGlobalMTLS complete
+2026-04-02T04:13:26.937Z [DEBUG] [init] configureGlobalAgents starting
+2026-04-02T04:13:26.937Z [DEBUG] CA certs: useSystemCA=false, extraCertsPath=undefined
+2026-04-02T04:13:26.937Z [DEBUG] [init] configureGlobalAgents complete
+2026-04-02T04:13:26.958Z [DEBUG] Error log sink initialized
+2026-04-02T04:13:26.962Z [DEBUG] Broken symlink or missing file encountered for settings.json at path: /Library/Application Support/ClaudeCode/managed-settings.json
+2026-04-02T04:13:26.963Z [DEBUG] Broken symlink or missing file encountered for settings.json at path: /Users/taylor/code/tools/CLIProxyAPI-ori/.claude/settings.json
+2026-04-02T04:13:26.963Z [DEBUG] Broken symlink or missing file encountered for settings.json at path: /Users/taylor/code/tools/CLIProxyAPI-ori/.claude/settings.local.json
+2026-04-02T04:13:26.963Z [DEBUG] Broken symlink or missing file encountered for settings.json at path: /Library/Application Support/ClaudeCode/managed-settings.json
+2026-04-02T04:13:26.964Z [DEBUG] [STARTUP] Loading MCP configs...
+2026-04-02T04:13:26.965Z [DEBUG] [ToolSearch:optimistic] disabled: ANTHROPIC_BASE_URL=http://127.0.0.1:53845 is not a first-party Anthropic host. Set ENABLE_TOOL_SEARCH=true (or auto / auto:N) if your proxy forwards tool_reference blocks.
+2026-04-02T04:13:26.965Z [DEBUG] [STARTUP] Running setup()...
+2026-04-02T04:13:26.971Z [DEBUG] Broken symlink or missing file encountered for settings.json at path: /Library/Application Support/ClaudeCode/managed-settings.json
+2026-04-02T04:13:26.972Z [DEBUG] Loading skills from: managed=/Library/Application Support/ClaudeCode/.claude/skills, user=/Users/taylor/.claude/skills, project=[]
+2026-04-02T04:13:26.972Z [DEBUG] Error log sink initialized
+2026-04-02T04:13:26.980Z [DEBUG] [Claude in Chrome] Found chrome profiles: Profile 10, Profile 11, Profile 16, Profile 9, Profile 6, Profile 1, Default, Profile 13, Profile 14, Profile 15, Profile 12, Profile 4, Profile 3, Profile 2, Profile 5
+2026-04-02T04:13:26.981Z [DEBUG] Broken symlink or missing file encountered for settings.json at path: /Library/Application Support/ClaudeCode/managed-settings.json
+2026-04-02T04:13:26.981Z [DEBUG] Broken symlink or missing file encountered for settings.json at path: /Library/Application Support/ClaudeCode/managed-settings.json
+2026-04-02T04:13:26.990Z [DEBUG] Cannot acquire lock for 2.1.76 - held by PID 4632
+2026-04-02T04:13:26.990Z [ERROR] Error: Error: NON-FATAL: Lock acquisition failed for /Users/taylor/.local/share/claude/versions/2.1.76 (expected in multi-process scenarios)
+    at FvT (/$bunfs/root/src/entrypoints/cli.js:2417:2026)
+    at Lxq (/$bunfs/root/src/entrypoints/cli.js:2417:1170)
+    at processTicksAndRejections (native:7:39)
+2026-04-02T04:13:26.991Z [DEBUG] [STARTUP] setup() completed in 26ms
+2026-04-02T04:13:26.991Z [DEBUG] [STARTUP] Loading commands and agents...
+2026-04-02T04:13:26.999Z [DEBUG] Git remote URL: git@github-zhangtaylor985-ai:zhangtaylor985-ai/CLIProxyAPI
+2026-04-02T04:13:26.999Z [DEBUG] Parsed repository: null from URL: git@github-zhangtaylor985-ai:zhangtaylor985-ai/CLIProxyAPI
+2026-04-02T04:13:27.002Z [DEBUG] Loaded 4 installed plugins from /Users/taylor/.claude/plugins/installed_plugins.json
+2026-04-02T04:13:27.002Z [DEBUG] Broken symlink or missing file encountered for settings.json at path: /Library/Application Support/ClaudeCode/managed-settings.json
+2026-04-02T04:13:27.002Z [DEBUG] Broken symlink or missing file encountered for settings.json at path: /Library/Application Support/ClaudeCode/managed-settings.json
+2026-04-02T04:13:27.003Z [DEBUG] Loading plugin document-skills from source: "./"
+2026-04-02T04:13:27.003Z [DEBUG] Broken symlink or missing file encountered for settings.json at path: /Library/Application Support/ClaudeCode/managed-settings.json
+2026-04-02T04:13:27.003Z [DEBUG] Broken symlink or missing file encountered for settings.json at path: /Library/Application Support/ClaudeCode/managed-settings.json
+2026-04-02T04:13:27.003Z [DEBUG] Loading plugin example-skills from source: "./"
+2026-04-02T04:13:27.003Z [DEBUG] Broken symlink or missing file encountered for settings.json at path: /Library/Application Support/ClaudeCode/managed-settings.json
+2026-04-02T04:13:27.003Z [DEBUG] Broken symlink or missing file encountered for settings.json at path: /Library/Application Support/ClaudeCode/managed-settings.json
+2026-04-02T04:13:27.003Z [DEBUG] Loading plugin claude-api from source: "./"
+2026-04-02T04:13:27.015Z [DEBUG] Using git SHA for example-skills@anthropic-agent-skills: b0cbd3df1533
+2026-04-02T04:13:27.015Z [DEBUG] Using git SHA for document-skills@anthropic-agent-skills: b0cbd3df1533
+2026-04-02T04:13:27.015Z [DEBUG] Using git SHA for claude-api@anthropic-agent-skills: b0cbd3df1533
+2026-04-02T04:13:27.016Z [DEBUG] Plugin example-skills@anthropic-agent-skills version b0cbd3df1533 already cached at /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/example-skills/b0cbd3df1533
+2026-04-02T04:13:27.016Z [DEBUG] Resolved local plugin example-skills to versioned cache: /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/example-skills/b0cbd3df1533
+2026-04-02T04:13:27.016Z [DEBUG] Loaded 15 unique skills (15 unconditional, 0 conditional, managed: 0, user: 2, project: 0, additional: 0, legacy commands: 13)
+2026-04-02T04:13:27.016Z [DEBUG] Plugin claude-api@anthropic-agent-skills version b0cbd3df1533 already cached at /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/claude-api/b0cbd3df1533
+2026-04-02T04:13:27.016Z [DEBUG] Resolved local plugin claude-api to versioned cache: /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/claude-api/b0cbd3df1533
+2026-04-02T04:13:27.016Z [DEBUG] Plugin document-skills@anthropic-agent-skills version b0cbd3df1533 already cached at /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/document-skills/b0cbd3df1533
+2026-04-02T04:13:27.016Z [DEBUG] Resolved local plugin document-skills to versioned cache: /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/document-skills/b0cbd3df1533
+2026-04-02T04:13:27.016Z [DEBUG] Processing 12 skill paths for plugin example-skills
+2026-04-02T04:13:27.016Z [DEBUG] Checking skill path: ./skills/algorithmic-art -> /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/example-skills/b0cbd3df1533/skills/algorithmic-art (exists: true)
+2026-04-02T04:13:27.016Z [DEBUG] Checking skill path: ./skills/brand-guidelines -> /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/example-skills/b0cbd3df1533/skills/brand-guidelines (exists: true)
+2026-04-02T04:13:27.016Z [DEBUG] Checking skill path: ./skills/canvas-design -> /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/example-skills/b0cbd3df1533/skills/canvas-design (exists: true)
+2026-04-02T04:13:27.016Z [DEBUG] Checking skill path: ./skills/doc-coauthoring -> /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/example-skills/b0cbd3df1533/skills/doc-coauthoring (exists: true)
+2026-04-02T04:13:27.017Z [DEBUG] Checking skill path: ./skills/frontend-design -> /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/example-skills/b0cbd3df1533/skills/frontend-design (exists: true)
+2026-04-02T04:13:27.017Z [DEBUG] Checking skill path: ./skills/internal-comms -> /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/example-skills/b0cbd3df1533/skills/internal-comms (exists: true)
+2026-04-02T04:13:27.017Z [DEBUG] Checking skill path: ./skills/mcp-builder -> /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/example-skills/b0cbd3df1533/skills/mcp-builder (exists: true)
+2026-04-02T04:13:27.017Z [DEBUG] Checking skill path: ./skills/skill-creator -> /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/example-skills/b0cbd3df1533/skills/skill-creator (exists: true)
+2026-04-02T04:13:27.017Z [DEBUG] Checking skill path: ./skills/slack-gif-creator -> /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/example-skills/b0cbd3df1533/skills/slack-gif-creator (exists: true)
+2026-04-02T04:13:27.017Z [DEBUG] Checking skill path: ./skills/theme-factory -> /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/example-skills/b0cbd3df1533/skills/theme-factory (exists: true)
+2026-04-02T04:13:27.017Z [DEBUG] Checking skill path: ./skills/web-artifacts-builder -> /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/example-skills/b0cbd3df1533/skills/web-artifacts-builder (exists: true)
+2026-04-02T04:13:27.017Z [DEBUG] Checking skill path: ./skills/webapp-testing -> /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/example-skills/b0cbd3df1533/skills/webapp-testing (exists: true)
+2026-04-02T04:13:27.017Z [DEBUG] Found 12 valid skill paths for plugin example-skills, setting skillsPaths
+2026-04-02T04:13:27.017Z [DEBUG] Processing 1 skill paths for plugin claude-api
+2026-04-02T04:13:27.017Z [DEBUG] Processing 4 skill paths for plugin document-skills
+2026-04-02T04:13:27.017Z [DEBUG] Checking skill path: ./skills/claude-api -> /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/claude-api/b0cbd3df1533/skills/claude-api (exists: true)
+2026-04-02T04:13:27.017Z [DEBUG] Found 1 valid skill paths for plugin claude-api, setting skillsPaths
+2026-04-02T04:13:27.017Z [DEBUG] Checking skill path: ./skills/xlsx -> /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/document-skills/b0cbd3df1533/skills/xlsx (exists: true)
+2026-04-02T04:13:27.017Z [DEBUG] Checking skill path: ./skills/docx -> /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/document-skills/b0cbd3df1533/skills/docx (exists: true)
+2026-04-02T04:13:27.017Z [DEBUG] Checking skill path: ./skills/pptx -> /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/document-skills/b0cbd3df1533/skills/pptx (exists: true)
+2026-04-02T04:13:27.017Z [DEBUG] Checking skill path: ./skills/pdf -> /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/document-skills/b0cbd3df1533/skills/pdf (exists: true)
+2026-04-02T04:13:27.017Z [DEBUG] Found 4 valid skill paths for plugin document-skills, setting skillsPaths
+2026-04-02T04:13:27.017Z [DEBUG] Broken symlink or missing file encountered for settings.json at path: /Library/Application Support/ClaudeCode/managed-settings.json
+2026-04-02T04:13:27.017Z [DEBUG] Found 3 plugins (3 enabled, 0 disabled)
+2026-04-02T04:13:27.018Z [DEBUG] getPluginSkills: Processing 3 enabled plugins
+2026-04-02T04:13:27.018Z [DEBUG] Checking plugin document-skills: skillsPath=exists, skillsPaths=4 paths
+2026-04-02T04:13:27.018Z [DEBUG] Attempting to load skills from plugin document-skills default skillsPath: /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/document-skills/b0cbd3df1533/skills
+2026-04-02T04:13:27.018Z [DEBUG] Checking plugin example-skills: skillsPath=exists, skillsPaths=12 paths
+2026-04-02T04:13:27.018Z [DEBUG] Attempting to load skills from plugin example-skills default skillsPath: /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/example-skills/b0cbd3df1533/skills
+2026-04-02T04:13:27.018Z [DEBUG] Checking plugin claude-api: skillsPath=exists, skillsPaths=1 paths
+2026-04-02T04:13:27.018Z [DEBUG] Attempting to load skills from plugin claude-api default skillsPath: /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/claude-api/b0cbd3df1533/skills
+2026-04-02T04:13:27.018Z [DEBUG] Registered 0 hooks from 3 plugins
+2026-04-02T04:13:27.018Z [DEBUG] Total plugin commands loaded: 0
+2026-04-02T04:13:27.018Z [DEBUG] Total plugin agents loaded: 0
+2026-04-02T04:13:27.018Z [DEBUG] [Claude in Chrome] Found opera profiles: Default
+2026-04-02T04:13:27.019Z [DEBUG] [Claude in Chrome] Extension not found in any browser
+2026-04-02T04:13:27.024Z [DEBUG] Loaded 17 skills from plugin document-skills default directory
+2026-04-02T04:13:27.024Z [DEBUG] Attempting to load skills from plugin document-skills skillsPaths: /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/document-skills/b0cbd3df1533/skills/xlsx, /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/document-skills/b0cbd3df1533/skills/docx, /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/document-skills/b0cbd3df1533/skills/pptx, /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/document-skills/b0cbd3df1533/skills/pdf
+2026-04-02T04:13:27.024Z [DEBUG] Loading from skillPath: /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/document-skills/b0cbd3df1533/skills/xlsx for plugin document-skills
+2026-04-02T04:13:27.024Z [DEBUG] Loading from skillPath: /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/document-skills/b0cbd3df1533/skills/docx for plugin document-skills
+2026-04-02T04:13:27.024Z [DEBUG] Loading from skillPath: /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/document-skills/b0cbd3df1533/skills/pptx for plugin document-skills
+2026-04-02T04:13:27.024Z [DEBUG] Loading from skillPath: /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/document-skills/b0cbd3df1533/skills/pdf for plugin document-skills
+2026-04-02T04:13:27.024Z [DEBUG] Loaded 17 skills from plugin claude-api default directory
+2026-04-02T04:13:27.024Z [DEBUG] Attempting to load skills from plugin claude-api skillsPaths: /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/claude-api/b0cbd3df1533/skills/claude-api
+2026-04-02T04:13:27.024Z [DEBUG] Loading from skillPath: /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/claude-api/b0cbd3df1533/skills/claude-api for plugin claude-api
+2026-04-02T04:13:27.025Z [DEBUG] Loaded 17 skills from plugin example-skills default directory
+2026-04-02T04:13:27.025Z [DEBUG] Attempting to load skills from plugin example-skills skillsPaths: /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/example-skills/b0cbd3df1533/skills/algorithmic-art, /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/example-skills/b0cbd3df1533/skills/brand-guidelines, /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/example-skills/b0cbd3df1533/skills/canvas-design, /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/example-skills/b0cbd3df1533/skills/doc-coauthoring, /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/example-skills/b0cbd3df1533/skills/frontend-design, /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/example-skills/b0cbd3df1533/skills/internal-comms, /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/example-skills/b0cbd3df1533/skills/mcp-builder, /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/example-skills/b0cbd3df1533/skills/skill-creator, /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/example-skills/b0cbd3df1533/skills/slack-gif-creator, /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/example-skills/b0cbd3df1533/skills/theme-factory, /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/example-skills/b0cbd3df1533/skills/web-artifacts-builder, /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/example-skills/b0cbd3df1533/skills/webapp-testing
+2026-04-02T04:13:27.025Z [DEBUG] Loading from skillPath: /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/example-skills/b0cbd3df1533/skills/algorithmic-art for plugin example-skills
+2026-04-02T04:13:27.025Z [DEBUG] Loading from skillPath: /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/example-skills/b0cbd3df1533/skills/brand-guidelines for plugin example-skills
+2026-04-02T04:13:27.025Z [DEBUG] Loading from skillPath: /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/example-skills/b0cbd3df1533/skills/canvas-design for plugin example-skills
+2026-04-02T04:13:27.025Z [DEBUG] Loading from skillPath: /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/example-skills/b0cbd3df1533/skills/doc-coauthoring for plugin example-skills
+2026-04-02T04:13:27.025Z [DEBUG] Loading from skillPath: /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/example-skills/b0cbd3df1533/skills/frontend-design for plugin example-skills
+2026-04-02T04:13:27.025Z [DEBUG] Loading from skillPath: /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/example-skills/b0cbd3df1533/skills/internal-comms for plugin example-skills
+2026-04-02T04:13:27.025Z [DEBUG] Loading from skillPath: /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/example-skills/b0cbd3df1533/skills/mcp-builder for plugin example-skills
+2026-04-02T04:13:27.025Z [DEBUG] Loading from skillPath: /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/example-skills/b0cbd3df1533/skills/skill-creator for plugin example-skills
+2026-04-02T04:13:27.025Z [DEBUG] Loading from skillPath: /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/example-skills/b0cbd3df1533/skills/slack-gif-creator for plugin example-skills
+2026-04-02T04:13:27.025Z [DEBUG] Loading from skillPath: /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/example-skills/b0cbd3df1533/skills/theme-factory for plugin example-skills
+2026-04-02T04:13:27.025Z [DEBUG] Loading from skillPath: /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/example-skills/b0cbd3df1533/skills/web-artifacts-builder for plugin example-skills
+2026-04-02T04:13:27.025Z [DEBUG] Loading from skillPath: /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/example-skills/b0cbd3df1533/skills/webapp-testing for plugin example-skills
+2026-04-02T04:13:27.025Z [DEBUG] Loaded 0 skills from plugin document-skills custom path: /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/document-skills/b0cbd3df1533/skills/xlsx
+2026-04-02T04:13:27.025Z [DEBUG] Loaded 0 skills from plugin document-skills custom path: /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/document-skills/b0cbd3df1533/skills/docx
+2026-04-02T04:13:27.025Z [DEBUG] Loaded 0 skills from plugin document-skills custom path: /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/document-skills/b0cbd3df1533/skills/pptx
+2026-04-02T04:13:27.025Z [DEBUG] Loaded 0 skills from plugin document-skills custom path: /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/document-skills/b0cbd3df1533/skills/pdf
+2026-04-02T04:13:27.025Z [DEBUG] Loaded 0 skills from plugin claude-api custom path: /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/claude-api/b0cbd3df1533/skills/claude-api
+2026-04-02T04:13:27.025Z [DEBUG] Loaded 0 skills from plugin example-skills custom path: /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/example-skills/b0cbd3df1533/skills/algorithmic-art
+2026-04-02T04:13:27.025Z [DEBUG] Loaded 0 skills from plugin example-skills custom path: /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/example-skills/b0cbd3df1533/skills/brand-guidelines
+2026-04-02T04:13:27.026Z [DEBUG] Loaded 0 skills from plugin example-skills custom path: /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/example-skills/b0cbd3df1533/skills/canvas-design
+2026-04-02T04:13:27.026Z [DEBUG] Loaded 0 skills from plugin example-skills custom path: /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/example-skills/b0cbd3df1533/skills/doc-coauthoring
+2026-04-02T04:13:27.026Z [DEBUG] Loaded 0 skills from plugin example-skills custom path: /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/example-skills/b0cbd3df1533/skills/frontend-design
+2026-04-02T04:13:27.026Z [DEBUG] Loaded 0 skills from plugin example-skills custom path: /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/example-skills/b0cbd3df1533/skills/internal-comms
+2026-04-02T04:13:27.026Z [DEBUG] Loaded 0 skills from plugin example-skills custom path: /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/example-skills/b0cbd3df1533/skills/mcp-builder
+2026-04-02T04:13:27.026Z [DEBUG] Loaded 0 skills from plugin example-skills custom path: /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/example-skills/b0cbd3df1533/skills/slack-gif-creator
+2026-04-02T04:13:27.026Z [DEBUG] Loaded 0 skills from plugin example-skills custom path: /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/example-skills/b0cbd3df1533/skills/skill-creator
+2026-04-02T04:13:27.026Z [DEBUG] Loaded 0 skills from plugin example-skills custom path: /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/example-skills/b0cbd3df1533/skills/theme-factory
+2026-04-02T04:13:27.026Z [DEBUG] Loaded 0 skills from plugin example-skills custom path: /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/example-skills/b0cbd3df1533/skills/web-artifacts-builder
+2026-04-02T04:13:27.026Z [DEBUG] Loaded 0 skills from plugin example-skills custom path: /Users/taylor/.claude/plugins/cache/anthropic-agent-skills/example-skills/b0cbd3df1533/skills/webapp-testing
+2026-04-02T04:13:27.026Z [DEBUG] Total plugin skills loaded: 51
+2026-04-02T04:13:27.026Z [DEBUG] getSkills returning: 15 skill dir commands, 51 plugin skills, 6 bundled skills, 0 builtin plugin skills
+2026-04-02T04:13:27.027Z [DEBUG] [STARTUP] Commands and agents loaded in 36ms
+2026-04-02T04:13:27.029Z [DEBUG] [STARTUP] Running showSetupScreens()...
+2026-04-02T04:13:27.039Z [DEBUG] Broken symlink or missing file encountered for settings.json at path: /Library/Application Support/ClaudeCode/managed-settings.json
+2026-04-02T04:13:27.039Z [DEBUG] Broken symlink or missing file encountered for settings.json at path: /Users/taylor/code/tools/CLIProxyAPI-ori/.claude/settings.local.json
+2026-04-02T04:13:27.039Z [DEBUG] Cleared CA certificates cache
+2026-04-02T04:13:27.039Z [DEBUG] Cleared mTLS configuration cache
+2026-04-02T04:13:27.039Z [DEBUG] Cleared proxy agent cache
+2026-04-02T04:13:27.039Z [DEBUG] CA certs: useSystemCA=false, extraCertsPath=undefined
+2026-04-02T04:13:27.054Z [DEBUG] Not in a GitHub repository, skipping path mapping update
+2026-04-02T04:13:27.054Z [DEBUG] [Perfetto] initializePerfettoTracing called, env value: undefined
+2026-04-02T04:13:27.054Z [DEBUG] [3P telemetry] isTelemetryEnabled=false (CLAUDE_CODE_ENABLE_TELEMETRY=undefined)
+2026-04-02T04:13:27.055Z [DEBUG] [STARTUP] showSetupScreens() completed in 26ms
+2026-04-02T04:13:27.056Z [DEBUG] [LSP MANAGER] initializeLspServerManager() called
+2026-04-02T04:13:27.056Z [DEBUG] [LSP MANAGER] Created manager instance, state=pending
+2026-04-02T04:13:27.056Z [DEBUG] [LSP MANAGER] Starting async initialization (generation 1)
+2026-04-02T04:13:27.056Z [DEBUG] Starting background startup prefetches
+2026-04-02T04:13:27.056Z [DEBUG] [clientData] skipped: not OAuth subscriber or missing profile scope
+2026-04-02T04:13:27.058Z [DEBUG] [clientData] cache unchanged, skipping write
+2026-04-02T04:13:27.058Z [DEBUG] [STARTUP] MCP configs resolved in 54ms (awaited at +94ms)
+2026-04-02T04:13:27.058Z [DEBUG] Broken symlink or missing file encountered for settings.json at path: /Library/Application Support/ClaudeCode/managed-settings.json
+2026-04-02T04:13:27.064Z [DEBUG] Broken symlink or missing file encountered for settings.json at path: /Library/Application Support/ClaudeCode/managed-settings.json
+2026-04-02T04:13:27.064Z [DEBUG] All plugins already exist, skipping migration
+2026-04-02T04:13:27.065Z [DEBUG] Broken symlink or missing file encountered for settings.json at path: /Library/Application Support/ClaudeCode/managed-settings.json
+2026-04-02T04:13:27.065Z [DEBUG] Broken symlink or missing file encountered for settings.json at path: /Library/Application Support/ClaudeCode/managed-settings.json
+2026-04-02T04:13:27.065Z [DEBUG] Getting matching hook commands for SessionStart with query: startup
+2026-04-02T04:13:27.065Z [DEBUG] Found 0 hook matchers in settings
+2026-04-02T04:13:27.065Z [DEBUG] Matched 0 unique hooks for query "startup" (0 before deduplication)
+2026-04-02T04:13:27.065Z [DEBUG] Initialized versioned plugins system with 4 plugins
+2026-04-02T04:13:27.066Z [DEBUG] Fast mode unavailable: Fast mode has been disabled by your organization
+2026-04-02T04:13:27.066Z [DEBUG] [Reconnection] computeInitialTeamContext: No teammate context set (not a teammate)
+2026-04-02T04:13:27.069Z [DEBUG] Writing to temp file: /Users/taylor/.claude.json.tmp.46529.1775103207069
+2026-04-02T04:13:27.069Z [DEBUG] Preserving file permissions: 100600
+2026-04-02T04:13:27.069Z [DEBUG] Temp file written successfully, size: 114821 bytes
+2026-04-02T04:13:27.069Z [DEBUG] Applied original permissions to temp file
+2026-04-02T04:13:27.069Z [DEBUG] Renaming /Users/taylor/.claude.json.tmp.46529.1775103207069 to /Users/taylor/.claude.json
+2026-04-02T04:13:27.069Z [DEBUG] File /Users/taylor/.claude.json written atomically
+2026-04-02T04:13:27.114Z [DEBUG] [keybindings] KeybindingSetup initialized with 106 bindings, 0 warnings
+2026-04-02T04:13:27.130Z [DEBUG] Fast mode unavailable: Fast mode has been disabled by your organization
+2026-04-02T04:13:27.151Z [DEBUG] [REPL:mount] REPL mounted, disabled=false
+2026-04-02T04:13:27.151Z [DEBUG] Official marketplace auto-install skipped: already_attempted
+2026-04-02T04:13:27.152Z [DEBUG] performStartupChecks called
+2026-04-02T04:13:27.152Z [DEBUG] Starting background plugin installations
+2026-04-02T04:13:27.248Z [DEBUG] [ScheduledTasks] scheduler start() — enabled=false, hasTasks=false
+2026-04-02T04:13:27.248Z [DEBUG] Loaded 1 CLAUDE.md/rules files:
+  [User] /Users/taylor/.claude/CLAUDE.md (1233 chars)
+2026-04-02T04:13:27.254Z [DEBUG] performBackgroundPluginInstallations called
+2026-04-02T04:13:27.258Z [WARN] auto mode disabled: tengu_auto_mode_config.enabled === "disabled" (circuit breaker)
+2026-04-02T04:13:27.258Z [DEBUG] AutoUpdaterWrapper: Installation type: native
+2026-04-02T04:13:27.270Z [DEBUG] Total LSP servers loaded: 0
+2026-04-02T04:13:27.270Z [DEBUG] [LSP SERVER MANAGER] getAllLspServers returned 0 server(s)
+2026-04-02T04:13:27.271Z [DEBUG] LSP manager initialized with 0 servers
+2026-04-02T04:13:27.271Z [DEBUG] LSP server manager initialized successfully
+2026-04-02T04:13:27.271Z [DEBUG] LSP notification handlers registered successfully for all 0 server(s)
+2026-04-02T04:13:27.272Z [DEBUG] [keybindings] Watching for changes to /Users/taylor/.claude/keybindings.json
+2026-04-02T04:13:27.274Z [DEBUG] [claudeai-mcp] Checking gate (cached)...
+2026-04-02T04:13:27.274Z [DEBUG] [claudeai-mcp] Gate returned: true
+2026-04-02T04:13:27.274Z [DEBUG] [claudeai-mcp] No access token
+2026-04-02T04:13:27.276Z [DEBUG] Security messages are fresh (<1h old), skipping fetch
+2026-04-02T04:13:27.328Z [DEBUG] Watching for changes in skill/command directories: /Users/taylor/.claude/skills, /Users/taylor/.claude/commands...
+2026-04-02T04:13:27.329Z [DEBUG] Watching for changes in setting files /Users/taylor/.claude/settings.json...
+2026-04-02T04:13:27.332Z [DEBUG] Fast mode unavailable: Fast mode has been disabled by your organization
+2026-04-02T04:13:27.339Z [DEBUG] Ripgrep first use test: PASSED (mode=embedded, path=/Users/taylor/.local/share/claude/versions/2.1.76)
+2026-04-02T04:13:27.351Z [WARN] Cache corrupted or missing for marketplace exa-mcp-server, re-fetching from source: ENOENT: no such file or directory, open '/Users/zhangbo/.claude/plugins/marketplaces/exa-mcp-server'
+2026-04-02T04:13:27.416Z [DEBUG] Fast mode unavailable: Fast mode has been disabled by your organization
+2026-04-02T04:13:27.417Z [DEBUG] [claudeai-mcp] Checking gate (cached)...
+2026-04-02T04:13:27.417Z [DEBUG] [claudeai-mcp] Gate returned: true
+2026-04-02T04:13:27.417Z [DEBUG] [claudeai-mcp] No access token
+2026-04-02T04:13:27.418Z [DEBUG] CLAUDE_CODE_WEBSOCKET_AUTH_FILE_DESCRIPTOR not set, no file descriptor token available
+2026-04-02T04:13:27.422Z [DEBUG] MCP server "ide": Starting connection with timeout of 30000ms
+2026-04-02T04:13:27.423Z [DEBUG] Fast mode unavailable: Fast mode has been disabled by your organization
+2026-04-02T04:13:27.434Z [DEBUG] MCP server "ide": Successfully connected to ws-ide server in 16ms
+2026-04-02T04:13:27.435Z [DEBUG] MCP server "ide": Connection established with capabilities: {"hasTools":true,"hasPrompts":false,"hasResources":false,"hasResourceSubscribe":false,"serverVersion":{"name":"Claude Code VSCode MCP","version":"2.1.76"}}
+2026-04-02T04:13:27.435Z [DEBUG] [MCP] Server "ide" connected with subscribe=false
+2026-04-02T04:13:27.463Z [DEBUG] Fast mode unavailable: Fast mode has been disabled by your organization
+2026-04-02T04:13:27.468Z [DEBUG] Fast mode unavailable: Fast mode has been disabled by your organization
+2026-04-02T04:13:27.937Z [DEBUG] Fast mode unavailable: Fast mode has been disabled by your organization
+2026-04-02T04:13:28.175Z [DEBUG] Fast mode unavailable: Fast mode has been disabled by your organization
+2026-04-02T04:13:30.363Z [DEBUG] SSH config check: code=1 configured=false
+2026-04-02T04:13:30.365Z [INFO] SSH not configured for GitHub, using HTTPS for exa-labs/exa-mcp-server
+2026-04-02T04:13:30.372Z [DEBUG] git pull: cwd=/Users/taylor/.claude/plugins/marketplaces/exa-labs-exa-mcp-server ref=default
+2026-04-02T04:13:30.374Z [WARN] git pull failed, will re-clone:
+2026-04-02T04:13:30.375Z [DEBUG] git clone: url=https://github.com/exa-labs/exa-mcp-server.git ref=default timeout=120000ms
+2026-04-02T04:13:35.885Z [DEBUG] git clone succeeded: https://github.com/exa-labs/exa-mcp-server.git
+2026-04-02T04:13:35.885Z [DEBUG] Reading marketplace from /Users/taylor/.claude/plugins/marketplaces/exa-labs-exa-mcp-server/.claude-plugin/marketplace.json
+2026-04-02T04:13:35.903Z [WARN] Cache corrupted or missing for marketplace claude-plugins-official, re-fetching from source: ENOENT: no such file or directory, open '/Users/zhangbo/.claude/plugins/marketplaces/claude-plugins-official'
+2026-04-02T04:13:38.918Z [DEBUG] SSH config check: code=1 configured=false
+2026-04-02T04:13:38.919Z [INFO] SSH not configured for GitHub, using HTTPS for anthropics/claude-plugins-official
+2026-04-02T04:13:38.923Z [DEBUG] git pull: cwd=/Users/taylor/.claude/plugins/marketplaces/anthropics-claude-plugins-official ref=default
+2026-04-02T04:13:38.925Z [WARN] git pull failed, will re-clone:
+2026-04-02T04:13:38.925Z [DEBUG] git clone: url=https://github.com/anthropics/claude-plugins-official.git ref=default timeout=120000ms
+2026-04-02T04:13:49.273Z [DEBUG] git clone succeeded: https://github.com/anthropics/claude-plugins-official.git
+2026-04-02T04:13:49.273Z [DEBUG] Reading marketplace from /Users/taylor/.claude/plugins/marketplaces/anthropics-claude-plugins-official/.claude-plugin/marketplace.json
+2026-04-02T04:13:49.334Z [DEBUG] [LSP MANAGER] reinitializeLspServerManager() called
+2026-04-02T04:13:49.334Z [DEBUG] [LSP MANAGER] initializeLspServerManager() called
+2026-04-02T04:13:49.334Z [DEBUG] [LSP MANAGER] Created manager instance, state=pending
+2026-04-02T04:13:49.334Z [DEBUG] [LSP MANAGER] Starting async initialization (generation 2)
+2026-04-02T04:13:49.335Z [DEBUG] Loaded plugins - Enabled: 3, Disabled: 0, Commands: 0, Agents: 0, Errors: 0
+2026-04-02T04:13:49.336Z [DEBUG] Total LSP servers loaded: 0
+2026-04-02T04:13:49.336Z [DEBUG] [LSP SERVER MANAGER] getAllLspServers returned 0 server(s)
+2026-04-02T04:13:49.336Z [DEBUG] LSP manager initialized with 0 servers
+2026-04-02T04:13:49.336Z [DEBUG] LSP server manager initialized successfully
+2026-04-02T04:13:49.336Z [DEBUG] LSP notification handlers registered successfully for all 0 server(s)
+2026-04-02T04:14:11.398Z [DEBUG] LSP Diagnostics: getLSPDiagnosticAttachments called
+2026-04-02T04:14:11.399Z [DEBUG] LSP Diagnostics: Checking registry - 0 pending
+2026-04-02T04:14:11.400Z [DEBUG] Hooks: Found 0 total hooks in registry
+2026-04-02T04:14:11.402Z [DEBUG] Sending 70 skills via attachment (initial, 70 total sent)
+2026-04-02T04:14:11.402Z [DEBUG] Skill prompt: showing "document-skills:theme-factory" (userFacingName="theme-factory")
+2026-04-02T04:14:11.402Z [DEBUG] Skill prompt: showing "document-skills:doc-coauthoring" (userFacingName="doc-coauthoring")
+2026-04-02T04:14:11.402Z [DEBUG] Skill prompt: showing "document-skills:pdf" (userFacingName="pdf")
+2026-04-02T04:14:11.402Z [DEBUG] Skill prompt: showing "document-skills:algorithmic-art" (userFacingName="algorithmic-art")
+2026-04-02T04:14:11.402Z [DEBUG] Skill prompt: showing "document-skills:claude-api" (userFacingName="claude-api")
+2026-04-02T04:14:11.402Z [DEBUG] Skill prompt: showing "document-skills:xlsx" (userFacingName="xlsx")
+2026-04-02T04:14:11.402Z [DEBUG] Skill prompt: showing "document-skills:skill-creator" (userFacingName="skill-creator")
+2026-04-02T04:14:11.402Z [DEBUG] Skill prompt: showing "document-skills:brand-guidelines" (userFacingName="brand-guidelines")
+2026-04-02T04:14:11.402Z [DEBUG] Skill prompt: showing "document-skills:internal-comms" (userFacingName="internal-comms")
+2026-04-02T04:14:11.403Z [DEBUG] Skill prompt: showing "document-skills:mcp-builder" (userFacingName="mcp-builder")
+2026-04-02T04:14:11.403Z [DEBUG] Skill prompt: showing "document-skills:frontend-design" (userFacingName="frontend-design")
+2026-04-02T04:14:11.403Z [DEBUG] Skill prompt: showing "document-skills:slack-gif-creator" (userFacingName="slack-gif-creator")
+2026-04-02T04:14:11.403Z [DEBUG] Skill prompt: showing "document-skills:webapp-testing" (userFacingName="webapp-testing")
+2026-04-02T04:14:11.403Z [DEBUG] Skill prompt: showing "document-skills:pptx" (userFacingName="pptx")
+2026-04-02T04:14:11.403Z [DEBUG] Skill prompt: showing "document-skills:canvas-design" (userFacingName="canvas-design")
+2026-04-02T04:14:11.403Z [DEBUG] Skill prompt: showing "document-skills:web-artifacts-builder" (userFacingName="web-artifacts-builder")
+2026-04-02T04:14:11.403Z [DEBUG] Skill prompt: showing "document-skills:docx" (userFacingName="docx")
+2026-04-02T04:14:11.403Z [DEBUG] Skill prompt: showing "example-skills:pdf" (userFacingName="pdf")
+2026-04-02T04:14:11.403Z [DEBUG] Skill prompt: showing "example-skills:skill-creator" (userFacingName="skill-creator")
+2026-04-02T04:14:11.403Z [DEBUG] Skill prompt: showing "example-skills:algorithmic-art" (userFacingName="algorithmic-art")
+2026-04-02T04:14:11.403Z [DEBUG] Skill prompt: showing "example-skills:pptx" (userFacingName="pptx")
+2026-04-02T04:14:11.403Z [DEBUG] Skill prompt: showing "example-skills:web-artifacts-builder" (userFacingName="web-artifacts-builder")
+2026-04-02T04:14:11.403Z [DEBUG] Skill prompt: showing "example-skills:internal-comms" (userFacingName="internal-comms")
+2026-04-02T04:14:11.403Z [DEBUG] Skill prompt: showing "example-skills:canvas-design" (userFacingName="canvas-design")
+2026-04-02T04:14:11.403Z [DEBUG] Skill prompt: showing "example-skills:xlsx" (userFacingName="xlsx")
+2026-04-02T04:14:11.403Z [DEBUG] Skill prompt: showing "example-skills:docx" (userFacingName="docx")
+2026-04-02T04:14:11.403Z [DEBUG] Skill prompt: showing "example-skills:theme-factory" (userFacingName="theme-factory")
+2026-04-02T04:14:11.403Z [DEBUG] Skill prompt: showing "example-skills:slack-gif-creator" (userFacingName="slack-gif-creator")
+2026-04-02T04:14:11.403Z [DEBUG] Skill prompt: showing "example-skills:frontend-design" (userFacingName="frontend-design")
+2026-04-02T04:14:11.403Z [DEBUG] Skill prompt: showing "example-skills:webapp-testing" (userFacingName="webapp-testing")
+2026-04-02T04:14:11.403Z [DEBUG] Skill prompt: showing "example-skills:claude-api" (userFacingName="claude-api")
+2026-04-02T04:14:11.403Z [DEBUG] Skill prompt: showing "example-skills:brand-guidelines" (userFacingName="brand-guidelines")
+2026-04-02T04:14:11.403Z [DEBUG] Skill prompt: showing "example-skills:doc-coauthoring" (userFacingName="doc-coauthoring")
+2026-04-02T04:14:11.403Z [DEBUG] Skill prompt: showing "example-skills:mcp-builder" (userFacingName="mcp-builder")
+2026-04-02T04:14:11.403Z [DEBUG] Skill prompt: showing "claude-api:webapp-testing" (userFacingName="webapp-testing")
+2026-04-02T04:14:11.403Z [DEBUG] Skill prompt: showing "claude-api:web-artifacts-builder" (userFacingName="web-artifacts-builder")
+2026-04-02T04:14:11.403Z [DEBUG] Skill prompt: showing "claude-api:algorithmic-art" (userFacingName="algorithmic-art")
+2026-04-02T04:14:11.403Z [DEBUG] Skill prompt: showing "claude-api:pdf" (userFacingName="pdf")
+2026-04-02T04:14:11.403Z [DEBUG] Skill prompt: showing "claude-api:docx" (userFacingName="docx")
+2026-04-02T04:14:11.403Z [DEBUG] Skill prompt: showing "claude-api:claude-api" (userFacingName="claude-api")
+2026-04-02T04:14:11.403Z [DEBUG] Skill prompt: showing "claude-api:slack-gif-creator" (userFacingName="slack-gif-creator")
+2026-04-02T04:14:11.404Z [DEBUG] Skill prompt: showing "claude-api:doc-coauthoring" (userFacingName="doc-coauthoring")
+2026-04-02T04:14:11.404Z [DEBUG] Skill prompt: showing "claude-api:brand-guidelines" (userFacingName="brand-guidelines")
+2026-04-02T04:14:11.404Z [DEBUG] Skill prompt: showing "claude-api:theme-factory" (userFacingName="theme-factory")
+2026-04-02T04:14:11.404Z [DEBUG] Skill prompt: showing "claude-api:xlsx" (userFacingName="xlsx")
+2026-04-02T04:14:11.404Z [DEBUG] Skill prompt: showing "claude-api:pptx" (userFacingName="pptx")
+2026-04-02T04:14:11.404Z [DEBUG] Skill prompt: showing "claude-api:mcp-builder" (userFacingName="mcp-builder")
+2026-04-02T04:14:11.404Z [DEBUG] Skill prompt: showing "claude-api:skill-creator" (userFacingName="skill-creator")
+2026-04-02T04:14:11.404Z [DEBUG] Skill prompt: showing "claude-api:frontend-design" (userFacingName="frontend-design")
+2026-04-02T04:14:11.404Z [DEBUG] Skill prompt: showing "claude-api:canvas-design" (userFacingName="canvas-design")
+2026-04-02T04:14:11.404Z [DEBUG] Skill prompt: showing "claude-api:internal-comms" (userFacingName="internal-comms")
+2026-04-02T04:14:11.404Z [DEBUG] Hooks: checkForNewResponses returning 0 responses
+2026-04-02T04:14:11.408Z [WARN] [3P telemetry] Event dropped (no event logger initialized): user_prompt
+2026-04-02T04:14:11.411Z [DEBUG] FileHistory: Added snapshot for 5ba61c9e-45d2-4a32-a363-77e45c62967d, tracking 0 files
+2026-04-02T04:14:11.414Z [DEBUG] MCP server "ide": Calling MCP tool: closeAllDiffTabs
+2026-04-02T04:14:11.420Z [DEBUG] Total plugin output styles loaded: 0
+2026-04-02T04:14:11.422Z [DEBUG] [useDeferredValue] Messages deferred by 3 (0→3)
+2026-04-02T04:14:11.446Z [DEBUG] Fast mode unavailable: Fast mode has been disabled by your organization
+2026-04-02T04:14:11.447Z [DEBUG] Fast mode unavailable: Fast mode has been disabled by your organization
+2026-04-02T04:14:11.459Z [DEBUG] Started caffeinate to prevent sleep
+2026-04-02T04:14:11.462Z [DEBUG] Plugin autoupdate: skipped (auto-updater disabled)
+2026-04-02T04:14:11.473Z [DEBUG] MCP server "ide": Tool 'closeAllDiffTabs' completed successfully in 59ms
+2026-04-02T04:14:11.486Z [DEBUG] autocompact: tokens=3511 threshold=167000 effectiveWindow=180000
+2026-04-02T04:14:11.489Z [DEBUG] Tool search disabled: ToolSearchTool is not available (may have been disallowed via disallowedTools).
+2026-04-02T04:14:11.499Z [DEBUG] attribution header x-anthropic-billing-header: cc_version=2.1.76.b57; cc_entrypoint=cli; cch=00000;
+2026-04-02T04:14:11.499Z [DEBUG] Fast mode unavailable: Fast mode has been disabled by your organization
+2026-04-02T04:14:11.500Z [DEBUG] [API:request] Creating client, ANTHROPIC_CUSTOM_HEADERS present: false, has Authorization header: false
+2026-04-02T04:14:11.500Z [DEBUG] [API:auth] OAuth token check starting
+2026-04-02T04:14:11.501Z [DEBUG] Fast mode unavailable: Fast mode has been disabled by your organization
+2026-04-02T04:14:11.501Z [DEBUG] [API:auth] OAuth token check complete
+2026-04-02T04:14:11.504Z [DEBUG] Fast mode unavailable: Fast mode has been disabled by your organization
+2026-04-02T04:14:11.508Z [DEBUG] [useDeferredValue] Messages deferred by 3 (0→3)
+2026-04-02T04:14:15.810Z [DEBUG] Stream started - received first chunk
+2026-04-02T04:14:21.138Z [DEBUG] Tool search disabled: ToolSearchTool is not available (may have been disallowed via disallowedTools).
+2026-04-02T04:14:21.140Z [DEBUG] attribution header x-anthropic-billing-header: cc_version=2.1.76.d58; cc_entrypoint=cli; cch=00000;
+2026-04-02T04:14:21.140Z [DEBUG] Fast mode unavailable: Fast mode has been disabled by your organization
+2026-04-02T04:14:21.140Z [DEBUG] [API:request] Creating client, ANTHROPIC_CUSTOM_HEADERS present: false, has Authorization header: false
+2026-04-02T04:14:21.140Z [DEBUG] [API:auth] OAuth token check starting
+2026-04-02T04:14:21.140Z [DEBUG] Fast mode unavailable: Fast mode has been disabled by your organization
+2026-04-02T04:14:21.141Z [DEBUG] [API:auth] OAuth token check complete
+2026-04-02T04:14:21.141Z [DEBUG] Fast mode unavailable: Fast mode has been disabled by your organization
+2026-04-02T04:14:21.145Z [DEBUG] [useDeferredValue] Messages deferred by 1 (3→4)
+2026-04-02T04:14:21.148Z [DEBUG] Fast mode unavailable: Fast mode has been disabled by your organization
+2026-04-02T04:14:21.151Z [DEBUG] High write ratio: blit=0, write=1026 (100.0% writes), screen=25x80
+2026-04-02T04:14:21.716Z [DEBUG] Stream started - received first chunk
+2026-04-02T04:17:00.288Z [WARN] Streaming stall detected: 158.6s gap between events (stall #1)
+2026-04-02T04:17:01.684Z [WARN] Streaming completed with 1 stall(s), total stall time: 158.6s
+2026-04-02T04:17:01.695Z [DEBUG] Broken symlink or missing file encountered for settings.json at path: /Library/Application Support/ClaudeCode/managed-settings.json
+2026-04-02T04:17:01.695Z [DEBUG] Broken symlink or missing file encountered for settings.json at path: /Library/Application Support/ClaudeCode/managed-settings.json
+2026-04-02T04:17:01.696Z [DEBUG] Getting matching hook commands for PostToolUse with query: WebSearch
+2026-04-02T04:17:01.696Z [DEBUG] Found 5 hook matchers in settings
+2026-04-02T04:17:01.699Z [DEBUG] Matched 0 unique hooks for query "WebSearch" (0 before deduplication)
+2026-04-02T04:17:01.704Z [DEBUG] MCP server "ide": Calling MCP tool: getDiagnostics
+2026-04-02T04:17:01.705Z [DEBUG] LSP Diagnostics: getLSPDiagnosticAttachments called
+2026-04-02T04:17:01.705Z [DEBUG] LSP Diagnostics: Checking registry - 0 pending
+2026-04-02T04:17:01.705Z [DEBUG] Hooks: Found 0 total hooks in registry
+2026-04-02T04:17:01.705Z [DEBUG] Hooks: checkForNewResponses returning 0 responses
+2026-04-02T04:17:01.706Z [DEBUG] [useDeferredValue] Messages deferred by 1 (4→5)
+2026-04-02T04:17:01.718Z [DEBUG] Fast mode unavailable: Fast mode has been disabled by your organization
+2026-04-02T04:17:01.724Z [DEBUG] MCP server "ide": Tool 'getDiagnostics' completed successfully in 20ms
+2026-04-02T04:17:01.726Z [DEBUG] autocompact: tokens=23756 threshold=167000 effectiveWindow=180000
+2026-04-02T04:17:01.727Z [DEBUG] Tool search disabled: ToolSearchTool is not available (may have been disallowed via disallowedTools).
+2026-04-02T04:17:01.731Z [DEBUG] attribution header x-anthropic-billing-header: cc_version=2.1.76.b57; cc_entrypoint=cli; cch=00000;
+2026-04-02T04:17:01.731Z [DEBUG] Fast mode unavailable: Fast mode has been disabled by your organization
+2026-04-02T04:17:01.732Z [DEBUG] [API:request] Creating client, ANTHROPIC_CUSTOM_HEADERS present: false, has Authorization header: false
+2026-04-02T04:17:01.732Z [DEBUG] [API:auth] OAuth token check starting
+2026-04-02T04:17:01.732Z [DEBUG] Fast mode unavailable: Fast mode has been disabled by your organization
+2026-04-02T04:17:01.732Z [DEBUG] [API:auth] OAuth token check complete
+2026-04-02T04:17:01.732Z [DEBUG] Fast mode unavailable: Fast mode has been disabled by your organization
+2026-04-02T04:17:01.738Z [DEBUG] [useDeferredValue] Messages deferred by 1 (4→5)
+2026-04-02T04:17:02.643Z [DEBUG] Stream started - received first chunk
+2026-04-02T04:17:06.146Z [DEBUG] [useDeferredValue] Messages deferred by 1 (5→6)
+2026-04-02T04:17:06.147Z [DEBUG] Fast mode unavailable: Fast mode has been disabled by your organization
+2026-04-02T04:17:06.242Z [DEBUG] [useDeferredValue] Messages deferred by 1 (6→7)
+2026-04-02T04:17:06.246Z [DEBUG] Fast mode unavailable: Fast mode has been disabled by your organization
+2026-04-02T04:17:06.249Z [DEBUG] High write ratio: blit=0, write=1218 (100.0% writes), screen=34x80
+2026-04-02T04:17:06.251Z [DEBUG] Stopped caffeinate, allowing sleep
+2026-04-02T04:17:06.529Z [DEBUG] Writing to temp file: /Users/taylor/.claude.json.tmp.46529.1775103426529
+2026-04-02T04:17:06.529Z [DEBUG] Preserving file permissions: 100600
+2026-04-02T04:17:06.529Z [DEBUG] Temp file written successfully, size: 114821 bytes
+2026-04-02T04:17:06.529Z [DEBUG] Applied original permissions to temp file
+2026-04-02T04:17:06.529Z [DEBUG] Renaming /Users/taylor/.claude.json.tmp.46529.1775103426529 to /Users/taylor/.claude.json
+2026-04-02T04:17:06.530Z [DEBUG] File /Users/taylor/.claude.json written atomically
+2026-04-02T04:17:06.532Z [DEBUG] Writing to temp file: /Users/taylor/.claude.json.tmp.46529.1775103426532
+2026-04-02T04:17:06.532Z [DEBUG] Preserving file permissions: 100600
+2026-04-02T04:17:06.532Z [DEBUG] Temp file written successfully, size: 114821 bytes
+2026-04-02T04:17:06.532Z [DEBUG] Applied original permissions to temp file
+2026-04-02T04:17:06.532Z [DEBUG] Renaming /Users/taylor/.claude.json.tmp.46529.1775103426532 to /Users/taylor/.claude.json
+2026-04-02T04:17:06.532Z [DEBUG] File /Users/taylor/.claude.json written atomically
+2026-04-02T04:17:11.363Z [DEBUG] MCP server "ide": Calling MCP tool: getDiagnostics
+2026-04-02T04:17:11.363Z [DEBUG] LSP Diagnostics: getLSPDiagnosticAttachments called
+2026-04-02T04:17:11.364Z [DEBUG] LSP Diagnostics: Checking registry - 0 pending
+2026-04-02T04:17:11.364Z [DEBUG] Hooks: Found 0 total hooks in registry
+2026-04-02T04:17:11.364Z [DEBUG] Hooks: checkForNewResponses returning 0 responses
+2026-04-02T04:17:11.370Z [DEBUG] Fast mode unavailable: Fast mode has been disabled by your organization
+2026-04-02T04:17:11.370Z [DEBUG] Fast mode unavailable: Fast mode has been disabled by your organization
+2026-04-02T04:17:11.378Z [DEBUG] Started caffeinate to prevent sleep
+2026-04-02T04:17:11.379Z [DEBUG] MCP server "ide": Tool 'getDiagnostics' completed successfully in 16ms
+2026-04-02T04:17:11.380Z [DEBUG] FileHistory: Making snapshot for message b2aa42be-99d6-4798-b4ad-0d51ef43b808
+2026-04-02T04:17:11.380Z [DEBUG] FileHistory: Added snapshot for b2aa42be-99d6-4798-b4ad-0d51ef43b808, tracking 0 files
+2026-04-02T04:17:11.380Z [DEBUG] MCP server "ide": Calling MCP tool: closeAllDiffTabs
+2026-04-02T04:17:11.381Z [DEBUG] autocompact: tokens=23644 threshold=167000 effectiveWindow=180000
+2026-04-02T04:17:11.382Z [DEBUG] Tool search disabled: ToolSearchTool is not available (may have been disallowed via disallowedTools).
+2026-04-02T04:17:11.384Z [DEBUG] attribution header x-anthropic-billing-header: cc_version=2.1.76.b57; cc_entrypoint=cli; cch=00000;
+2026-04-02T04:17:11.385Z [DEBUG] Fast mode unavailable: Fast mode has been disabled by your organization
+2026-04-02T04:17:11.385Z [DEBUG] [API:request] Creating client, ANTHROPIC_CUSTOM_HEADERS present: false, has Authorization header: false
+2026-04-02T04:17:11.385Z [DEBUG] [API:auth] OAuth token check starting
+2026-04-02T04:17:11.385Z [DEBUG] Fast mode unavailable: Fast mode has been disabled by your organization
+2026-04-02T04:17:11.385Z [DEBUG] [API:auth] OAuth token check complete
+2026-04-02T04:17:11.386Z [DEBUG] Fast mode unavailable: Fast mode has been disabled by your organization
+2026-04-02T04:17:11.389Z [DEBUG] [useDeferredValue] Messages deferred by 1 (7→8)
+2026-04-02T04:17:11.392Z [DEBUG] Fast mode unavailable: Fast mode has been disabled by your organization
+2026-04-02T04:17:11.403Z [DEBUG] High write ratio: blit=0, write=1347 (100.0% writes), screen=38x80
+2026-04-02T04:17:11.407Z [DEBUG] MCP server "ide": Tool 'closeAllDiffTabs' completed successfully in 27ms
+2026-04-02T04:17:12.363Z [DEBUG] Stream started - received first chunk
+2026-04-02T04:17:15.660Z [DEBUG] [useDeferredValue] Messages deferred by 1 (8→9)
+2026-04-02T04:17:15.662Z [DEBUG] Fast mode unavailable: Fast mode has been disabled by your organization
+2026-04-02T04:17:15.730Z [DEBUG] Fast mode unavailable: Fast mode has been disabled by your organization
+2026-04-02T04:17:15.731Z [DEBUG] Stopped caffeinate, allowing sleep
+2026-04-02T04:17:15.744Z [DEBUG] High write ratio: blit=0, write=1359 (100.0% writes), screen=38x80
+2026-04-02T04:17:15.926Z [DEBUG] Writing to temp file: /Users/taylor/.claude.json.tmp.46529.1775103435926
+2026-04-02T04:17:15.926Z [DEBUG] Preserving file permissions: 100600
+2026-04-02T04:17:15.927Z [DEBUG] Temp file written successfully, size: 114821 bytes
+2026-04-02T04:17:15.927Z [DEBUG] Applied original permissions to temp file
+2026-04-02T04:17:15.927Z [DEBUG] Renaming /Users/taylor/.claude.json.tmp.46529.1775103435926 to /Users/taylor/.claude.json
+2026-04-02T04:17:15.927Z [DEBUG] File /Users/taylor/.claude.json written atomically
+2026-04-02T04:17:15.929Z [DEBUG] Writing to temp file: /Users/taylor/.claude.json.tmp.46529.1775103435929
+2026-04-02T04:17:15.929Z [DEBUG] Preserving file permissions: 100600
+2026-04-02T04:17:15.930Z [DEBUG] Temp file written successfully, size: 114821 bytes
+2026-04-02T04:17:15.930Z [DEBUG] Applied original permissions to temp file
+2026-04-02T04:17:15.930Z [DEBUG] Renaming /Users/taylor/.claude.json.tmp.46529.1775103435929 to /Users/taylor/.claude.json
+2026-04-02T04:17:15.930Z [DEBUG] File /Users/taylor/.claude.json written atomically
+2026-04-02T04:17:51.399Z [DEBUG] MCP server "ide": WebSocket transport closed/disconnected, attempting automatic reconnection
+2026-04-02T04:17:51.400Z [DEBUG] MCP server "ide": WebSocket transport closed/disconnected, attempting automatic reconnection
+2026-04-02T04:17:51.401Z [DEBUG] LSP server manager shut down successfully
+2026-04-02T04:17:51.403Z [DEBUG] FileHistory: Making snapshot for message ceb597f8-4a5f-4028-bf5c-454d16e6c205
+2026-04-02T04:17:51.404Z [DEBUG] FileHistory: Added snapshot for ceb597f8-4a5f-4028-bf5c-454d16e6c205, tracking 0 files
+2026-04-02T04:17:51.418Z [DEBUG] MCP server "ide": Starting connection with timeout of 30000ms
+2026-04-02T04:17:51.419Z [DEBUG] Failed to check metrics opt-out status: Auth error: No API key available
+2026-04-02T04:17:51.422Z [ERROR] Error: Error: Auth error: No API key available
+    at mh7 (/$bunfs/root/src/entrypoints/cli.js:2363:24050)
+    at BHK (/$bunfs/root/src/entrypoints/cli.js:2363:24413)
+    at <anonymous> (/$bunfs/root/src/entrypoints/cli.js:96:27476)
+    at ph7 (/$bunfs/root/src/entrypoints/cli.js:2363:24942)
+    at gh7 (/$bunfs/root/src/entrypoints/cli.js:2363:25295)
+    at doExport (/$bunfs/root/src/entrypoints/cli.js:2363:26074)
+    at export (/$bunfs/root/src/entrypoints/cli.js:2363:25782)
+    at <anonymous> (/$bunfs/root/src/entrypoints/cli.js:104:154699)
+    at <anonymous> (/$bunfs/root/src/entrypoints/cli.js:104:154639)
+    at new Promise (native:1:11)
+2026-04-02T04:17:51.422Z [DEBUG] Metrics export failed: No API key available
+2026-04-02T04:17:51.423Z [ERROR] Error: Error: {"message":"PeriodicExportingMetricReader: metrics export failed (error Error: No API key available)","originalLine":"2343","originalColumn":"58370","line":"2343","column":"58370","sourceURL":"/$bunfs/root/src/entrypoints/cli.js","stack":"Error: PeriodicExportingMetricReader: metrics export failed (error Error: No API key available)\n    at _doRun (/$bunfs/root/src/entrypoints/cli.js:2343:58370)\n    at processTicksAndRejections (native:7:39)","name":"Error"}
+    at error (/$bunfs/root/src/entrypoints/cli.js:2363:23759)
+    at <anonymous> (/$bunfs/root/src/entrypoints/cli.js:104:81715)
+    at tA4 (/$bunfs/root/src/entrypoints/cli.js:104:82259)
+    at _runOnce (/$bunfs/root/src/entrypoints/cli.js:2343:57835)
+    at processTicksAndRejections (native:7:39)
+2026-04-02T04:17:51.423Z [ERROR] [3P telemetry] OTEL diag error: {"message":"PeriodicExportingMetricReader: metrics export failed (error Error: No API key available)","originalLine":"2343","originalColumn":"58370","line":"2343","column":"58370","sourceURL":"/$bunfs/root/src/entrypoints/cli.js","stack":"Error: PeriodicExportingMetricReader: metrics export failed (error Error: No API key available)\n    at _doRun (/$bunfs/root/src/entrypoints/cli.js:2343:58370)\n    at processTicksAndRejections (native:7:39)","name":"Error"}
+2026-04-02T04:17:51.423Z [DEBUG] BigQuery metrics exporter flush complete
+2026-04-02T04:17:51.423Z [DEBUG] BigQuery metrics exporter flush complete
+2026-04-02T04:17:51.423Z [DEBUG] BigQuery metrics exporter shutdown complete
+2026-04-02T04:17:51.424Z [DEBUG] [useDeferredValue] Messages deferred by 3 (9→12)
+2026-04-02T04:17:51.445Z [DEBUG] Fast mode unavailable: Fast mode has been disabled by your organization
+2026-04-02T04:17:51.446Z [DEBUG] Fast mode unavailable: Fast mode has been disabled by your organization
+2026-04-02T04:17:51.460Z [DEBUG] [useDeferredValue] Messages deferred by 3 (9→12)
+2026-04-02T04:17:51.461Z [DEBUG] Fast mode unavailable: Fast mode has been disabled by your organization
+2026-04-02T04:17:51.479Z [DEBUG] MCP server "ide": Successfully connected to ws-ide server in 65ms
+2026-04-02T04:17:51.479Z [DEBUG] MCP server "ide": Connection established with capabilities: {"hasTools":true,"hasPrompts":false,"hasResources":false,"hasResourceSubscribe":false,"serverVersion":{"name":"Claude Code VSCode MCP","version":"2.1.76"}}
+2026-04-02T04:17:51.479Z [DEBUG] [MCP] Server "ide" connected with subscribe=false
+2026-04-02T04:17:51.480Z [DEBUG] Broken symlink or missing file encountered for settings.json at path: /Library/Application Support/ClaudeCode/managed-settings.json
+2026-04-02T04:17:51.481Z [DEBUG] Broken symlink or missing file encountered for settings.json at path: /Library/Application Support/ClaudeCode/managed-settings.json
+2026-04-02T04:17:51.481Z [DEBUG] Getting matching hook commands for SessionEnd with query: prompt_input_exit
+2026-04-02T04:17:51.481Z [DEBUG] Found 0 hook matchers in settings
+2026-04-02T04:17:51.481Z [DEBUG] Matched 0 unique hooks for query "prompt_input_exit" (0 before deduplication)
+2026-04-02T04:17:51.485Z [DEBUG] MCP server "ide": WebSocket reconnection successful after 85ms (attempt 1)
+2026-04-02T04:17:51.485Z [DEBUG] MCP server "ide": WebSocket reconnection successful after 85ms (attempt 1)
+2026-04-02T04:17:51.507Z [DEBUG] Fast mode unavailable: Fast mode has been disabled by your organization
+2026-04-02T04:17:51.514Z [DEBUG] Fast mode unavailable: Fast mode has been disabled by your organization
+2026-04-02T04:17:51.667Z [DEBUG] Writing to temp file: /Users/taylor/.claude.json.tmp.46529.1775103471667
+2026-04-02T04:17:51.667Z [DEBUG] Preserving file permissions: 100600
+2026-04-02T04:17:51.667Z [DEBUG] Temp file written successfully, size: 114821 bytes
+2026-04-02T04:17:51.668Z [DEBUG] Applied original permissions to temp file
+2026-04-02T04:17:51.668Z [DEBUG] Renaming /Users/taylor/.claude.json.tmp.46529.1775103471667 to /Users/taylor/.claude.json
+2026-04-02T04:17:51.668Z [DEBUG] File /Users/taylor/.claude.json written atomically
+2026-04-02T04:17:51.671Z [DEBUG] Writing to temp file: /Users/taylor/.claude.json.tmp.46529.1775103471671
+2026-04-02T04:17:51.671Z [DEBUG] Preserving file permissions: 100600
+2026-04-02T04:17:51.671Z [DEBUG] Temp file written successfully, size: 114821 bytes
+2026-04-02T04:17:51.671Z [DEBUG] Applied original permissions to temp file
+2026-04-02T04:17:51.671Z [DEBUG] Renaming /Users/taylor/.claude.json.tmp.46529.1775103471671 to /Users/taylor/.claude.json
+2026-04-02T04:17:51.671Z [DEBUG] File /Users/taylor/.claude.json written atomically
+2026-04-02T04:17:51.798Z [DEBUG] Writing to temp file: /Users/taylor/.claude.json.tmp.46529.1775103471798
+2026-04-02T04:17:51.798Z [DEBUG] Preserving file permissions: 100600
+2026-04-02T04:17:51.798Z [DEBUG] Temp file written successfully, size: 114847 bytes
+2026-04-02T04:17:51.798Z [DEBUG] Applied original permissions to temp file
+2026-04-02T04:17:51.798Z [DEBUG] Renaming /Users/taylor/.claude.json.tmp.46529.1775103471798 to /Users/taylor/.claude.json
+2026-04-02T04:17:51.799Z [DEBUG] File /Users/taylor/.claude.json written atomically
+2026-04-02T04:17:51.800Z [DEBUG] Writing to temp file: /Users/taylor/.claude.json.tmp.46529.1775103471800
+2026-04-02T04:17:51.800Z [DEBUG] Preserving file permissions: 100600
+2026-04-02T04:17:51.801Z [DEBUG] Temp file written successfully, size: 114545 bytes
+2026-04-02T04:17:51.801Z [DEBUG] Applied original permissions to temp file
+2026-04-02T04:17:51.801Z [DEBUG] Renaming /Users/taylor/.claude.json.tmp.46529.1775103471800 to /Users/taylor/.claude.json
+2026-04-02T04:17:51.801Z [DEBUG] File /Users/taylor/.claude.json written atomically
+2026-04-02T04:17:51.805Z [DEBUG] [REPL:unmount] REPL unmounting

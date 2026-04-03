@@ -2,6 +2,7 @@ package gptinclaude
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/tidwall/gjson"
@@ -172,12 +173,101 @@ func TestShouldPreEmitBuiltinWebSearchProgress_CodeAnalysisPrompt(t *testing.T) 
 	}
 }
 
+func TestShouldPreEmitBuiltinWebSearchProgress_NegatedSearchPrompt(t *testing.T) {
+	tests := []struct {
+		name   string
+		prompt string
+	}{
+		{
+			name:   "chinese negation",
+			prompt: "看一下当前的项目代码，帮我简单分析一下即可。不要用 web search。",
+		},
+		{
+			name:   "english negation",
+			prompt: "Read AGENTS.md and inspect the repository. Keep it concise and do not use web search.",
+		},
+	}
+
+	for _, tc := range tests {
+		raw := []byte(fmt.Sprintf(`{
+			"messages": [
+				{"role": "user", "content": %q}
+			],
+			"tools": [
+				{
+					"name": "WebSearch",
+					"input_schema": {
+						"type": "object",
+						"properties": {"query": {"type": "string"}},
+						"required": ["query"]
+					}
+				}
+			]
+		}`, tc.prompt))
+
+		if ShouldPreEmitBuiltinWebSearchProgress(raw) {
+			t.Fatalf("%s: ShouldPreEmitBuiltinWebSearchProgress() = true, want false", tc.name)
+		}
+	}
+}
+
+func TestShouldPreEmitBuiltinWebSearchProgress_HandlesFlexibleSearchIntentWording(t *testing.T) {
+	tests := []struct {
+		name   string
+		prompt string
+		want   bool
+	}{
+		{
+			name:   "english search verb",
+			prompt: "Please search the web for today's OpenAI news.",
+			want:   true,
+		},
+		{
+			name:   "english negated web search",
+			prompt: "Please search the repository structure, but do not search the web.",
+			want:   false,
+		},
+		{
+			name:   "chinese positive",
+			prompt: "请帮我搜索一下今天的 AI 新闻。",
+			want:   true,
+		},
+		{
+			name:   "chinese negated nearby",
+			prompt: "你分析一下项目，但别搜索一下网页资料。",
+			want:   false,
+		},
+	}
+
+	for _, tc := range tests {
+		raw := []byte(fmt.Sprintf(`{
+			"messages": [
+				{"role": "user", "content": %q}
+			],
+			"tools": [
+				{
+					"name": "WebSearch",
+					"input_schema": {
+						"type": "object",
+						"properties": {"query": {"type": "string"}},
+						"required": ["query"]
+					}
+				}
+			]
+		}`, tc.prompt))
+
+		if got := ShouldPreEmitBuiltinWebSearchProgress(raw); got != tc.want {
+			t.Fatalf("%s: ShouldPreEmitBuiltinWebSearchProgress() = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
 func TestShouldSurfaceReasoningSummaryAsThinking(t *testing.T) {
 	tests := []struct {
 		kind ClientKind
 		want bool
 	}{
-		{kind: ClientClaudeCLI, want: true},
+		{kind: ClientClaudeCLI, want: false},
 		{kind: ClientClaudeVSCode, want: false},
 		{kind: ClientCodexVSCode, want: false},
 		{kind: ClientUnknown, want: true},

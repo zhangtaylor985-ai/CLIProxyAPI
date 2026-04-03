@@ -1,0 +1,12 @@
+name=complex-1
+rc=0
+elapsed_seconds=133
+stdout_lines=1364
+stderr_bytes=0
+result_subtype=success
+result_count=1
+api_error_count=2
+web_text_count=7
+code_progress_count=12
+read_progress_count=14
+bash_progress_count=3

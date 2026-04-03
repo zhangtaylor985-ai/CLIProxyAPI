@@ -1019,7 +1019,7 @@ func TestEnforceCacheControlLimit_ToolOnlyPayloadStillRespectsLimit(t *testing.T
 	}
 }
 
-func TestStripEmptyThinkingSignatures_RemovesOnlyBlankSignatures(t *testing.T) {
+func TestSanitizeThinkingHistory_StripsReplayThinkingOutsideToolResultTurn(t *testing.T) {
 	payload := []byte(`{
 		"messages": [
 			{
@@ -1029,24 +1029,116 @@ func TestStripEmptyThinkingSignatures_RemovesOnlyBlankSignatures(t *testing.T) {
 					{"type":"thinking","thinking":"second","signature":"sig_valid_123"},
 					{"type":"text","text":"done"}
 				]
+			},
+			{
+				"role": "user",
+				"content": [{"type":"text","text":"continue"}]
+			},
+			{
+				"role": "assistant",
+				"content": [
+					{"type":"thinking","thinking":"tool scratch","signature":"sig_keep_456"},
+					{"type":"tool_use","id":"toolu_1","name":"bash","input":{"cmd":"pwd"}}
+				]
+			},
+			{
+				"role": "user",
+				"content": [
+					{"type":"tool_result","tool_use_id":"toolu_1","content":"ok"}
+				]
 			}
 		]
 	}`)
 
-	out := stripEmptyThinkingSignatures(payload)
+	out := sanitizeThinkingHistory(payload)
 
 	if gjson.GetBytes(out, "messages.0.content.0.signature").Exists() {
-		t.Fatalf("blank thinking signature should be removed, got %s", string(out))
+		t.Fatalf("older replay thinking should be removed entirely, got %s", string(out))
 	}
-	if got := gjson.GetBytes(out, "messages.0.content.0.thinking").String(); got != "first" {
-		t.Fatalf("thinking text should be preserved, got %q", got)
+	if gjson.GetBytes(out, "messages.0.content.1.signature").Exists() {
+		t.Fatalf("all older replay thinking blocks should be removed, got %s", string(out))
 	}
-	if got := gjson.GetBytes(out, "messages.0.content.1.signature").String(); got != "sig_valid_123" {
-		t.Fatalf("valid signature should be preserved, got %q", got)
+	if got := gjson.GetBytes(out, "messages.0.content.0.text").String(); got != "done" {
+		t.Fatalf("non-thinking content should be preserved, got %q", got)
+	}
+	if got := gjson.GetBytes(out, "messages.2.content.0.signature").String(); got != "sig_keep_456" {
+		t.Fatalf("tool-result-adjacent thinking signature should be preserved, got %q", got)
 	}
 }
 
-func TestClaudeExecutor_ExecuteStream_StripsEmptyThinkingSignatureBeforeUpstream(t *testing.T) {
+func TestSanitizeThinkingHistory_RemovesBlankSignatureInsideToolResultTurn(t *testing.T) {
+	payload := []byte(`{
+		"messages": [
+			{
+				"role": "assistant",
+				"content": [
+					{"type":"thinking","thinking":"scratchpad","signature":""},
+					{"type":"tool_use","id":"toolu_1","name":"bash","input":{"cmd":"pwd"}}
+				]
+			},
+			{
+				"role": "user",
+				"content": [
+					{"type":"tool_result","tool_use_id":"toolu_1","content":"ok"}
+				]
+			}
+		]
+	}`)
+
+	out := sanitizeThinkingHistory(payload)
+
+	if gjson.GetBytes(out, "messages.0.content.0.signature").Exists() {
+		t.Fatalf("blank signature should be stripped even for preserved tool-result turns, got %s", string(out))
+	}
+	if got := gjson.GetBytes(out, "messages.0.content.0.thinking").String(); got != "scratchpad" {
+		t.Fatalf("thinking text should be preserved, got %q", got)
+	}
+}
+
+func TestSanitizeThinkingHistory_StripsCompletedToolTrajectoryThinking(t *testing.T) {
+	payload := []byte(`{
+		"messages": [
+			{
+				"role": "assistant",
+				"content": [
+					{"type":"thinking","thinking":"tool scratch","signature":"sig_keep_1"},
+					{"type":"tool_use","id":"toolu_1","name":"bash","input":{"cmd":"pwd"}}
+				]
+			},
+			{
+				"role": "user",
+				"content": [
+					{"type":"tool_result","tool_use_id":"toolu_1","content":"ok"}
+				]
+			},
+			{
+				"role": "assistant",
+				"content": [
+					{"type":"thinking","thinking":"post tool reply","signature":"sig_keep_2"},
+					{"type":"text","text":"done"}
+				]
+			},
+			{
+				"role": "user",
+				"content": [{"type":"text","text":"follow up"}]
+			}
+		]
+	}`)
+
+	out := sanitizeThinkingHistory(payload)
+
+	if gjson.GetBytes(out, "messages.0.content.0.thinking").Exists() {
+		t.Fatalf("finished tool trajectory thinking should be removed from original tool-use assistant, got %s", string(out))
+	}
+	if gjson.GetBytes(out, "messages.2.content.0.thinking").Exists() {
+		t.Fatalf("finished tool trajectory thinking should be removed from follow-up assistant, got %s", string(out))
+	}
+	if got := gjson.GetBytes(out, "messages.2.content.0.text").String(); got != "done" {
+		t.Fatalf("non-thinking text should remain after stripping completed trajectory, got %q", got)
+	}
+}
+
+func TestClaudeExecutor_ExecuteStream_SanitizesThinkingHistoryBeforeUpstream(t *testing.T) {
 	var seenBody []byte
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
@@ -1066,7 +1158,7 @@ func TestClaudeExecutor_ExecuteStream_StripsEmptyThinkingSignatureBeforeUpstream
 			{
 				"role": "assistant",
 				"content": [
-					{"type":"thinking","thinking":"scratchpad","signature":""},
+					{"type":"thinking","thinking":"scratchpad","signature":"sig_invalid_but_replayed"},
 					{"type":"text","text":"continuing"}
 				]
 			},
@@ -1095,11 +1187,11 @@ func TestClaudeExecutor_ExecuteStream_StripsEmptyThinkingSignatureBeforeUpstream
 	if len(seenBody) == 0 {
 		t.Fatal("expected upstream request body to be captured")
 	}
-	if gjson.GetBytes(seenBody, "messages.0.content.0.signature").Exists() {
-		t.Fatalf("empty signature should be stripped before upstream, got %s", string(seenBody))
+	if gjson.GetBytes(seenBody, "messages.0.content.0.thinking").Exists() {
+		t.Fatalf("replayed thinking should be omitted before upstream, got %s", string(seenBody))
 	}
-	if got := gjson.GetBytes(seenBody, "messages.0.content.0.thinking").String(); got != "scratchpad" {
-		t.Fatalf("thinking text should be preserved, got %q", got)
+	if got := gjson.GetBytes(seenBody, "messages.0.content.0.text").String(); got != "continuing" {
+		t.Fatalf("non-thinking text should remain, got %q", got)
 	}
 }
 

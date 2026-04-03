@@ -1,0 +1,15 @@
+{
+  "batch_dir": "/Users/taylor/code/tools/CLIProxyAPI-ori/tasks/blackbox-samples/2026-03-30-claude-cli-vscode/claude-cli/stability-2026-03-30/2026-03-30T231143-stability-round2",
+  "session_id": "adad1db8-bee9-4801-845e-8204331b6c6a",
+  "cases": [
+    "complex-3",
+    "complex-4",
+    "simple-3",
+    "search-3",
+    "resume-2-turn-1",
+    "resume-2-turn-2",
+    "resume-2-turn-3",
+    "resume-2-turn-4",
+    "resume-2-turn-5"
+  ]
+}

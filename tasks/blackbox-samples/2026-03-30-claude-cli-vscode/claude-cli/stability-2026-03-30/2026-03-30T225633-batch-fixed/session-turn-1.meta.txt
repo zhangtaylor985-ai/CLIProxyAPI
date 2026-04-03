@@ -1,0 +1,10 @@
+name=session-turn-1
+session_id=1d9de585-1e5a-46b4-b00d-f99cc49dff2c
+rc=0
+elapsed_seconds=17
+stdout_lines=9
+stderr_bytes=0
+result_subtype=success
+api_error_count=0
+web_text_count=0
+abrupt_stop=0
