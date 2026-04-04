@@ -377,6 +377,67 @@ zsh -ic 'cd /tmp/cc1-secret-h && export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC
   - `file_count = 2`
   - `export_dir = /Users/taylor/code/tools/CLIProxyAPI-ori/session-data/session-exports/api_key_494d442492be272b6c55e0f2_583be797-0eb1-44b7-91ea-9c4b2da35b63`
 
+## 管理端 UI 支持与验证
+
+### 1. 前端实现范围
+
+- 前端仓库：
+  - `/Users/taylor/code/tools/Cli-Proxy-API-Management-Center-ori`
+- 已新增会话轨迹管理页与 API 接入：
+  - `src/pages/SessionTrajectoriesPage.tsx`
+  - `src/pages/SessionTrajectoriesPage.module.scss`
+  - `src/services/api/sessionTrajectories.ts`
+- 已接入现有管理端导航、路由与多语言：
+  - `src/router/MainRoutes.tsx`
+  - `src/components/layout/MainLayout.tsx`
+  - `src/services/api/index.ts`
+  - `src/i18n/locales/zh-CN.json`
+  - `src/i18n/locales/en.json`
+  - `src/i18n/locales/ru.json`
+
+### 2. UI 能力
+
+- 支持会话列表筛选：
+  - `user_id`
+  - `source`
+  - `call_type`
+  - `provider`
+  - `canonical_model_family`
+  - `status`
+- 支持会话详情展示：
+  - session overview
+  - token rounds
+  - request list
+  - JSON payload modal
+  - export result list
+- 不新增后端接口，直接消费已落地的 management session trajectory API。
+
+### 3. 前端构建与静态校验
+
+- `npm run build`
+  - 通过
+- `npm run lint`
+  - 无新增 error
+  - 仅存在一个既有 warning：
+    - `src/pages/APIKeysWorkbenchPage.tsx:468`
+
+### 4. 真实浏览器验证
+
+- 预览地址：
+  - `http://127.0.0.1:4173/#/session-trajectories`
+- 浏览器已登录管理端后验证通过：
+  - 侧边栏出现 `会话轨迹`
+  - 路由跳转正常
+  - 会话列表加载正常
+  - 详情面板渲染正常
+  - `批量导出筛选结果` / `导出当前会话` 可触发服务端导出
+  - `包含 JSON 载荷` 开关可用
+  - `查看载荷` 可打开 modal，并成功展示 `request_json`
+  - `Provider=anthropic` 筛选输入与 `应用筛选` 按钮可正常触发加载
+- 本轮浏览器连接的后端是：
+  - `http://127.0.0.1:53941`
+- 该实例里看到的 `provider_session_id = id` 与 token rounds 为 `0`，属于所连后端实例/数据状态问题，不是管理端 UI 渲染 bug。
+
 ## 性能与副作用评估
 
 ### 1. 对聊天主链路的影响
