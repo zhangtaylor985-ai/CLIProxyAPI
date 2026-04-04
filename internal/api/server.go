@@ -21,6 +21,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/access"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/alerting"
 	managementHandlers "github.com/router-for-me/CLIProxyAPI/v6/internal/api/handlers/management"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/api/middleware"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/api/modules"
@@ -32,6 +33,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/managementasset"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/policy"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/sessiontrajectory"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 	sdkaccess "github.com/router-for-me/CLIProxyAPI/v6/sdk/access"
@@ -175,10 +177,12 @@ type Server struct {
 
 	localPassword string
 
-	dailyLimiter      policy.DailyLimiter
-	billingStore      billing.Store
-	groupStore        apikeygroup.Store
-	apiKeyConfigStore apikeyconfig.Store
+	dailyLimiter       policy.DailyLimiter
+	billingStore       billing.Store
+	groupStore         apikeygroup.Store
+	apiKeyConfigStore  apikeyconfig.Store
+	trajectoryStore    sessiontrajectory.Store
+	trajectoryRecorder sessiontrajectory.Recorder
 
 	keepAliveEnabled   bool
 	keepAliveTimeout   time.Duration
@@ -231,11 +235,10 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 		if optionState.requestLoggerFactory != nil {
 			requestLogger = optionState.requestLoggerFactory(cfg, configFilePath)
 		}
+		if requestLogger != nil && cfg.CommercialMode && cfg.RequestLog {
+			log.Warn("commercial-mode is enabled, but request-log=true explicitly enables detailed request logging")
+		}
 		if requestLogger != nil {
-			if cfg.CommercialMode && cfg.RequestLog {
-				log.Warn("commercial-mode is enabled, but request-log=true explicitly enables detailed request logging")
-			}
-			engine.Use(middleware.RequestLoggingMiddleware(requestLogger))
 			if setter, ok := requestLogger.(interface{ SetEnabled(bool) }); ok {
 				toggle = setter.SetEnabled
 			}
@@ -270,6 +273,13 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 	s.dailyLimiter = s.initDailyLimiter()
 	s.billingStore = s.initBillingStore()
 	s.groupStore = s.initGroupStore()
+	s.trajectoryStore = s.initSessionTrajectoryStore()
+	if s.trajectoryStore != nil {
+		s.trajectoryRecorder = sessiontrajectory.NewAsyncRecorder(s.trajectoryStore, 0, 1)
+	}
+	if requestLogger != nil || s.trajectoryRecorder != nil {
+		engine.Use(middleware.RequestLoggingMiddleware(requestLogger, s.trajectoryRecorder))
+	}
 	if s.billingStore != nil {
 		plugin := billing.NewUsagePersistPlugin(s.billingStore)
 		s.billingStore.SetPendingUsageProvider(plugin)
@@ -302,6 +312,9 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 	}
 	if s.groupStore != nil {
 		s.mgmt.SetGroupStore(s.groupStore)
+	}
+	if s.trajectoryStore != nil {
+		s.mgmt.SetSessionTrajectoryStore(s.trajectoryStore, filepath.Join(wd, "session-data", "session-exports"))
 	}
 	if optionState.localPassword != "" {
 		s.mgmt.SetLocalPassword(optionState.localPassword)
@@ -379,7 +392,7 @@ func (s *Server) initBillingStore() billing.Store {
 		log.Warn("billing store disabled: postgres DSN not configured")
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	store, err := billing.NewPostgresStore(ctx, billing.PostgresStoreConfig{
 		DSN:    dsn,
@@ -414,6 +427,26 @@ func (s *Server) initGroupStore() apikeygroup.Store {
 		return nil
 	}
 	log.Infof("api key group store enabled (postgres)")
+	return store
+}
+
+func (s *Server) initSessionTrajectoryStore() sessiontrajectory.Store {
+	dsn, schema := resolveBillingPostgresConfig()
+	if dsn == "" {
+		log.Warn("session trajectory recorder disabled: postgres DSN not configured")
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	store, err := sessiontrajectory.NewPostgresStore(ctx, sessiontrajectory.PostgresStoreConfig{
+		DSN:    dsn,
+		Schema: schema,
+	})
+	if err != nil {
+		log.WithError(err).Warn("failed to initialize session trajectory store (postgres)")
+		return nil
+	}
+	log.Infof("session trajectory store enabled (postgres)")
 	return store
 }
 
@@ -650,6 +683,12 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.GET("/usage/targets-dashboard", s.mgmt.GetUsageTargetsDashboard)
 		mgmt.GET("/usage/export", s.mgmt.ExportUsageStatistics)
 		mgmt.POST("/usage/import", s.mgmt.ImportUsageStatistics)
+		mgmt.GET("/session-trajectories/sessions", s.mgmt.ListSessionTrajectories)
+		mgmt.GET("/session-trajectories/sessions/:sessionId", s.mgmt.GetSessionTrajectory)
+		mgmt.GET("/session-trajectories/sessions/:sessionId/requests", s.mgmt.ListSessionTrajectoryRequests)
+		mgmt.GET("/session-trajectories/sessions/:sessionId/token-rounds", s.mgmt.GetSessionTrajectoryTokenRounds)
+		mgmt.POST("/session-trajectories/sessions/:sessionId/export", s.mgmt.ExportSessionTrajectory)
+		mgmt.POST("/session-trajectories/export", s.mgmt.ExportSessionTrajectories)
 		mgmt.GET("/config", s.mgmt.GetConfig)
 		mgmt.GET("/config.yaml", s.mgmt.GetConfigYAML)
 		mgmt.PUT("/config.yaml", s.mgmt.PutConfigYAML)
@@ -1163,6 +1202,11 @@ func (s *Server) Stop(ctx context.Context) error {
 			log.WithError(err).Warn("failed to close api key config store")
 		}
 	}
+	if s.trajectoryRecorder != nil {
+		if err := s.trajectoryRecorder.Close(); err != nil {
+			log.WithError(err).Warn("failed to close session trajectory recorder")
+		}
+	}
 
 	log.Debug("API server stopped")
 	return nil
@@ -1236,6 +1280,7 @@ func (s *Server) UpdateClients(cfg *config.Config) {
 			log.Errorf("failed to reconfigure log output: %v", err)
 		}
 	}
+	alerting.ConfigureFromConfig(cfg)
 
 	if oldCfg == nil || oldCfg.UsageStatisticsEnabled != cfg.UsageStatisticsEnabled {
 		usage.SetStatisticsEnabled(cfg.UsageStatisticsEnabled)

@@ -12,6 +12,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/logging"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/sessiontrajectory"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 )
 
@@ -21,9 +22,9 @@ const maxErrorOnlyCapturedRequestBodyBytes int64 = 1 << 20 // 1 MiB
 // It captures detailed information about the request and response, including headers and body,
 // and uses the provided RequestLogger to record this data. When full request logging is disabled,
 // body capture is limited to small known-size payloads to avoid large per-request memory spikes.
-func RequestLoggingMiddleware(logger logging.RequestLogger) gin.HandlerFunc {
+func RequestLoggingMiddleware(logger logging.RequestLogger, recorder sessiontrajectory.Recorder) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if logger == nil {
+		if logger == nil && recorder == nil {
 			c.Next()
 			return
 		}
@@ -39,10 +40,10 @@ func RequestLoggingMiddleware(logger logging.RequestLogger) gin.HandlerFunc {
 			return
 		}
 
-		loggerEnabled := logger.IsEnabled()
+		loggerEnabled := logger != nil && logger.IsEnabled()
 
 		// Capture request information
-		requestInfo, err := captureRequestInfo(c, shouldCaptureRequestBody(loggerEnabled, c.Request))
+		requestInfo, err := captureRequestInfo(c, shouldCaptureRequestBody(loggerEnabled || recorder != nil, c.Request))
 		if err != nil {
 			// Log error but continue processing
 			// In a real implementation, you might want to use a proper logger here
@@ -51,8 +52,8 @@ func RequestLoggingMiddleware(logger logging.RequestLogger) gin.HandlerFunc {
 		}
 
 		// Create response writer wrapper
-		wrapper := NewResponseWriterWrapper(c.Writer, logger, requestInfo)
-		if !loggerEnabled {
+		wrapper := NewResponseWriterWrapper(c.Writer, logger, recorder, requestInfo)
+		if logger != nil && !loggerEnabled {
 			wrapper.logOnErrorOnly = true
 		}
 		c.Writer = wrapper

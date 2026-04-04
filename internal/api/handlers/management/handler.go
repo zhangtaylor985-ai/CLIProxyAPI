@@ -20,6 +20,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/buildinfo"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/policy"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/sessiontrajectory"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
 	sdkAuth "github.com/router-for-me/CLIProxyAPI/v6/sdk/auth"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
@@ -40,24 +41,26 @@ const attemptMaxIdleTime = 2 * time.Hour
 
 // Handler aggregates config reference, persistence path and helpers.
 type Handler struct {
-	cfg                 *config.Config
-	configFilePath      string
-	mu                  sync.Mutex
-	attemptsMu          sync.Mutex
-	failedAttempts      map[string]*attemptInfo // keyed by client IP
-	authManager         *coreauth.Manager
-	usageStats          *usage.RequestStatistics
-	billingStore        billing.Store
-	dailyLimiter        policy.DailyLimiter
-	groupStore          apikeygroup.Store
-	apiKeyConfigStore   apikeyconfig.Store
-	tokenStore          coreauth.Store
-	localPassword       string
-	allowRemoteOverride bool
-	envSecret           string
-	logDir              string
-	postAuthHook        func(context.Context, *coreauth.Auth) error
-	configUpdated       func(*config.Config)
+	cfg                    *config.Config
+	configFilePath         string
+	mu                     sync.Mutex
+	attemptsMu             sync.Mutex
+	failedAttempts         map[string]*attemptInfo // keyed by client IP
+	authManager            *coreauth.Manager
+	usageStats             *usage.RequestStatistics
+	billingStore           billing.Store
+	dailyLimiter           policy.DailyLimiter
+	groupStore             apikeygroup.Store
+	apiKeyConfigStore      apikeyconfig.Store
+	sessionTrajectoryStore sessiontrajectory.Store
+	sessionExportRoot      string
+	tokenStore             coreauth.Store
+	localPassword          string
+	allowRemoteOverride    bool
+	envSecret              string
+	logDir                 string
+	postAuthHook           func(context.Context, *coreauth.Auth) error
+	configUpdated          func(*config.Config)
 }
 
 // NewHandler creates a new management handler instance.
@@ -130,6 +133,11 @@ func (h *Handler) SetDailyLimiter(limiter policy.DailyLimiter) { h.dailyLimiter 
 func (h *Handler) SetGroupStore(store apikeygroup.Store) { h.groupStore = store }
 
 func (h *Handler) SetAPIKeyConfigStore(store apikeyconfig.Store) { h.apiKeyConfigStore = store }
+
+func (h *Handler) SetSessionTrajectoryStore(store sessiontrajectory.Store, exportRoot string) {
+	h.sessionTrajectoryStore = store
+	h.sessionExportRoot = strings.TrimSpace(exportRoot)
+}
 
 // SetLocalPassword configures the runtime-local password accepted for localhost requests.
 func (h *Handler) SetLocalPassword(password string) { h.localPassword = password }

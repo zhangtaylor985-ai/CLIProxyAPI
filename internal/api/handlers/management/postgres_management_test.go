@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -19,6 +20,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/billing"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/policy"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/sessiontrajectory"
 	sdkconfig "github.com/router-for-me/CLIProxyAPI/v6/sdk/config"
 )
 
@@ -218,6 +220,87 @@ func TestPostgresManagement_UsageStatisticsAndModelPrices(t *testing.T) {
 	}
 }
 
+func TestPostgresManagement_SessionTrajectoriesQueryAndExport(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	handler, cleanup := newPostgresManagementTestHandler(t, &config.Config{
+		SDKConfig: sdkconfig.SDKConfig{APIKeys: []string{"k1"}},
+	})
+	defer cleanup()
+
+	if err := seedSessionTrajectory(t, handler, "k1"); err != nil {
+		t.Fatalf("seedSessionTrajectory: %v", err)
+	}
+
+	listRec := performJSONRequest(t, http.MethodGet, "/v0/management/session-trajectories/sessions?limit=10", nil, handler.ListSessionTrajectories, nil)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("ListSessionTrajectories status = %d, body = %s", listRec.Code, listRec.Body.String())
+	}
+	var listBody struct {
+		Items []sessiontrajectory.SessionSummary `json:"items"`
+	}
+	if err := json.Unmarshal(listRec.Body.Bytes(), &listBody); err != nil {
+		t.Fatalf("unmarshal list: %v", err)
+	}
+	if len(listBody.Items) != 1 {
+		t.Fatalf("session items len = %d, want 1", len(listBody.Items))
+	}
+	sessionID := listBody.Items[0].SessionID
+
+	reqRec := performJSONRequest(t, http.MethodGet, "/v0/management/session-trajectories/sessions/"+sessionID+"/requests?include_payloads=1", nil, handler.ListSessionTrajectoryRequests, gin.Params{{Key: "sessionId", Value: sessionID}})
+	if reqRec.Code != http.StatusOK {
+		t.Fatalf("ListSessionTrajectoryRequests status = %d, body = %s", reqRec.Code, reqRec.Body.String())
+	}
+	var reqBody struct {
+		Items []sessiontrajectory.SessionRequest `json:"items"`
+	}
+	if err := json.Unmarshal(reqRec.Body.Bytes(), &reqBody); err != nil {
+		t.Fatalf("unmarshal requests: %v", err)
+	}
+	if len(reqBody.Items) != 2 {
+		t.Fatalf("request items len = %d, want 2", len(reqBody.Items))
+	}
+	if len(reqBody.Items[0].RequestJSON) == 0 {
+		t.Fatal("expected request_json payload in detailed request list")
+	}
+
+	tokenRec := performJSONRequest(t, http.MethodGet, "/v0/management/session-trajectories/sessions/"+sessionID+"/token-rounds", nil, handler.GetSessionTrajectoryTokenRounds, gin.Params{{Key: "sessionId", Value: sessionID}})
+	if tokenRec.Code != http.StatusOK {
+		t.Fatalf("GetSessionTrajectoryTokenRounds status = %d, body = %s", tokenRec.Code, tokenRec.Body.String())
+	}
+	var tokenBody struct {
+		Items []sessiontrajectory.SessionTokenRound `json:"items"`
+	}
+	if err := json.Unmarshal(tokenRec.Body.Bytes(), &tokenBody); err != nil {
+		t.Fatalf("unmarshal token rounds: %v", err)
+	}
+	if len(tokenBody.Items) != 2 {
+		t.Fatalf("token rounds len = %d, want 2", len(tokenBody.Items))
+	}
+	if tokenBody.Items[1].TotalTokens <= tokenBody.Items[0].TotalTokens {
+		t.Fatalf("unexpected token totals: %+v", tokenBody.Items)
+	}
+
+	exportRec := performJSONRequest(t, http.MethodPost, "/v0/management/session-trajectories/sessions/"+sessionID+"/export", nil, handler.ExportSessionTrajectory, gin.Params{{Key: "sessionId", Value: sessionID}})
+	if exportRec.Code != http.StatusOK {
+		t.Fatalf("ExportSessionTrajectory status = %d, body = %s", exportRec.Code, exportRec.Body.String())
+	}
+	var exportBody struct {
+		Item sessiontrajectory.SessionExportResult `json:"item"`
+	}
+	if err := json.Unmarshal(exportRec.Body.Bytes(), &exportBody); err != nil {
+		t.Fatalf("unmarshal export: %v", err)
+	}
+	if exportBody.Item.FileCount != 2 {
+		t.Fatalf("export file count = %d, want 2", exportBody.Item.FileCount)
+	}
+	for _, file := range exportBody.Item.Files {
+		if _, err := os.Stat(file.ExportPath); err != nil {
+			t.Fatalf("expected export file %s: %v", file.ExportPath, err)
+		}
+	}
+}
+
 func newPostgresManagementTestHandler(t *testing.T, cfg *config.Config) (*Handler, func()) {
 	t.Helper()
 
@@ -258,14 +341,29 @@ func newPostgresManagementTestHandler(t *testing.T, cfg *config.Config) (*Handle
 		dropSchema()
 		t.Fatalf("SeedDefaults: %v", err)
 	}
+	trajectoryStore, err := sessiontrajectory.NewPostgresStore(ctx, sessiontrajectory.PostgresStoreConfig{
+		DSN:    dsn,
+		Schema: schema,
+	})
+	if err != nil {
+		_ = groupStore.Close()
+		_ = limiter.Close()
+		_ = billingStore.Close()
+		dropSchema()
+		t.Fatalf("NewSessionTrajectoryStore: %v", err)
+	}
+	exportRoot := filepath.Join(t.TempDir(), "session-data", "session-exports")
 
 	handler := &Handler{
-		cfg:          cfg,
-		billingStore: billingStore,
-		dailyLimiter: limiter,
-		groupStore:   groupStore,
+		cfg:                    cfg,
+		billingStore:           billingStore,
+		dailyLimiter:           limiter,
+		groupStore:             groupStore,
+		sessionTrajectoryStore: trajectoryStore,
+		sessionExportRoot:      exportRoot,
 	}
 	cleanup := func() {
+		_ = trajectoryStore.Close()
 		_ = groupStore.Close()
 		_ = limiter.Close()
 		_ = billingStore.Close()
@@ -351,4 +449,38 @@ func sanitizePostgresIdentifier(value string) string {
 
 func quotePostgresIdentifier(value string) string {
 	return `"` + strings.ReplaceAll(value, `"`, `""`) + `"`
+}
+
+func seedSessionTrajectory(t *testing.T, handler *Handler, apiKey string) error {
+	t.Helper()
+	if handler == nil || handler.sessionTrajectoryStore == nil {
+		return fmt.Errorf("session trajectory store unavailable")
+	}
+	headers := map[string][]string{
+		"Authorization": {"Bearer " + apiKey},
+		"User-Agent":    {"claude-cli/2.0.0"},
+	}
+	base := time.Date(2026, 4, 4, 10, 0, 0, 0, time.UTC)
+	if err := handler.sessionTrajectoryStore.Record(context.Background(), &sessiontrajectory.CompletedRequest{
+		RequestID:         "req-session-1",
+		RequestMethod:     http.MethodPost,
+		RequestURL:        "/v1/messages",
+		RequestHeaders:    headers,
+		RequestBody:       []byte(`{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}]}`),
+		ResponseBody:      []byte(`{"id":"resp-1","model":"claude-sonnet-4-5","usage":{"input_tokens":10,"output_tokens":20,"total_tokens":30}}`),
+		RequestTimestamp:  base,
+		ResponseTimestamp: base.Add(2 * time.Second),
+	}); err != nil {
+		return err
+	}
+	return handler.sessionTrajectoryStore.Record(context.Background(), &sessiontrajectory.CompletedRequest{
+		RequestID:         "req-session-2",
+		RequestMethod:     http.MethodPost,
+		RequestURL:        "/v1/messages",
+		RequestHeaders:    headers,
+		RequestBody:       []byte(`{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":[{"type":"text","text":"hello"}]},{"role":"assistant","content":[{"type":"text","text":"hi"}]},{"role":"user","content":[{"type":"text","text":"continue"}]}]}`),
+		ResponseBody:      []byte(`{"id":"resp-2","model":"claude-sonnet-4-5","usage":{"input_tokens":15,"output_tokens":35,"total_tokens":50}}`),
+		RequestTimestamp:  base.Add(10 * time.Second),
+		ResponseTimestamp: base.Add(12 * time.Second),
+	})
 }

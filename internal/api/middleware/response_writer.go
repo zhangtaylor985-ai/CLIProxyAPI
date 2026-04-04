@@ -12,9 +12,11 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/interfaces"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/logging"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/sessiontrajectory"
 )
 
 const requestBodyOverrideContextKey = "REQUEST_BODY_OVERRIDE"
+const maxRecordedResponseBodyBytes = 2 << 20 // 2 MiB
 
 // RequestInfo holds essential details of an incoming HTTP request for logging purposes.
 type RequestInfo struct {
@@ -36,6 +38,7 @@ type ResponseWriterWrapper struct {
 	chunkChannel        chan []byte                // chunkChannel is a channel for asynchronously passing response chunks to the logger.
 	streamDone          chan struct{}              // streamDone signals when the streaming goroutine completes.
 	logger              logging.RequestLogger      // logger is the instance of the request logger service.
+	recorder            sessiontrajectory.Recorder // recorder persists structured session trajectories.
 	requestInfo         *RequestInfo               // requestInfo holds the details of the original request.
 	statusCode          int                        // statusCode stores the HTTP status code of the response.
 	headers             map[string][]string        // headers stores the response headers.
@@ -53,11 +56,12 @@ type ResponseWriterWrapper struct {
 //
 // Returns:
 //   - A pointer to a new ResponseWriterWrapper.
-func NewResponseWriterWrapper(w gin.ResponseWriter, logger logging.RequestLogger, requestInfo *RequestInfo) *ResponseWriterWrapper {
+func NewResponseWriterWrapper(w gin.ResponseWriter, logger logging.RequestLogger, recorder sessiontrajectory.Recorder, requestInfo *RequestInfo) *ResponseWriterWrapper {
 	return &ResponseWriterWrapper{
 		ResponseWriter: w,
 		body:           &bytes.Buffer{},
 		logger:         logger,
+		recorder:       recorder,
 		requestInfo:    requestInfo,
 		headers:        make(map[string][]string),
 	}
@@ -82,6 +86,9 @@ func (w *ResponseWriterWrapper) Write(data []byte) (int, error) {
 		if w.firstChunkTimestamp.IsZero() {
 			w.firstChunkTimestamp = time.Now()
 		}
+		if w.recorder != nil {
+			w.appendBufferedResponseBody(data)
+		}
 		// For streaming responses: Send to async logging channel (non-blocking)
 		select {
 		case w.chunkChannel <- append([]byte(nil), data...): // Non-blocking send with copy
@@ -91,13 +98,16 @@ func (w *ResponseWriterWrapper) Write(data []byte) (int, error) {
 	}
 
 	if w.shouldBufferResponseBody() {
-		w.body.Write(data)
+		w.appendBufferedResponseBody(data)
 	}
 
 	return n, err
 }
 
 func (w *ResponseWriterWrapper) shouldBufferResponseBody() bool {
+	if w.recorder != nil {
+		return true
+	}
 	if w.logger != nil && w.logger.IsEnabled() {
 		return true
 	}
@@ -130,6 +140,9 @@ func (w *ResponseWriterWrapper) WriteString(data string) (int, error) {
 		if w.firstChunkTimestamp.IsZero() {
 			w.firstChunkTimestamp = time.Now()
 		}
+		if w.recorder != nil {
+			w.appendBufferedResponseBody([]byte(data))
+		}
 		select {
 		case w.chunkChannel <- []byte(data):
 		default:
@@ -138,9 +151,23 @@ func (w *ResponseWriterWrapper) WriteString(data string) (int, error) {
 	}
 
 	if w.shouldBufferResponseBody() {
-		w.body.WriteString(data)
+		w.appendBufferedResponseBody([]byte(data))
 	}
 	return n, err
+}
+
+func (w *ResponseWriterWrapper) appendBufferedResponseBody(data []byte) {
+	if w == nil || w.body == nil || len(data) == 0 {
+		return
+	}
+	remaining := maxRecordedResponseBodyBytes - w.body.Len()
+	if remaining <= 0 {
+		return
+	}
+	if len(data) > remaining {
+		data = data[:remaining]
+	}
+	_, _ = w.body.Write(data)
 }
 
 // WriteHeader wraps the underlying ResponseWriter's WriteHeader method.
@@ -148,6 +175,7 @@ func (w *ResponseWriterWrapper) WriteString(data string) (int, error) {
 // and initializes the appropriate logging mechanism (standard or streaming).
 func (w *ResponseWriterWrapper) WriteHeader(statusCode int) {
 	w.statusCode = statusCode
+	loggerEnabled := w.logger != nil && w.logger.IsEnabled()
 
 	// Capture response headers using the new method
 	w.captureCurrentHeaders()
@@ -157,7 +185,7 @@ func (w *ResponseWriterWrapper) WriteHeader(statusCode int) {
 	w.isStreaming = w.detectStreaming(contentType)
 
 	// If streaming, initialize streaming log writer
-	if w.isStreaming && w.logger.IsEnabled() {
+	if w.isStreaming && loggerEnabled {
 		streamWriter, err := w.logger.LogStreamingRequest(
 			w.requestInfo.URL,
 			w.requestInfo.Method,
@@ -255,7 +283,7 @@ func (w *ResponseWriterWrapper) processStreamingChunks(done chan struct{}) {
 // For non-streaming responses, it logs the complete request and response details,
 // including any API-specific request/response data stored in the Gin context.
 func (w *ResponseWriterWrapper) Finalize(c *gin.Context) error {
-	if w.logger == nil {
+	if w.logger == nil && w.recorder == nil {
 		return nil
 	}
 
@@ -277,10 +305,13 @@ func (w *ResponseWriterWrapper) Finalize(c *gin.Context) error {
 	}
 
 	hasAPIError := len(slicesAPIResponseError) > 0 || finalStatusCode >= http.StatusBadRequest
-	forceLog := w.logOnErrorOnly && hasAPIError && !w.logger.IsEnabled()
-	if !w.logger.IsEnabled() && !forceLog {
-		return nil
-	}
+	loggerEnabled := w.logger != nil && w.logger.IsEnabled()
+	forceLog := w.logOnErrorOnly && hasAPIError && !loggerEnabled
+	requestBody := w.extractRequestBody(c)
+	responseHeaders := w.cloneHeaders()
+	apiRequest := w.extractAPIRequest(c)
+	apiResponse := w.extractAPIResponse(c)
+	apiResponseTimestamp := w.extractAPIResponseTimestamp(c)
 
 	if w.isStreaming && w.streamWriter != nil {
 		if w.chunkChannel != nil {
@@ -296,11 +327,9 @@ func (w *ResponseWriterWrapper) Finalize(c *gin.Context) error {
 		w.streamWriter.SetFirstChunkTimestamp(w.firstChunkTimestamp)
 
 		// Write API Request and Response to the streaming log before closing
-		apiRequest := w.extractAPIRequest(c)
 		if len(apiRequest) > 0 {
 			_ = w.streamWriter.WriteAPIRequest(apiRequest)
 		}
-		apiResponse := w.extractAPIResponse(c)
 		if len(apiResponse) > 0 {
 			_ = w.streamWriter.WriteAPIResponse(apiResponse)
 		}
@@ -309,10 +338,41 @@ func (w *ResponseWriterWrapper) Finalize(c *gin.Context) error {
 			return err
 		}
 		w.streamWriter = nil
+	}
+
+	if w.recorder != nil && w.requestInfo != nil {
+		responseBody := w.body.Bytes()
+		if len(responseBody) == 0 && len(apiResponse) > 0 {
+			responseBody = apiResponse
+		}
+		responseTimestamp := apiResponseTimestamp
+		if responseTimestamp.IsZero() {
+			responseTimestamp = time.Now()
+		}
+		_ = w.recorder.Record(c.Request.Context(), &sessiontrajectory.CompletedRequest{
+			RequestID:            w.requestInfo.RequestID,
+			RequestMethod:        w.requestInfo.Method,
+			RequestURL:           w.requestInfo.URL,
+			RequestHeaders:       w.requestInfo.Headers,
+			RequestBody:          requestBody,
+			ResponseStatusCode:   finalStatusCode,
+			ResponseHeaders:      responseHeaders,
+			ResponseBody:         responseBody,
+			APIRequestBody:       apiRequest,
+			APIResponseBody:      apiResponse,
+			APIResponseTimestamp: apiResponseTimestamp,
+			RequestTimestamp:     w.requestInfo.Timestamp,
+			ResponseTimestamp:    responseTimestamp,
+			APIResponseErrors:    slicesAPIResponseError,
+			IsStreaming:          w.isStreaming,
+		})
+	}
+
+	if !loggerEnabled && !forceLog {
 		return nil
 	}
 
-	return w.logRequest(w.extractRequestBody(c), finalStatusCode, w.cloneHeaders(), w.body.Bytes(), w.extractAPIRequest(c), w.extractAPIResponse(c), w.extractAPIResponseTimestamp(c), slicesAPIResponseError, forceLog)
+	return w.logRequest(requestBody, finalStatusCode, responseHeaders, w.body.Bytes(), apiRequest, apiResponse, apiResponseTimestamp, slicesAPIResponseError, forceLog)
 }
 
 func (w *ResponseWriterWrapper) cloneHeaders() map[string][]string {
