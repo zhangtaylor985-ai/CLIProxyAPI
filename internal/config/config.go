@@ -54,6 +54,9 @@ type Config struct {
 	// LoggingToFile controls whether application logs are written to rotating files or stdout.
 	LoggingToFile bool `yaml:"logging-to-file" json:"logging-to-file"`
 
+	// Notifications configures outbound operator alerts such as Telegram notifications.
+	Notifications NotificationsConfig `yaml:"notifications" json:"notifications"`
+
 	// LogsMaxTotalSizeMB limits the total size (in MB) of log files under the logs directory.
 	// When exceeded, the oldest log files are deleted until within the limit. Set to 0 to disable.
 	LogsMaxTotalSizeMB int `yaml:"logs-max-total-size-mb" json:"logs-max-total-size-mb"`
@@ -129,6 +132,36 @@ type Config struct {
 	Payload PayloadConfig `yaml:"payload" json:"payload"`
 
 	legacyMigrationPending bool `yaml:"-" json:"-"`
+}
+
+// NotificationsConfig groups external operator notification channels.
+type NotificationsConfig struct {
+	Telegram TelegramNotificationsConfig `yaml:"telegram" json:"telegram"`
+}
+
+// TelegramNotificationsConfig configures Telegram bot notifications.
+type TelegramNotificationsConfig struct {
+	Enabled                    bool                        `yaml:"enabled" json:"enabled"`
+	BotToken                   string                      `yaml:"bot-token,omitempty" json:"-"`
+	ProviderChatID             string                      `yaml:"provider-chat-id,omitempty" json:"provider-chat-id,omitempty"`
+	ErrorLogChatID             string                      `yaml:"error-log-chat-id,omitempty" json:"error-log-chat-id,omitempty"`
+	SendRecovery               bool                        `yaml:"send-recovery,omitempty" json:"send-recovery,omitempty"`
+	RecoveryMinCooldownSeconds int                         `yaml:"recovery-min-cooldown-seconds,omitempty" json:"recovery-min-cooldown-seconds,omitempty"`
+	RequestTimeoutSeconds      int                         `yaml:"request-timeout-seconds,omitempty" json:"request-timeout-seconds,omitempty"`
+	Provider                   TelegramRouteConfig         `yaml:"provider" json:"provider"`
+	ErrorLog                   TelegramErrorLogRouteConfig `yaml:"error-log" json:"error-log"`
+}
+
+// TelegramRouteConfig configures generic Telegram route throttling.
+type TelegramRouteConfig struct {
+	Backoff []string `yaml:"backoff,omitempty" json:"backoff,omitempty"`
+}
+
+// TelegramErrorLogRouteConfig configures Telegram alerts emitted from error logs.
+type TelegramErrorLogRouteConfig struct {
+	Backoff         []string `yaml:"backoff,omitempty" json:"backoff,omitempty"`
+	MinLevel        string   `yaml:"min-level,omitempty" json:"min-level,omitempty"`
+	ExcludePatterns []string `yaml:"exclude-patterns,omitempty" json:"exclude-patterns,omitempty"`
 }
 
 // ClaudeHeaderDefaults configures default header values injected into Claude API requests
@@ -570,6 +603,8 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 	cfg.LogsMaxTotalSizeMB = 0
 	cfg.ErrorLogsMaxFiles = 10
 	cfg.UsageStatisticsEnabled = false
+	cfg.Notifications.Telegram.RecoveryMinCooldownSeconds = 300
+	cfg.Notifications.Telegram.RequestTimeoutSeconds = 10
 	cfg.DisableCooling = false
 	cfg.Pprof.Enable = false
 	cfg.Pprof.Addr = DefaultPprofAddr
@@ -638,6 +673,43 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 
 	if cfg.ErrorLogsMaxFiles < 0 {
 		cfg.ErrorLogsMaxFiles = 10
+	}
+	if cfg.Notifications.Telegram.RecoveryMinCooldownSeconds <= 0 {
+		cfg.Notifications.Telegram.RecoveryMinCooldownSeconds = 300
+	}
+	if cfg.Notifications.Telegram.RequestTimeoutSeconds <= 0 {
+		cfg.Notifications.Telegram.RequestTimeoutSeconds = 10
+	}
+	cfg.Notifications.Telegram.BotToken = strings.TrimSpace(cfg.Notifications.Telegram.BotToken)
+	cfg.Notifications.Telegram.ProviderChatID = strings.TrimSpace(cfg.Notifications.Telegram.ProviderChatID)
+	cfg.Notifications.Telegram.ErrorLogChatID = strings.TrimSpace(cfg.Notifications.Telegram.ErrorLogChatID)
+	cfg.Notifications.Telegram.ErrorLog.MinLevel = strings.TrimSpace(cfg.Notifications.Telegram.ErrorLog.MinLevel)
+	if len(cfg.Notifications.Telegram.Provider.Backoff) > 0 {
+		clean := cfg.Notifications.Telegram.Provider.Backoff[:0]
+		for _, value := range cfg.Notifications.Telegram.Provider.Backoff {
+			if trimmed := strings.TrimSpace(value); trimmed != "" {
+				clean = append(clean, trimmed)
+			}
+		}
+		cfg.Notifications.Telegram.Provider.Backoff = clean
+	}
+	if len(cfg.Notifications.Telegram.ErrorLog.Backoff) > 0 {
+		clean := cfg.Notifications.Telegram.ErrorLog.Backoff[:0]
+		for _, value := range cfg.Notifications.Telegram.ErrorLog.Backoff {
+			if trimmed := strings.TrimSpace(value); trimmed != "" {
+				clean = append(clean, trimmed)
+			}
+		}
+		cfg.Notifications.Telegram.ErrorLog.Backoff = clean
+	}
+	if len(cfg.Notifications.Telegram.ErrorLog.ExcludePatterns) > 0 {
+		clean := cfg.Notifications.Telegram.ErrorLog.ExcludePatterns[:0]
+		for _, value := range cfg.Notifications.Telegram.ErrorLog.ExcludePatterns {
+			if trimmed := strings.TrimSpace(value); trimmed != "" {
+				clean = append(clean, trimmed)
+			}
+		}
+		cfg.Notifications.Telegram.ErrorLog.ExcludePatterns = clean
 	}
 
 	// Sanitize Gemini API key configuration and migrate legacy entries.

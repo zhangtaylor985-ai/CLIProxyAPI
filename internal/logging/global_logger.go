@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/alerting"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 	log "github.com/sirupsen/logrus"
@@ -87,6 +88,7 @@ func SetupBaseLogger() {
 		log.SetOutput(os.Stdout)
 		log.SetReportCaller(true)
 		log.SetFormatter(&LogFormatter{})
+		log.AddHook(alerting.LogHook{})
 
 		ginInfoWriter = log.StandardLogger().Writer()
 		gin.DefaultWriter = ginInfoWriter

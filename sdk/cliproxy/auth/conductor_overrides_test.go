@@ -118,6 +118,71 @@ type authFallbackExecutor struct {
 	streamFirstErrors map[string]error
 }
 
+type slowBootstrapExecutor struct {
+	id string
+
+	mu          sync.Mutex
+	streamCalls []string
+	delays      map[string]time.Duration
+}
+
+func (e *slowBootstrapExecutor) Identifier() string {
+	return e.id
+}
+
+func (e *slowBootstrapExecutor) Execute(context.Context, *Auth, cliproxyexecutor.Request, cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
+	return cliproxyexecutor.Response{}, &Error{HTTPStatus: 500, Message: "not implemented"}
+}
+
+func (e *slowBootstrapExecutor) ExecuteStream(ctx context.Context, auth *Auth, _ cliproxyexecutor.Request, _ cliproxyexecutor.Options) (*cliproxyexecutor.StreamResult, error) {
+	e.mu.Lock()
+	e.streamCalls = append(e.streamCalls, auth.ID)
+	delay := e.delays[auth.ID]
+	e.mu.Unlock()
+
+	out := make(chan cliproxyexecutor.StreamChunk, 1)
+	go func() {
+		defer close(out)
+		if delay > 0 {
+			timer := time.NewTimer(delay)
+			defer timer.Stop()
+			select {
+			case <-ctx.Done():
+				out <- cliproxyexecutor.StreamChunk{Err: ctx.Err()}
+				return
+			case <-timer.C:
+			}
+		}
+		select {
+		case <-ctx.Done():
+			out <- cliproxyexecutor.StreamChunk{Err: ctx.Err()}
+		case out <- cliproxyexecutor.StreamChunk{Payload: []byte(auth.ID)}:
+		}
+	}()
+
+	return &cliproxyexecutor.StreamResult{Headers: http.Header{"X-Auth": {auth.ID}}, Chunks: out}, nil
+}
+
+func (e *slowBootstrapExecutor) Refresh(_ context.Context, auth *Auth) (*Auth, error) {
+	return auth, nil
+}
+
+func (e *slowBootstrapExecutor) CountTokens(context.Context, *Auth, cliproxyexecutor.Request, cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
+	return cliproxyexecutor.Response{}, &Error{HTTPStatus: 500, Message: "not implemented"}
+}
+
+func (e *slowBootstrapExecutor) HttpRequest(context.Context, *Auth, *http.Request) (*http.Response, error) {
+	return nil, nil
+}
+
+func (e *slowBootstrapExecutor) StreamCalls() []string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	out := make([]string, len(e.streamCalls))
+	copy(out, e.streamCalls)
+	return out
+}
+
 func (e *authFallbackExecutor) Identifier() string {
 	return e.id
 }
@@ -617,5 +682,233 @@ func TestManager_MarkResult_CodexTokenParseGetsUnauthorizedCooldown(t *testing.T
 	wait := state.NextRetryAfter.Sub(state.UpdatedAt)
 	if wait < 29*time.Minute || wait > 31*time.Minute {
 		t.Fatalf("expected token parse cooldown near 30m, got %v", wait)
+	}
+}
+
+func TestManager_MarkResult_SlowSuccessDegradesAPIKeyAuthOnly(t *testing.T) {
+	origSlowCompletion := providerHealthSlowCompletionThreshold
+	origScoreThreshold := providerHealthScoreThreshold
+	origCooldowns := providerHealthCooldownSchedule
+	providerHealthSlowCompletionThreshold = 40 * time.Millisecond
+	providerHealthScoreThreshold = 1
+	providerHealthCooldownSchedule = []time.Duration{80 * time.Millisecond}
+	t.Cleanup(func() {
+		providerHealthSlowCompletionThreshold = origSlowCompletion
+		providerHealthScoreThreshold = origScoreThreshold
+		providerHealthCooldownSchedule = origCooldowns
+	})
+
+	m := NewManager(nil, nil, nil)
+
+	apiKeyAuth := &Auth{
+		ID:         "api-key-auth",
+		Provider:   "codex",
+		Attributes: map[string]string{"api_key": "k"},
+	}
+	oauthAuth := &Auth{
+		ID:       "oauth-auth",
+		Provider: "codex",
+		Metadata: map[string]any{"email": "user@example.com"},
+	}
+
+	if _, errRegister := m.Register(context.Background(), apiKeyAuth); errRegister != nil {
+		t.Fatalf("register api_key auth: %v", errRegister)
+	}
+	if _, errRegister := m.Register(context.Background(), oauthAuth); errRegister != nil {
+		t.Fatalf("register oauth auth: %v", errRegister)
+	}
+
+	model := "gpt-5"
+	m.MarkResult(context.Background(), Result{
+		AuthID:           apiKeyAuth.ID,
+		Provider:         apiKeyAuth.Provider,
+		Model:            model,
+		Success:          true,
+		CompletedLatency: 60 * time.Millisecond,
+	})
+	m.MarkResult(context.Background(), Result{
+		AuthID:           oauthAuth.ID,
+		Provider:         oauthAuth.Provider,
+		Model:            model,
+		Success:          true,
+		CompletedLatency: 60 * time.Millisecond,
+	})
+
+	updatedAPIKey, ok := m.GetByID(apiKeyAuth.ID)
+	if !ok || updatedAPIKey == nil {
+		t.Fatalf("expected api_key auth to be present")
+	}
+	apiState := updatedAPIKey.ModelStates[model]
+	if apiState == nil {
+		t.Fatalf("expected api_key model state")
+	}
+	if !apiState.Unavailable {
+		t.Fatalf("expected api_key auth to be cooled down after slow success")
+	}
+	if apiState.StatusMessage != "provider degraded" {
+		t.Fatalf("expected provider degraded status, got %q", apiState.StatusMessage)
+	}
+
+	updatedOAuth, ok := m.GetByID(oauthAuth.ID)
+	if !ok || updatedOAuth == nil {
+		t.Fatalf("expected oauth auth to be present")
+	}
+	oauthState := updatedOAuth.ModelStates[model]
+	if oauthState == nil {
+		t.Fatalf("expected oauth model state")
+	}
+	if oauthState.Unavailable {
+		t.Fatalf("expected oauth auth to ignore slow-success cooling")
+	}
+}
+
+func TestManager_ExecuteStream_SlowBootstrapFailsOverForAPIKeyAuth(t *testing.T) {
+	origBootstrapTimeout := providerHealthBootstrapTimeout
+	providerHealthBootstrapTimeout = 40 * time.Millisecond
+	t.Cleanup(func() {
+		providerHealthBootstrapTimeout = origBootstrapTimeout
+	})
+
+	m := NewManager(nil, nil, nil)
+	executor := &slowBootstrapExecutor{
+		id: "codex",
+		delays: map[string]time.Duration{
+			"a-slow-auth": 120 * time.Millisecond,
+			"b-fast-auth": 5 * time.Millisecond,
+		},
+	}
+	m.RegisterExecutor(executor)
+
+	model := "gpt-5"
+	slowAuth := &Auth{
+		ID:         "a-slow-auth",
+		Provider:   "codex",
+		Attributes: map[string]string{"api_key": "slow-key"},
+	}
+	fastAuth := &Auth{
+		ID:         "b-fast-auth",
+		Provider:   "codex",
+		Attributes: map[string]string{"api_key": "fast-key"},
+	}
+
+	reg := registry.GetGlobalRegistry()
+	reg.RegisterClient(slowAuth.ID, "codex", []*registry.ModelInfo{{ID: model}})
+	reg.RegisterClient(fastAuth.ID, "codex", []*registry.ModelInfo{{ID: model}})
+	t.Cleanup(func() {
+		reg.UnregisterClient(slowAuth.ID)
+		reg.UnregisterClient(fastAuth.ID)
+	})
+
+	if _, errRegister := m.Register(context.Background(), slowAuth); errRegister != nil {
+		t.Fatalf("register slow auth: %v", errRegister)
+	}
+	if _, errRegister := m.Register(context.Background(), fastAuth); errRegister != nil {
+		t.Fatalf("register fast auth: %v", errRegister)
+	}
+
+	result, errExecute := m.ExecuteStream(context.Background(), []string{"codex"}, cliproxyexecutor.Request{Model: model}, cliproxyexecutor.Options{})
+	if errExecute != nil {
+		t.Fatalf("ExecuteStream error: %v", errExecute)
+	}
+	if result == nil {
+		t.Fatalf("expected stream result")
+	}
+
+	var payload []byte
+	for chunk := range result.Chunks {
+		if chunk.Err != nil {
+			t.Fatalf("unexpected stream err: %v", chunk.Err)
+		}
+		payload = append(payload, chunk.Payload...)
+	}
+	if string(payload) != fastAuth.ID {
+		t.Fatalf("expected failover to fast auth, got %q", string(payload))
+	}
+
+	calls := executor.StreamCalls()
+	if len(calls) < 2 || calls[0] != slowAuth.ID || calls[1] != fastAuth.ID {
+		t.Fatalf("expected stream calls [%s %s], got %v", slowAuth.ID, fastAuth.ID, calls)
+	}
+
+	updatedSlow, ok := m.GetByID(slowAuth.ID)
+	if !ok || updatedSlow == nil {
+		t.Fatalf("expected slow auth to be present")
+	}
+	state := updatedSlow.ModelStates[model]
+	if state == nil {
+		t.Fatalf("expected slow auth model state")
+	}
+	if !state.Unavailable {
+		t.Fatalf("expected slow auth to enter cooldown after bootstrap timeout")
+	}
+}
+
+func TestManager_MarkResult_HealthySuccessRecoversDegradedAPIKeyAuth(t *testing.T) {
+	m := NewManager(nil, nil, nil)
+
+	apiKeyAuth := &Auth{
+		ID:         "api-key-auth-recover",
+		Provider:   "codex",
+		Attributes: map[string]string{"api_key": "k"},
+	}
+	if _, errRegister := m.Register(context.Background(), apiKeyAuth); errRegister != nil {
+		t.Fatalf("register api_key auth: %v", errRegister)
+	}
+
+	model := "gpt-5"
+	m.MarkResult(context.Background(), Result{
+		AuthID:               apiKeyAuth.ID,
+		Provider:             apiKeyAuth.Provider,
+		Model:                model,
+		Success:              true,
+		FirstActivityLatency: providerHealthBootstrapTimeout,
+		CompletedLatency:     providerHealthBootstrapTimeout,
+	})
+	m.MarkResult(context.Background(), Result{
+		AuthID:               apiKeyAuth.ID,
+		Provider:             apiKeyAuth.Provider,
+		Model:                model,
+		Success:              true,
+		FirstActivityLatency: providerHealthBootstrapTimeout,
+		CompletedLatency:     providerHealthBootstrapTimeout,
+	})
+
+	degradedAuth, ok := m.GetByID(apiKeyAuth.ID)
+	if !ok || degradedAuth == nil {
+		t.Fatalf("expected auth after degraded state")
+	}
+	degradedState := degradedAuth.ModelStates[model]
+	if degradedState == nil || !degradedState.Unavailable || degradedState.StatusMessage != "provider degraded" {
+		t.Fatalf("expected model to enter provider degraded state, got %+v", degradedState)
+	}
+
+	m.MarkResult(context.Background(), Result{
+		AuthID:               apiKeyAuth.ID,
+		Provider:             apiKeyAuth.Provider,
+		Model:                model,
+		Success:              true,
+		FirstActivityLatency: 100 * time.Millisecond,
+		CompletedLatency:     300 * time.Millisecond,
+	})
+
+	recoveredAuth, ok := m.GetByID(apiKeyAuth.ID)
+	if !ok || recoveredAuth == nil {
+		t.Fatalf("expected auth after recovery")
+	}
+	recoveredState := recoveredAuth.ModelStates[model]
+	if recoveredState == nil {
+		t.Fatalf("expected model state after recovery")
+	}
+	if recoveredState.Unavailable {
+		t.Fatalf("expected recovered model to be available")
+	}
+	if recoveredState.Status != StatusActive {
+		t.Fatalf("expected recovered model status active, got %v", recoveredState.Status)
+	}
+	if recoveredState.StatusMessage != "" {
+		t.Fatalf("expected cleared status message after recovery, got %q", recoveredState.StatusMessage)
+	}
+	if recoveredState.Health.BackoffLevel != 0 {
+		t.Fatalf("expected health backoff to reset after recovery, got %d", recoveredState.Health.BackoffLevel)
 	}
 }

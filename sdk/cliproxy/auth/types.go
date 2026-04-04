@@ -107,6 +107,22 @@ type QuotaState struct {
 	BackoffLevel int `json:"backoff_level,omitempty"`
 }
 
+// ProviderHealthState tracks slow or unstable provider behaviour for a model.
+type ProviderHealthState struct {
+	// Score accumulates recent slow-response penalties and decays on healthy requests.
+	Score int `json:"score,omitempty"`
+	// BackoffLevel tracks progressive cooldown level for degraded provider behaviour.
+	BackoffLevel int `json:"backoff_level,omitempty"`
+	// LastFirstActivityMs stores the most recent first-activity latency in milliseconds.
+	LastFirstActivityMs int64 `json:"last_first_activity_ms,omitempty"`
+	// LastCompletedMs stores the most recent completion latency in milliseconds.
+	LastCompletedMs int64 `json:"last_completed_ms,omitempty"`
+	// SlowStarts counts observed slow first-activity events in the current streak.
+	SlowStarts int `json:"slow_starts,omitempty"`
+	// SlowCompletions counts observed slow completion events when no first-activity metric exists.
+	SlowCompletions int `json:"slow_completions,omitempty"`
+}
+
 // ModelState captures the execution state for a specific model under an auth entry.
 type ModelState struct {
 	// Status reflects the lifecycle status for this model.
@@ -121,6 +137,8 @@ type ModelState struct {
 	LastError *Error `json:"last_error,omitempty"`
 	// Quota retains quota information if this model hit rate limits.
 	Quota QuotaState `json:"quota"`
+	// Health retains slow-response and instability tracking for provider API-key auths.
+	Health ProviderHealthState `json:"health,omitempty"`
 	// UpdatedAt tracks the last update timestamp for this model state.
 	UpdatedAt time.Time `json:"updated_at"`
 }

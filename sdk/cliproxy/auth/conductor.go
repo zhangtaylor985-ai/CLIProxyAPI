@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/alerting"
 	internalconfig "github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
@@ -68,6 +69,19 @@ const (
 	fastRecoveryBackoffMax = 2 * time.Minute
 )
 
+var (
+	providerHealthBootstrapTimeout        = 60 * time.Second
+	providerHealthSlowStartThreshold      = 45 * time.Second
+	providerHealthSlowCompletionThreshold = 90 * time.Second
+	providerHealthScoreThreshold          = 2
+	providerHealthCooldownSchedule        = []time.Duration{
+		5 * time.Minute,
+		15 * time.Minute,
+		30 * time.Minute,
+		60 * time.Minute,
+	}
+)
+
 var quotaCooldownDisabled atomic.Bool
 
 // SetQuotaCooldownDisabled toggles quota cooldown scheduling globally.
@@ -96,6 +110,10 @@ type Result struct {
 	Success bool
 	// RetryAfter carries a provider supplied retry hint (e.g. 429 retryDelay).
 	RetryAfter *time.Duration
+	// FirstActivityLatency records time to the first upstream payload/tool event for streaming requests.
+	FirstActivityLatency time.Duration
+	// CompletedLatency records total execution time for the attempt.
+	CompletedLatency time.Duration
 	// Error describes the failure when Success is false.
 	Error *Error
 }
@@ -329,6 +347,120 @@ func isOpenAICompatAPIKeyAuth(auth *Auth) bool {
 	return strings.TrimSpace(auth.Attributes["compat_name"]) != ""
 }
 
+func providerHealthPolicyApplies(auth *Auth) bool {
+	return isAPIKeyAuth(auth)
+}
+
+func providerBootstrapTimeoutForAuth(auth *Auth) time.Duration {
+	if !providerHealthPolicyApplies(auth) {
+		return 0
+	}
+	return providerHealthBootstrapTimeout
+}
+
+func normalizeDuration(duration time.Duration) time.Duration {
+	if duration < 0 {
+		return 0
+	}
+	return duration
+}
+
+func nextProviderHealthCooldown(prevLevel int) (time.Duration, int) {
+	if len(providerHealthCooldownSchedule) == 0 {
+		return 0, prevLevel
+	}
+	if prevLevel < 0 {
+		prevLevel = 0
+	}
+	if prevLevel >= len(providerHealthCooldownSchedule) {
+		prevLevel = len(providerHealthCooldownSchedule) - 1
+	}
+	cooldown := providerHealthCooldownSchedule[prevLevel]
+	nextLevel := prevLevel + 1
+	if nextLevel > len(providerHealthCooldownSchedule) {
+		nextLevel = len(providerHealthCooldownSchedule)
+	}
+	return cooldown, nextLevel
+}
+
+func providerHealthCooldownForBackoffLevel(level int) time.Duration {
+	if len(providerHealthCooldownSchedule) == 0 || level <= 0 {
+		return 0
+	}
+	index := level - 1
+	if index >= len(providerHealthCooldownSchedule) {
+		index = len(providerHealthCooldownSchedule) - 1
+	}
+	return providerHealthCooldownSchedule[index]
+}
+
+func applyProviderHealthSuccess(auth *Auth, state *ModelState, result Result, now time.Time) bool {
+	if !providerHealthPolicyApplies(auth) || state == nil {
+		return false
+	}
+
+	firstActivity := normalizeDuration(result.FirstActivityLatency)
+	completed := normalizeDuration(result.CompletedLatency)
+
+	health := &state.Health
+	if firstActivity > 0 {
+		health.LastFirstActivityMs = firstActivity.Milliseconds()
+	}
+	if completed > 0 {
+		health.LastCompletedMs = completed.Milliseconds()
+	}
+
+	slowSignal := false
+	scoreDelta := 0
+
+	if firstActivity > 0 {
+		if firstActivity >= providerHealthBootstrapTimeout {
+			slowSignal = true
+			scoreDelta = 2
+			health.SlowStarts++
+		} else if firstActivity >= providerHealthSlowStartThreshold {
+			slowSignal = true
+			scoreDelta = 1
+			health.SlowStarts++
+		}
+	} else if completed >= providerHealthSlowCompletionThreshold {
+		slowSignal = true
+		scoreDelta = 1
+		health.SlowCompletions++
+	}
+
+	if slowSignal {
+		health.Score += scoreDelta
+	} else if health.Score > 0 {
+		health.Score--
+	}
+
+	if !slowSignal && health.Score == 0 {
+		health.BackoffLevel = 0
+		health.SlowStarts = 0
+		health.SlowCompletions = 0
+		return false
+	}
+
+	if health.Score < providerHealthScoreThreshold {
+		return false
+	}
+
+	cooldown, nextLevel := nextProviderHealthCooldown(health.BackoffLevel)
+	if cooldown <= 0 {
+		return false
+	}
+
+	health.Score = 0
+	health.BackoffLevel = nextLevel
+	state.Unavailable = true
+	state.Status = StatusError
+	state.StatusMessage = "provider degraded"
+	state.NextRetryAfter = now.Add(cooldown)
+	state.UpdatedAt = now
+	return true
+}
+
 func openAICompatProviderKey(auth *Auth) string {
 	if auth == nil {
 		return ""
@@ -541,9 +673,9 @@ func streamErrorResult(headers http.Header, err error) *cliproxyexecutor.StreamR
 	}
 }
 
-func readStreamBootstrap(ctx context.Context, ch <-chan cliproxyexecutor.StreamChunk) ([]cliproxyexecutor.StreamChunk, bool, error) {
+func readStreamBootstrap(ctx context.Context, ch <-chan cliproxyexecutor.StreamChunk, startedAt time.Time) ([]cliproxyexecutor.StreamChunk, bool, time.Duration, error) {
 	if ch == nil {
-		return nil, true, nil
+		return nil, true, 0, nil
 	}
 	buffered := make([]cliproxyexecutor.StreamChunk, 0, 1)
 	for {
@@ -554,28 +686,29 @@ func readStreamBootstrap(ctx context.Context, ch <-chan cliproxyexecutor.StreamC
 		if ctx != nil {
 			select {
 			case <-ctx.Done():
-				return nil, false, ctx.Err()
+				return nil, false, 0, ctx.Err()
 			case chunk, ok = <-ch:
 			}
 		} else {
 			chunk, ok = <-ch
 		}
 		if !ok {
-			return buffered, true, nil
+			return buffered, true, 0, nil
 		}
 		if chunk.Err != nil {
-			return nil, false, chunk.Err
+			return nil, false, 0, chunk.Err
 		}
 		buffered = append(buffered, chunk)
 		if len(chunk.Payload) > 0 {
-			return buffered, false, nil
+			return buffered, false, normalizeDuration(time.Since(startedAt)), nil
 		}
 	}
 }
 
-func (m *Manager) wrapStreamResult(ctx context.Context, auth *Auth, provider, resultModel string, headers http.Header, buffered []cliproxyexecutor.StreamChunk, remaining <-chan cliproxyexecutor.StreamChunk) *cliproxyexecutor.StreamResult {
+func (m *Manager) wrapStreamResult(ctx context.Context, auth *Auth, provider, resultModel string, headers http.Header, buffered []cliproxyexecutor.StreamChunk, remaining <-chan cliproxyexecutor.StreamChunk, startedAt time.Time, firstActivityLatency time.Duration, done func()) *cliproxyexecutor.StreamResult {
 	out := make(chan cliproxyexecutor.StreamChunk)
 	go func() {
+		defer done()
 		defer close(out)
 		var failed bool
 		forward := true
@@ -586,7 +719,15 @@ func (m *Manager) wrapStreamResult(ctx context.Context, auth *Auth, provider, re
 				if se, ok := errors.AsType[cliproxyexecutor.StatusError](chunk.Err); ok && se != nil {
 					rerr.HTTPStatus = se.StatusCode()
 				}
-				m.MarkResult(ctx, Result{AuthID: auth.ID, Provider: provider, Model: resultModel, Success: false, Error: rerr})
+				m.MarkResult(ctx, Result{
+					AuthID:               auth.ID,
+					Provider:             provider,
+					Model:                resultModel,
+					Success:              false,
+					FirstActivityLatency: firstActivityLatency,
+					CompletedLatency:     normalizeDuration(time.Since(startedAt)),
+					Error:                rerr,
+				})
 			}
 			if !forward {
 				return false
@@ -616,7 +757,14 @@ func (m *Manager) wrapStreamResult(ctx context.Context, auth *Auth, provider, re
 			}
 		}
 		if !failed {
-			m.MarkResult(ctx, Result{AuthID: auth.ID, Provider: provider, Model: resultModel, Success: true})
+			m.MarkResult(ctx, Result{
+				AuthID:               auth.ID,
+				Provider:             provider,
+				Model:                resultModel,
+				Success:              true,
+				FirstActivityLatency: firstActivityLatency,
+				CompletedLatency:     normalizeDuration(time.Since(startedAt)),
+			})
 		}
 	}()
 	return &cliproxyexecutor.StreamResult{Headers: headers, Chunks: out}
@@ -631,8 +779,16 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 		resultModel := executionResultModel(routeModel, execModel, pooled)
 		execReq := req
 		execReq.Model = execModel
-		streamResult, errStream := executor.ExecuteStream(ctx, auth, execReq, opts)
+		attemptCtx := ctx
+		cancelAttempt := func() {}
+		bootstrapTimeout := providerBootstrapTimeoutForAuth(auth)
+		if bootstrapTimeout > 0 {
+			attemptCtx, cancelAttempt = context.WithCancel(ctx)
+		}
+		startedAt := time.Now()
+		streamResult, errStream := executor.ExecuteStream(attemptCtx, auth, execReq, opts)
 		if errStream != nil {
+			cancelAttempt()
 			if errCtx := ctx.Err(); errCtx != nil {
 				return nil, errCtx
 			}
@@ -650,11 +806,26 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 			continue
 		}
 
-		buffered, closed, bootstrapErr := readStreamBootstrap(ctx, streamResult.Chunks)
+		bootstrapCtx := ctx
+		cancelBootstrap := func() {}
+		if bootstrapTimeout > 0 {
+			bootstrapCtx, cancelBootstrap = context.WithTimeout(ctx, bootstrapTimeout)
+		}
+		buffered, closed, firstActivityLatency, bootstrapErr := readStreamBootstrap(bootstrapCtx, streamResult.Chunks, startedAt)
+		cancelBootstrap()
 		if bootstrapErr != nil {
+			cancelAttempt()
 			if errCtx := ctx.Err(); errCtx != nil {
 				discardStreamChunks(streamResult.Chunks)
 				return nil, errCtx
+			}
+			if errors.Is(bootstrapErr, context.DeadlineExceeded) {
+				bootstrapErr = &Error{
+					Code:       "provider_first_activity_timeout",
+					Message:    "provider first activity timeout",
+					Retryable:  true,
+					HTTPStatus: http.StatusRequestTimeout,
+				}
 			}
 			if isRequestInvalidError(bootstrapErr) {
 				rerr := &Error{Message: bootstrapErr.Error()}
@@ -691,6 +862,7 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 		}
 
 		if closed && len(buffered) == 0 {
+			cancelAttempt()
 			emptyErr := &Error{Code: "empty_stream", Message: "upstream stream closed before first payload", Retryable: true}
 			result := Result{AuthID: auth.ID, Provider: provider, Model: resultModel, Success: false, Error: emptyErr}
 			m.MarkResult(ctx, result)
@@ -707,7 +879,7 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 			close(closedCh)
 			remaining = closedCh
 		}
-		return m.wrapStreamResult(ctx, auth.Clone(), provider, resultModel, streamResult.Headers, buffered, remaining), nil
+		return m.wrapStreamResult(ctx, auth.Clone(), provider, resultModel, streamResult.Headers, buffered, remaining, startedAt, firstActivityLatency, cancelAttempt), nil
 	}
 	if lastErr == nil {
 		lastErr = &Error{Code: "auth_not_found", Message: "no upstream model available"}
@@ -1073,6 +1245,7 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 	tried := make(map[string]struct{})
 	attempted := make(map[string]struct{})
 	var lastErr error
+	var pendingAlert *alerting.ProviderEvent
 	for {
 		if maxRetryCredentials > 0 && len(attempted) >= maxRetryCredentials {
 			if lastErr != nil {
@@ -1086,6 +1259,13 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 				return cliproxyexecutor.Response{}, lastErr
 			}
 			return cliproxyexecutor.Response{}, errPick
+		}
+		if pendingAlert != nil && pendingAlert.AuthID != auth.ID {
+			pendingAlert.SwitchedToProvider = providerAlertProviderName(auth)
+			pendingAlert.SwitchedToAuthID = auth.ID
+			pendingAlert.SwitchedToAuthIndex = auth.EnsureIndex()
+			alerting.NotifyProviderEvent(*pendingAlert)
+			pendingAlert = nil
 		}
 
 		entry := logEntryWithRequestID(ctx)
@@ -1109,8 +1289,15 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 			resultModel := executionResultModel(routeModel, upstreamModel, pooled)
 			execReq := req
 			execReq.Model = upstreamModel
+			startedAt := time.Now()
 			resp, errExec := executor.Execute(execCtx, auth, execReq, opts)
-			result := Result{AuthID: auth.ID, Provider: provider, Model: resultModel, Success: errExec == nil}
+			result := Result{
+				AuthID:           auth.ID,
+				Provider:         provider,
+				Model:            resultModel,
+				Success:          errExec == nil,
+				CompletedLatency: normalizeDuration(time.Since(startedAt)),
+			}
 			if errExec != nil {
 				if errCtx := execCtx.Err(); errCtx != nil {
 					return cliproxyexecutor.Response{}, errCtx
@@ -1129,12 +1316,24 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 				authErr = errExec
 				continue
 			}
+			pendingAlert = nil
 			m.MarkResult(execCtx, result)
 			return resp, nil
 		}
 		if authErr != nil {
 			if isRequestInvalidError(authErr) {
 				return cliproxyexecutor.Response{}, authErr
+			}
+			if providerAlertAppliesToError(auth, authErr) {
+				alertCtx := m.providerAlertContext(auth.ID, routeModel, Result{
+					Model:                routeModel,
+					FirstActivityLatency: 0,
+					CompletedLatency:     0,
+				})
+				event := providerAlertEventFromContext(ctx, "failover", alertCtx, authErr)
+				pendingAlert = &event
+			} else {
+				pendingAlert = nil
 			}
 			lastErr = authErr
 			continue
@@ -1151,6 +1350,7 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 	tried := make(map[string]struct{})
 	attempted := make(map[string]struct{})
 	var lastErr error
+	var pendingAlert *alerting.ProviderEvent
 	for {
 		if maxRetryCredentials > 0 && len(attempted) >= maxRetryCredentials {
 			if lastErr != nil {
@@ -1164,6 +1364,13 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 				return cliproxyexecutor.Response{}, lastErr
 			}
 			return cliproxyexecutor.Response{}, errPick
+		}
+		if pendingAlert != nil && pendingAlert.AuthID != auth.ID {
+			pendingAlert.SwitchedToProvider = providerAlertProviderName(auth)
+			pendingAlert.SwitchedToAuthID = auth.ID
+			pendingAlert.SwitchedToAuthIndex = auth.EnsureIndex()
+			alerting.NotifyProviderEvent(*pendingAlert)
+			pendingAlert = nil
 		}
 
 		entry := logEntryWithRequestID(ctx)
@@ -1187,8 +1394,15 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 			resultModel := executionResultModel(routeModel, upstreamModel, pooled)
 			execReq := req
 			execReq.Model = upstreamModel
+			startedAt := time.Now()
 			resp, errExec := executor.CountTokens(execCtx, auth, execReq, opts)
-			result := Result{AuthID: auth.ID, Provider: provider, Model: resultModel, Success: errExec == nil}
+			result := Result{
+				AuthID:           auth.ID,
+				Provider:         provider,
+				Model:            resultModel,
+				Success:          errExec == nil,
+				CompletedLatency: normalizeDuration(time.Since(startedAt)),
+			}
 			if errExec != nil {
 				if errCtx := execCtx.Err(); errCtx != nil {
 					return cliproxyexecutor.Response{}, errCtx
@@ -1207,12 +1421,20 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 				authErr = errExec
 				continue
 			}
+			pendingAlert = nil
 			m.MarkResult(execCtx, result)
 			return resp, nil
 		}
 		if authErr != nil {
 			if isRequestInvalidError(authErr) {
 				return cliproxyexecutor.Response{}, authErr
+			}
+			if providerAlertAppliesToError(auth, authErr) {
+				alertCtx := m.providerAlertContext(auth.ID, routeModel, Result{Model: routeModel})
+				event := providerAlertEventFromContext(ctx, "failover", alertCtx, authErr)
+				pendingAlert = &event
+			} else {
+				pendingAlert = nil
 			}
 			lastErr = authErr
 			continue
@@ -1229,6 +1451,7 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 	tried := make(map[string]struct{})
 	attempted := make(map[string]struct{})
 	var lastErr error
+	var pendingAlert *alerting.ProviderEvent
 	for {
 		if maxRetryCredentials > 0 && len(attempted) >= maxRetryCredentials {
 			if lastErr != nil {
@@ -1250,6 +1473,13 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 				return nil, lastErr
 			}
 			return nil, errPick
+		}
+		if pendingAlert != nil && pendingAlert.AuthID != auth.ID {
+			pendingAlert.SwitchedToProvider = providerAlertProviderName(auth)
+			pendingAlert.SwitchedToAuthID = auth.ID
+			pendingAlert.SwitchedToAuthIndex = auth.EnsureIndex()
+			alerting.NotifyProviderEvent(*pendingAlert)
+			pendingAlert = nil
 		}
 
 		entry := logEntryWithRequestID(ctx)
@@ -1275,9 +1505,17 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 			if isRequestInvalidError(errStream) {
 				return nil, errStream
 			}
+			if providerAlertAppliesToError(auth, errStream) {
+				alertCtx := m.providerAlertContext(auth.ID, routeModel, Result{Model: routeModel})
+				event := providerAlertEventFromContext(ctx, "failover", alertCtx, errStream)
+				pendingAlert = &event
+			} else {
+				pendingAlert = nil
+			}
 			lastErr = errStream
 			continue
 		}
+		pendingAlert = nil
 		return streamResult, nil
 	}
 }
@@ -1698,6 +1936,109 @@ func waitForCooldown(ctx context.Context, wait time.Duration) error {
 	}
 }
 
+type providerAlertContext struct {
+	Provider             string
+	AuthID               string
+	AuthIndex            string
+	AuthLabel            string
+	Model                string
+	Cooldown             time.Duration
+	FirstActivityLatency time.Duration
+	CompletedLatency     time.Duration
+}
+
+func providerAlertAppliesToError(auth *Auth, err error) bool {
+	if !providerHealthPolicyApplies(auth) || err == nil {
+		return false
+	}
+	var bootstrapErr *streamBootstrapError
+	if errors.As(err, &bootstrapErr) && bootstrapErr != nil && bootstrapErr.cause != nil {
+		err = bootstrapErr.cause
+	}
+	statusCode := normalizeProviderFailureStatusCode(statusCodeFromError(err), err.Error())
+	switch statusCode {
+	case 0, 408, 500, 502, 503, 504:
+		return true
+	default:
+		return false
+	}
+}
+
+func (m *Manager) providerAlertContext(authID, model string, result Result) providerAlertContext {
+	ctx := providerAlertContext{
+		AuthID:               strings.TrimSpace(authID),
+		Model:                strings.TrimSpace(model),
+		FirstActivityLatency: normalizeDuration(result.FirstActivityLatency),
+		CompletedLatency:     normalizeDuration(result.CompletedLatency),
+	}
+	auth, ok := m.GetByID(authID)
+	if !ok || auth == nil {
+		return ctx
+	}
+	ctx.AuthIndex = auth.EnsureIndex()
+	ctx.AuthLabel = strings.TrimSpace(auth.Label)
+	ctx.Provider = strings.TrimSpace(providerAlertProviderName(auth))
+	if ctx.Model == "" {
+		ctx.Model = strings.TrimSpace(result.Model)
+	}
+	if modelState := auth.ModelStates[ctx.Model]; modelState != nil && !modelState.NextRetryAfter.IsZero() {
+		if wait := time.Until(modelState.NextRetryAfter); wait > 0 {
+			ctx.Cooldown = normalizeDuration(wait)
+		}
+	}
+	if ctx.Cooldown <= 0 && !auth.NextRetryAfter.IsZero() {
+		if wait := time.Until(auth.NextRetryAfter); wait > 0 {
+			ctx.Cooldown = normalizeDuration(wait)
+		}
+	}
+	return ctx
+}
+
+func providerAlertProviderName(auth *Auth) string {
+	if auth == nil {
+		return ""
+	}
+	if compatName := strings.TrimSpace(auth.Attributes["compat_name"]); compatName != "" {
+		return compatName
+	}
+	if providerKey := strings.TrimSpace(auth.Attributes["provider_key"]); providerKey != "" {
+		return providerKey
+	}
+	return auth.Provider
+}
+
+func providerAlertEventFromContext(ctx context.Context, kind string, alertCtx providerAlertContext, err error) alerting.ProviderEvent {
+	event := alerting.ProviderEvent{
+		Kind:                 kind,
+		Provider:             alertCtx.Provider,
+		AuthID:               alertCtx.AuthID,
+		AuthIndex:            alertCtx.AuthIndex,
+		AuthLabel:            alertCtx.AuthLabel,
+		Model:                alertCtx.Model,
+		RequestID:            logging.GetRequestID(ctx),
+		Cooldown:             alertCtx.Cooldown,
+		FirstActivityLatency: alertCtx.FirstActivityLatency,
+		CompletedLatency:     alertCtx.CompletedLatency,
+	}
+	if err != nil {
+		event.ErrorMessage = err.Error()
+		event.HTTPStatus = normalizeProviderFailureStatusCode(statusCodeFromError(err), err.Error())
+		var authErr *Error
+		if errors.As(err, &authErr) && authErr != nil {
+			event.ErrorCode = authErr.Code
+		}
+		if event.ErrorCode == "" {
+			var bootstrapErr *streamBootstrapError
+			if errors.As(err, &bootstrapErr) && bootstrapErr != nil && bootstrapErr.cause != nil {
+				if errors.As(bootstrapErr.cause, &authErr) && authErr != nil {
+					event.ErrorCode = authErr.Code
+				}
+			}
+		}
+	}
+	return event
+}
+
 // MarkResult records an execution result and notifies hooks.
 func (m *Manager) MarkResult(ctx context.Context, result Result) {
 	if result.AuthID == "" {
@@ -1710,6 +2051,7 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 	clearModelQuota := false
 	setModelQuota := false
 	var authSnapshot *Auth
+	var providerEvent *alerting.ProviderEvent
 
 	m.mu.Lock()
 	if auth, ok := m.auths[result.AuthID]; ok && auth != nil {
@@ -1718,15 +2060,54 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 		if result.Success {
 			if result.Model != "" {
 				state := ensureModelState(auth, result.Model)
+				wasDegraded := wasProviderDegraded(state)
+				recoveredFromCooldown := providerHealthCooldownForBackoffLevel(state.Health.BackoffLevel)
 				resetModelState(state, now)
+				degraded := applyProviderHealthSuccess(auth, state, result, now)
 				updateAggregatedAvailability(auth, now)
-				if !hasModelError(auth, now) {
+				if degraded {
+					auth.LastError = nil
+					auth.Status = StatusError
+					auth.StatusMessage = state.StatusMessage
+					alertCtx := providerAlertContext{
+						Provider:             strings.TrimSpace(providerAlertProviderName(auth)),
+						AuthID:               auth.ID,
+						AuthIndex:            auth.EnsureIndex(),
+						AuthLabel:            strings.TrimSpace(auth.Label),
+						Model:                result.Model,
+						Cooldown:             recoveredFromCooldown,
+						FirstActivityLatency: normalizeDuration(result.FirstActivityLatency),
+						CompletedLatency:     normalizeDuration(result.CompletedLatency),
+					}
+					if !state.NextRetryAfter.IsZero() {
+						if wait := state.NextRetryAfter.Sub(now); wait > 0 {
+							alertCtx.Cooldown = normalizeDuration(wait)
+						}
+					}
+					event := providerAlertEventFromContext(ctx, "degraded", alertCtx, nil)
+					providerEvent = &event
+				} else if wasDegraded {
+					auth.LastError = nil
+					auth.StatusMessage = ""
+					auth.Status = StatusActive
+					alertCtx := providerAlertContext{
+						Provider:             strings.TrimSpace(providerAlertProviderName(auth)),
+						AuthID:               auth.ID,
+						AuthIndex:            auth.EnsureIndex(),
+						AuthLabel:            strings.TrimSpace(auth.Label),
+						Model:                result.Model,
+						FirstActivityLatency: normalizeDuration(result.FirstActivityLatency),
+						CompletedLatency:     normalizeDuration(result.CompletedLatency),
+					}
+					event := providerAlertEventFromContext(ctx, "recovered", alertCtx, nil)
+					providerEvent = &event
+				} else if !hasModelError(auth, now) {
 					auth.LastError = nil
 					auth.StatusMessage = ""
 					auth.Status = StatusActive
 				}
 				auth.UpdatedAt = now
-				shouldResumeModel = true
+				shouldResumeModel = !degraded
 				clearModelQuota = true
 			} else {
 				clearAuthStateOnSuccess(auth, now)
@@ -1848,6 +2229,9 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 	} else if shouldSuspendModel {
 		registry.GetGlobalRegistry().SuspendClientModel(result.AuthID, result.Model, suspendReason)
 	}
+	if providerEvent != nil {
+		alerting.NotifyProviderEvent(*providerEvent)
+	}
 
 	m.hook.OnResult(ctx, result)
 }
@@ -1865,6 +2249,19 @@ func ensureModelState(auth *Auth, model string) *ModelState {
 	state := &ModelState{Status: StatusActive}
 	auth.ModelStates[model] = state
 	return state
+}
+
+func wasProviderDegraded(state *ModelState) bool {
+	if state == nil {
+		return false
+	}
+	if state.Unavailable && state.StatusMessage == "provider degraded" {
+		return true
+	}
+	if state.Status == StatusError && state.StatusMessage == "provider degraded" {
+		return true
+	}
+	return false
 }
 
 func resetModelState(state *ModelState, now time.Time) {
