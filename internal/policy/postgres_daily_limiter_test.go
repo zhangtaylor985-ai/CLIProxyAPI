@@ -103,6 +103,20 @@ func TestAnchoredWindowBounds_UsesAnchorHour(t *testing.T) {
 	}
 }
 
+func TestAnchoredWindowBoundsFloor_PreAnchorUsesPreviousWindow(t *testing.T) {
+	anchor, ok := ParseHourlyAnchorRFC3339("2026-04-02T10:00:00+08:00")
+	if !ok {
+		t.Fatal("expected anchor to parse")
+	}
+	start, end := AnchoredWindowBoundsFloor(anchor, time.Date(2026, 3, 31, 12, 0, 0, 0, ChinaLocation()), 7*24*time.Hour)
+	if got := start.Format(time.RFC3339); got != "2026-03-26T10:00:00+08:00" {
+		t.Fatalf("start=%s", got)
+	}
+	if got := end.Format(time.RFC3339); got != "2026-04-02T10:00:00+08:00" {
+		t.Fatalf("end=%s", got)
+	}
+}
+
 func newPostgresLimiterTestSchema(t *testing.T) (dsn string, schema string, cleanup func()) {
 	t.Helper()
 

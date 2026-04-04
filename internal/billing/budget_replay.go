@@ -28,6 +28,7 @@ func ComputeBudgetReplayState(ctx context.Context, store UsageEventReader, apiKe
 	dayStart, dayEnd := dayBoundsAt(asOf)
 	weekStart, weekEnd := p.WeeklyBudgetBounds(asOf)
 	packageStart, packageEnabled := p.TokenPackageStartTime()
+	weeklyAnchor, anchoredWeeklyBudget := policy.ParseHourlyAnchorRFC3339(p.WeeklyBudgetAnchorAt)
 	packageBudgetMicro := int64(p.TokenPackageUSD*1_000_000 + 0.5)
 	dailyBudgetMicro := int64(p.DailyBudgetUSD*1_000_000 + 0.5)
 	weeklyBudgetMicro := int64(p.WeeklyBudgetUSD*1_000_000 + 0.5)
@@ -51,6 +52,9 @@ func ComputeBudgetReplayState(ctx context.Context, store UsageEventReader, apiKe
 		ts := time.Unix(event.RequestedAt, 0)
 		dayKey := policy.DayKeyChina(ts)
 		evtWeekStart, _ := p.WeeklyBudgetBounds(ts)
+		if anchoredWeeklyBudget {
+			evtWeekStart, _ = policy.AnchoredWindowBoundsFloor(weeklyAnchor, ts, 7*24*time.Hour)
+		}
 		weekKey := evtWeekStart.Unix()
 
 		baseCovered := event.CostMicroUSD

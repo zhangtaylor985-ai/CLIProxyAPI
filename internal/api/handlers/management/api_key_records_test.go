@@ -121,6 +121,103 @@ func TestQueryAPIKeyInsightsFiltersInvalidKeys(t *testing.T) {
 	}
 }
 
+func TestQueryAPIKeyInsightsWithoutBillingStoreReturnsBadRequest(t *testing.T) {
+	t.Parallel()
+	gin.SetMode(gin.TestMode)
+
+	handler := &Handler{
+		cfg: &config.Config{
+			SDKConfig: sdkconfig.SDKConfig{APIKeys: []string{"k-valid"}},
+		},
+	}
+
+	payload := []byte(`{"api_keys":["k-valid"],"range":"14d"}`)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	req := httptest.NewRequest(http.MethodPost, "/v0/api-key-insights/query", bytes.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	ctx.Request = req
+
+	handler.QueryAPIKeyInsights(ctx)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	if body := recorder.Body.String(); body != "{\"error\":\"billing store unavailable\"}" {
+		t.Fatalf("body = %s, want billing store unavailable", body)
+	}
+}
+
+func TestAPIKeyRecordSummary_AnchoredWindowUsesExactPeriodAndIgnoresPreAnchorBudgetReplay(t *testing.T) {
+	t.Parallel()
+	gin.SetMode(gin.TestMode)
+
+	handler, cleanup := newAPIKeyRecordsTestHandler(t, &config.Config{
+		SDKConfig: sdkconfig.SDKConfig{APIKeys: []string{"k1"}},
+		APIKeyPolicies: []config.APIKeyPolicy{
+			{
+				APIKey:                "k1",
+				DailyBudgetUSD:        150,
+				WeeklyBudgetUSD:       500,
+				WeeklyBudgetAnchorAt:  "2026-04-02T10:00:00+08:00",
+				TokenPackageUSD:       50,
+				TokenPackageStartedAt: "2026-03-26T16:01:00+08:00",
+			},
+		},
+	})
+	defer cleanup()
+
+	now := time.Date(2026, 4, 3, 12, 0, 0, 0, policy.ChinaLocation())
+	seedCases := []struct {
+		at    time.Time
+		cost  int64
+		token int64
+	}{
+		{at: time.Date(2026, 3, 27, 12, 0, 0, 0, policy.ChinaLocation()), cost: 150_000_000, token: 1000},
+		{at: time.Date(2026, 3, 28, 12, 0, 0, 0, policy.ChinaLocation()), cost: 150_000_000, token: 1000},
+		{at: time.Date(2026, 3, 29, 12, 0, 0, 0, policy.ChinaLocation()), cost: 150_000_000, token: 1000},
+		{at: time.Date(2026, 3, 30, 12, 0, 0, 0, policy.ChinaLocation()), cost: 150_000_000, token: 1000},
+		{at: time.Date(2026, 4, 2, 8, 0, 0, 0, policy.ChinaLocation()), cost: 20_000_000, token: 1000},
+		{at: time.Date(2026, 4, 2, 12, 0, 0, 0, policy.ChinaLocation()), cost: 100_000_000, token: 1000},
+	}
+	for _, item := range seedCases {
+		if err := seedUsage(t, handler, "k1", "gpt-5.4", item.at, item.cost, item.token); err != nil {
+			t.Fatalf("seedUsage(%s): %v", item.at.Format(time.RFC3339), err)
+		}
+	}
+
+	summary, err := handler.buildAPIKeySummary(context.Background(), "k1", now, 14)
+	if err != nil {
+		t.Fatalf("buildAPIKeySummary: %v", err)
+	}
+	if got := summary.CurrentPeriod.CostUSD; got != 100 {
+		t.Fatalf("current period cost = %v, want 100", got)
+	}
+	if got := summary.CurrentPeriod.Requests; got != 1 {
+		t.Fatalf("current period requests = %d, want 1", got)
+	}
+	if got := summary.WeeklyBudget.UsedUSD; got != 100 {
+		t.Fatalf("weekly budget used = %v, want 100", got)
+	}
+	if got := summary.WeeklyBudget.UsedPercent; got != 20 {
+		t.Fatalf("weekly budget used percent = %v, want 20", got)
+	}
+
+	detail, err := handler.buildAPIKeyRecordDetail(context.Background(), "k1", now, 14, 20)
+	if err != nil {
+		t.Fatalf("buildAPIKeyRecordDetail: %v", err)
+	}
+	if got := detail.CurrentPeriod.CostUSD; got != 100 {
+		t.Fatalf("detail current period cost = %v, want 100", got)
+	}
+	if got := detail.CurrentPeriod.Requests; got != 1 {
+		t.Fatalf("detail current period requests = %d, want 1", got)
+	}
+	if len(detail.ModelUsage) != 1 || detail.ModelUsage[0].CostUSD != 100 {
+		t.Fatalf("model usage = %+v, want one exact current-period model row", detail.ModelUsage)
+	}
+}
+
 func newAPIKeyRecordsTestHandler(t *testing.T, cfg *config.Config) (*Handler, func()) {
 	t.Helper()
 	return newPostgresManagementTestHandler(t, cfg)

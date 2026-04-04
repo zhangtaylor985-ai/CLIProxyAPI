@@ -163,7 +163,18 @@ type apiKeyQueryRequest struct {
 	Range   string   `json:"range"`
 }
 
+func (h *Handler) billingStoreAvailable(c *gin.Context) bool {
+	if h == nil || h.billingStore == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "billing store unavailable"})
+		return false
+	}
+	return true
+}
+
 func (h *Handler) ListAPIKeyRecords(c *gin.Context) {
+	if !h.billingStoreAvailable(c) {
+		return
+	}
 	rangeDays := parseRangeDays(c.DefaultQuery("range", "14d"))
 	search := strings.ToLower(strings.TrimSpace(c.Query("search")))
 
@@ -187,6 +198,9 @@ func (h *Handler) ListAPIKeyRecords(c *gin.Context) {
 }
 
 func (h *Handler) GetAPIKeyRecord(c *gin.Context) {
+	if !h.billingStoreAvailable(c) {
+		return
+	}
 	apiKey, err := url.PathUnescape(strings.TrimSpace(c.Param("apiKey")))
 	if err != nil || strings.TrimSpace(apiKey) == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid api key"})
@@ -207,6 +221,9 @@ func (h *Handler) GetAPIKeyRecord(c *gin.Context) {
 }
 
 func (h *Handler) ListAPIKeyRecordEvents(c *gin.Context) {
+	if !h.billingStoreAvailable(c) {
+		return
+	}
 	apiKey, err := url.PathUnescape(strings.TrimSpace(c.Param("apiKey")))
 	if err != nil || strings.TrimSpace(apiKey) == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid api key"})
@@ -333,6 +350,9 @@ func (h *Handler) DeleteAPIKeyRecord(c *gin.Context) {
 }
 
 func (h *Handler) QueryAPIKeyInsights(c *gin.Context) {
+	if !h.billingStoreAvailable(c) {
+		return
+	}
 	var body apiKeyQueryRequest
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
@@ -540,6 +560,13 @@ func (h *Handler) loadCurrentPeriodRows(ctx context.Context, apiKey string, now 
 	}
 	if effectivePolicy != nil {
 		start, end = effectivePolicy.WeeklyBudgetBounds(now)
+	}
+	if effectivePolicy != nil && strings.TrimSpace(effectivePolicy.WeeklyBudgetAnchorAt) != "" {
+		events, err := h.billingStore.ListUsageEventsByAPIKey(ctx, apiKey, start, end, 0, false)
+		if err != nil {
+			return nil, err
+		}
+		return aggregateUsageEventsByModel(events), nil
 	}
 	rows, err := h.billingStore.ListDailyUsageRowsByAPIKey(ctx, apiKey, policy.DayKeyChina(start), policy.DayKeyChina(end))
 	if err != nil {
@@ -1016,6 +1043,36 @@ func totalsFromRows(rows []billing.DailyUsageRow) apiKeyUsageTotals {
 	}
 	totals.CostUSD = microUSDToUSD(totals.CostMicroUSD)
 	return totals
+}
+
+func aggregateUsageEventsByModel(events []billing.UsageEventRow) []billing.DailyUsageRow {
+	byModel := make(map[string]billing.DailyUsageRow)
+	for _, event := range events {
+		key := strings.TrimSpace(event.Model)
+		row := byModel[key]
+		row.APIKey = strings.TrimSpace(event.APIKey)
+		row.Model = event.Model
+		row.Requests++
+		if event.Failed {
+			row.FailedRequests++
+		}
+		row.InputTokens += event.InputTokens
+		row.OutputTokens += event.OutputTokens
+		row.ReasoningTokens += event.ReasoningTokens
+		row.CachedTokens += event.CachedTokens
+		row.TotalTokens += event.TotalTokens
+		row.CostMicroUSD += event.CostMicroUSD
+		byModel[key] = row
+	}
+
+	rows := make([]billing.DailyUsageRow, 0, len(byModel))
+	for _, row := range byModel {
+		rows = append(rows, row)
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		return rows[i].Model < rows[j].Model
+	})
+	return rows
 }
 
 func buildModelUsageViews(rows []billing.DailyUsageRow) []apiKeyModelUsageView {

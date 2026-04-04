@@ -80,3 +80,26 @@ func AnchoredWindowBounds(anchor, now time.Time, duration time.Duration) (start 
 	end = start.Add(duration)
 	return start, end
 }
+
+// AnchoredWindowBoundsFloor returns the [start, end) window containing now for a fixed-size
+// anchored interval, including timestamps before the anchor.
+func AnchoredWindowBoundsFloor(anchor, now time.Time, duration time.Duration) (start time.Time, end time.Time) {
+	if duration <= 0 {
+		duration = 7 * 24 * time.Hour
+	}
+	if anchor.IsZero() {
+		return now, now.Add(duration)
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+
+	elapsed := now.Sub(anchor)
+	windows := elapsed / duration
+	if elapsed < 0 && elapsed%duration != 0 {
+		windows--
+	}
+	start = anchor.Add(windows * duration)
+	end = start.Add(duration)
+	return start, end
+}
