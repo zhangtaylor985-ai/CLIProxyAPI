@@ -1,8 +1,0 @@
-interface:
-  display_name: "CLIProxyAPI Orchestrator"
-  short_description: "Codex leads backend work and delegates UI to Claude."
-  default_prompt: "Use $cli-proxyapi-orchestrator to keep Codex as the main agent in CLIProxyAPI-ori while delegating a bounded frontend task to Claude in the management-center repo."
-
-policy:
-  allow_implicit_invocation: true
-

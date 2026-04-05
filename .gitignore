@@ -50,12 +50,6 @@ GEMINI.md
 _bmad/*
 _bmad-output/*
 
-!.codex/
-!.codex/skills/
-!.codex/skills/cli-proxyapi-orchestrator/
-!.codex/skills/cli-proxyapi-orchestrator/**
-.codex/claude-runs/
-
 # macOS
 .DS_Store
 ._*
