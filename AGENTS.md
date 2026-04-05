@@ -8,6 +8,20 @@
 - 所有新的 PG 持久化能力，默认复用 `.env` 里的共享 PG 配置解析逻辑；不要为单个功能再发散出一套独立环境变量。
 - 涉及 PG 新表 / 新索引 / 新 schema 变更时，除了运行时兜底初始化，还应补显式 migration 入口到 `scripts/`，上线步骤默认先执行 migration，再重启服务。
 
+# 部署与 systemd
+
+- 当前这套 `/home/azureuser/cliapp/CLIProxyAPI` 线上服务由 systemd 管理，unit 名称是 `cliproxyapi.service`。
+- 当前已确认的 unit 配置要点：
+  - `WorkingDirectory=/home/azureuser/cliapp/CLIProxyAPI`
+  - `EnvironmentFile=/home/azureuser/cliapp/CLIProxyAPI/.env`
+  - `ExecStart=/home/azureuser/cliapp/CLIProxyAPI/bin/cliproxyapi -config /home/azureuser/cliapp/CLIProxyAPI/config.yaml`
+- 如果当前仓库 `.env` 中 `IS_PROD=true`，默认按线上环境处理；涉及重启/发布/确认运行状态时，优先提示并使用这套 systemd 管理方式，不要假设是手工前台启动。
+- 线上重启命令：
+  - `sudo systemctl restart cliproxyapi && sleep 2 && systemctl status cliproxyapi --no-pager -l`
+- 查看 unit 原始配置：
+  - `systemctl cat cliproxyapi`
+- 做了代码修改但要让线上生效时，先确认 `bin/cliproxyapi` 已重编译为最新二进制，再执行 systemd 重启；不要只重启旧二进制。
+
 # 文档入口
 
 - 本次 Claude -> GPT 黑盒迁移、API Key 策略、用量持久化、模型价格、远程 SQLite 数据迁移说明：
