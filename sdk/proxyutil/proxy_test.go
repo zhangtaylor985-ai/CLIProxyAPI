@@ -20,6 +20,7 @@ func TestParse(t *testing.T) {
 		{name: "http", input: "http://proxy.example.com:8080", want: ModeProxy},
 		{name: "https", input: "https://proxy.example.com:8443", want: ModeProxy},
 		{name: "socks5", input: "socks5://proxy.example.com:1080", want: ModeProxy},
+		{name: "socks5h", input: "socks5h://proxy.example.com:1080", want: ModeProxy},
 		{name: "invalid", input: "bad-value", want: ModeInvalid, wantErr: true},
 	}
 
@@ -85,5 +86,26 @@ func TestBuildHTTPTransportHTTPProxy(t *testing.T) {
 	}
 	if proxyURL == nil || proxyURL.String() != "http://proxy.example.com:8080" {
 		t.Fatalf("proxy URL = %v, want http://proxy.example.com:8080", proxyURL)
+	}
+}
+
+func TestBuildHTTPTransportSOCKS5HProxy(t *testing.T) {
+	t.Parallel()
+
+	transport, mode, errBuild := BuildHTTPTransport("socks5h://proxy.example.com:1080")
+	if errBuild != nil {
+		t.Fatalf("BuildHTTPTransport returned error: %v", errBuild)
+	}
+	if mode != ModeProxy {
+		t.Fatalf("mode = %d, want %d", mode, ModeProxy)
+	}
+	if transport == nil {
+		t.Fatal("expected transport, got nil")
+	}
+	if transport.Proxy != nil {
+		t.Fatal("expected SOCKS5H transport to bypass http proxy function")
+	}
+	if transport.DialContext == nil {
+		t.Fatal("expected SOCKS5H transport to have custom DialContext")
 	}
 }
