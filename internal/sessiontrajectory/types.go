@@ -153,11 +153,20 @@ type ExportedFile struct {
 	ExportPath   string `json:"export_path"`
 }
 
+type ExportTokenTotals struct {
+	InputTokens     int64 `json:"input_tokens"`
+	OutputTokens    int64 `json:"output_tokens"`
+	ReasoningTokens int64 `json:"reasoning_tokens"`
+	CachedTokens    int64 `json:"cached_tokens"`
+	TotalTokens     int64 `json:"total_tokens"`
+}
+
 type SessionExportResult struct {
-	SessionID  string         `json:"session_id"`
-	UserID     string         `json:"user_id"`
-	ExportDir  string         `json:"export_dir"`
-	FileCount  int            `json:"file_count"`
-	ExportedAt time.Time      `json:"exported_at"`
-	Files      []ExportedFile `json:"files"`
+	SessionID   string            `json:"session_id"`
+	UserID      string            `json:"user_id"`
+	ExportDir   string            `json:"export_dir"`
+	FileCount   int               `json:"file_count"`
+	ExportedAt  time.Time         `json:"exported_at"`
+	TokenTotals ExportTokenTotals `json:"token_totals"`
+	Files       []ExportedFile    `json:"files"`
 }

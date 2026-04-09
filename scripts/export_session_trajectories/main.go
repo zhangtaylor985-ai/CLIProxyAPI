@@ -60,6 +60,7 @@ type exportManifest struct {
 	TotalSessions    int64                                   `json:"total_sessions"`
 	ExportedSessions int                                     `json:"exported_sessions"`
 	ExportedFiles    int                                     `json:"exported_files"`
+	TokenTotals      sessiontrajectory.ExportTokenTotals     `json:"token_totals"`
 	Items            []sessiontrajectory.SessionExportResult `json:"items"`
 }
 
@@ -200,6 +201,7 @@ func run(cfg exportConfig) error {
 	results := make([]sessiontrajectory.SessionExportResult, 0)
 	exportedFiles := 0
 	exportedSessions := 0
+	tokenTotals := sessiontrajectory.ExportTokenTotals{}
 	page := 0
 	var cursor *sessionCursor
 
@@ -225,6 +227,11 @@ func run(cfg exportConfig) error {
 			}
 			results = append(results, result)
 			exportedFiles += result.FileCount
+			tokenTotals.InputTokens += result.TokenTotals.InputTokens
+			tokenTotals.OutputTokens += result.TokenTotals.OutputTokens
+			tokenTotals.ReasoningTokens += result.TokenTotals.ReasoningTokens
+			tokenTotals.CachedTokens += result.TokenTotals.CachedTokens
+			tokenTotals.TotalTokens += result.TokenTotals.TotalTokens
 			log.Printf("exported %d/%d sessions (%d files) session=%s dir=%s", exportedSessions, totalSessions, exportedFiles, result.SessionID, result.ExportDir)
 		}
 		last := items[len(items)-1]
@@ -242,6 +249,7 @@ func run(cfg exportConfig) error {
 		TotalSessions:    totalSessions,
 		ExportedSessions: exportedSessions,
 		ExportedFiles:    exportedFiles,
+		TokenTotals:      tokenTotals,
 		Items:            results,
 	}
 	manifestPath, err := writeManifest(cfg.ManifestDir, manifest)

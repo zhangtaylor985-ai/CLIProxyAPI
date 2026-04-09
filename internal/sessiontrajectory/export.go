@@ -54,6 +54,7 @@ func (s *PostgresStore) ExportSession(ctx context.Context, sessionID string, exp
 
 	files := make([]ExportedFile, 0, len(requests))
 	exportedAt := time.Now().UTC()
+	tokenTotals := ExportTokenTotals{}
 	for _, request := range requests {
 		exportIndex := request.RequestIndex
 		exportPath := filepath.Join(exportDir, exportFileName(exportIndex, request.RequestID))
@@ -97,6 +98,11 @@ func (s *PostgresStore) ExportSession(ctx context.Context, sessionID string, exp
 			ExportIndex:  exportIndex,
 			ExportPath:   exportPath,
 		})
+		tokenTotals.InputTokens += request.InputTokens
+		tokenTotals.OutputTokens += request.OutputTokens
+		tokenTotals.ReasoningTokens += request.ReasoningTokens
+		tokenTotals.CachedTokens += request.CachedTokens
+		tokenTotals.TotalTokens += request.TotalTokens
 	}
 
 	if err = tx.Commit(); err != nil {
@@ -104,12 +110,13 @@ func (s *PostgresStore) ExportSession(ctx context.Context, sessionID string, exp
 	}
 
 	return SessionExportResult{
-		SessionID:  session.SessionID,
-		UserID:     session.UserID,
-		ExportDir:  exportDir,
-		FileCount:  len(files),
-		ExportedAt: exportedAt,
-		Files:      files,
+		SessionID:   session.SessionID,
+		UserID:      session.UserID,
+		ExportDir:   exportDir,
+		FileCount:   len(files),
+		ExportedAt:  exportedAt,
+		TokenTotals: tokenTotals,
+		Files:       files,
 	}, nil
 }
 
