@@ -12,6 +12,8 @@ logs/*
 conv/*
 temp/*
 refs/*
+session-data-test/*
+**/__pycache__/*
 
 # Storage backends
 pgstore/*
