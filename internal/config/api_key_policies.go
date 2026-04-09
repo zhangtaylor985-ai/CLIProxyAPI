@@ -16,10 +16,26 @@ var defaultClientHiddenGPTModelPatterns = []string{
 	"o4*",
 }
 
+var defaultClientHiddenClaudeModelPatterns = []string{
+	"claude-*",
+}
+
 // APIKeyPolicy defines restrictions and quotas applied to an authenticated client API key.
 // The APIKey value must match the authenticated principal as provided by the access manager.
 type APIKeyPolicy struct {
 	APIKey string `yaml:"api-key" json:"api-key"`
+
+	// CreatedAt records when this client API key record was created in the external store.
+	// It is not persisted to config.yaml.
+	CreatedAt string `yaml:"-" json:"created_at,omitempty"`
+
+	// ExpiresAt records when this client API key should stop being accepted.
+	// Empty means no automatic expiry. It is not persisted to config.yaml.
+	ExpiresAt string `yaml:"-" json:"expires_at,omitempty"`
+
+	// Disabled immediately blocks this client API key when true.
+	// It is not persisted to config.yaml.
+	Disabled bool `yaml:"-" json:"disabled,omitempty"`
 
 	// GroupID binds the API key to a managed account group stored in Postgres.
 	// When set, daily/weekly base budgets are resolved from that group.
@@ -364,6 +380,89 @@ func (p *APIKeyPolicy) TokenPackageStartTime() (time.Time, bool) {
 	return startedAt, true
 }
 
+func (p *APIKeyPolicy) CreatedTime() (time.Time, bool) {
+	if p == nil || strings.TrimSpace(p.CreatedAt) == "" {
+		return time.Time{}, false
+	}
+	createdAt, err := time.Parse(time.RFC3339, strings.TrimSpace(p.CreatedAt))
+	if err != nil {
+		return time.Time{}, false
+	}
+	return createdAt, true
+}
+
+func (p *APIKeyPolicy) ExpiryTime() (time.Time, bool) {
+	if p == nil || strings.TrimSpace(p.ExpiresAt) == "" {
+		return time.Time{}, false
+	}
+	expiresAt, err := time.Parse(time.RFC3339, strings.TrimSpace(p.ExpiresAt))
+	if err != nil {
+		return time.Time{}, false
+	}
+	return expiresAt, true
+}
+
+func (p *APIKeyPolicy) IsExpiredAt(now time.Time) bool {
+	expiresAt, ok := p.ExpiryTime()
+	if !ok {
+		return false
+	}
+	return !expiresAt.After(now)
+}
+
+func (p *APIKeyPolicy) IsDisabledAt(now time.Time) bool {
+	if p == nil {
+		return false
+	}
+	if p.Disabled {
+		return true
+	}
+	return p.IsExpiredAt(now)
+}
+
+func ExcludedModelFamilyAccess(models []string) (allowClaude bool, allowGPT bool, extra []string) {
+	normalized := NormalizeExcludedModels(models)
+	allowClaude = true
+	allowGPT = true
+	if len(normalized) == 0 {
+		return allowClaude, allowGPT, nil
+	}
+
+	gptPatterns := make(map[string]struct{}, len(defaultClientHiddenGPTModelPatterns))
+	for _, pattern := range defaultClientHiddenGPTModelPatterns {
+		gptPatterns[strings.ToLower(strings.TrimSpace(pattern))] = struct{}{}
+	}
+	claudePatterns := make(map[string]struct{}, len(defaultClientHiddenClaudeModelPatterns))
+	for _, pattern := range defaultClientHiddenClaudeModelPatterns {
+		claudePatterns[strings.ToLower(strings.TrimSpace(pattern))] = struct{}{}
+	}
+
+	for _, pattern := range normalized {
+		if _, ok := gptPatterns[pattern]; ok {
+			allowGPT = false
+			continue
+		}
+		if _, ok := claudePatterns[pattern]; ok {
+			allowClaude = false
+			continue
+		}
+		extra = append(extra, pattern)
+	}
+	return allowClaude, allowGPT, extra
+}
+
+func BuildExcludedModelFamilies(allowClaude bool, allowGPT bool, extra []string) []string {
+	models := make([]string, 0, len(extra)+len(defaultClientHiddenGPTModelPatterns)+len(defaultClientHiddenClaudeModelPatterns))
+	models = append(models, NormalizeExcludedModels(extra)...)
+	if !allowClaude {
+		models = append(models, defaultClientHiddenClaudeModelPatterns...)
+	}
+	if !allowGPT {
+		models = append(models, defaultClientHiddenGPTModelPatterns...)
+	}
+	return NormalizeExcludedModels(models)
+}
+
 // WeeklyBudgetBounds resolves the active weekly budget window for the policy.
 // When WeeklyBudgetAnchorAt is unset or invalid, it falls back to the legacy
 // Monday 00:00 -> next Monday 00:00 China-time window.
@@ -639,6 +738,17 @@ func (cfg *Config) SanitizeAPIKeyPolicies() {
 			} else {
 				entry.TokenPackageStartedAt = startedAt.Format(time.RFC3339)
 			}
+		}
+
+		if createdAt, err := time.Parse(time.RFC3339, strings.TrimSpace(entry.CreatedAt)); err == nil {
+			entry.CreatedAt = createdAt.Format(time.RFC3339)
+		} else {
+			entry.CreatedAt = ""
+		}
+		if expiresAt, err := time.Parse(time.RFC3339, strings.TrimSpace(entry.ExpiresAt)); err == nil {
+			entry.ExpiresAt = expiresAt.Format(time.RFC3339)
+		} else {
+			entry.ExpiresAt = ""
 		}
 
 		key := entry.APIKey

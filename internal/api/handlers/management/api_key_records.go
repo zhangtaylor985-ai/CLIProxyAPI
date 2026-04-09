@@ -20,8 +20,13 @@ import (
 
 type apiKeyPolicyView struct {
 	APIKey                string                     `json:"api_key"`
+	CreatedAt             string                     `json:"created_at"`
+	ExpiresAt             string                     `json:"expires_at"`
+	Disabled              bool                       `json:"disabled"`
 	GroupID               string                     `json:"group_id"`
 	GroupName             string                     `json:"group_name"`
+	AllowClaudeFamily     bool                       `json:"allow_claude_family"`
+	AllowGPTFamily        bool                       `json:"allow_gpt_family"`
 	FastMode              bool                       `json:"fast_mode"`
 	EnableClaudeModels    bool                       `json:"enable_claude_models"`
 	ClaudeUsageLimitUSD   float64                    `json:"claude_usage_limit_usd"`
@@ -122,6 +127,9 @@ type apiKeyEventView struct {
 type apiKeyRecordSummaryView struct {
 	APIKey             string                 `json:"api_key"`
 	MaskedAPIKey       string                 `json:"masked_api_key"`
+	CreatedAt          string                 `json:"created_at"`
+	ExpiresAt          string                 `json:"expires_at"`
+	Disabled           bool                   `json:"disabled"`
 	GroupID            string                 `json:"group_id"`
 	GroupName          string                 `json:"group_name"`
 	Registered         bool                   `json:"registered"`
@@ -272,11 +280,15 @@ func (h *Handler) CreateAPIKeyRecord(c *gin.Context) {
 
 	h.cfg.APIKeys = append(h.cfg.APIKeys, apiKey)
 	h.cfg.APIKeys = normalizeUniqueAPIKeys(h.cfg.APIKeys)
-	if !body.ClearPolicy && !isEmptyPolicyView(body.Policy) {
-		upsertAPIKeyPolicy(&h.cfg.APIKeyPolicies, viewToPolicy(apiKey, body.Policy))
+	policyView := body.Policy
+	if isEmptyPolicyView(policyView) {
+		policyView = defaultAPIKeyPolicyView(apiKey)
+	}
+	if !body.ClearPolicy {
+		upsertAPIKeyPolicy(&h.cfg.APIKeyPolicies, viewToPolicy(apiKey, policyView))
 	}
 	h.cfg.SanitizeAPIKeyPolicies()
-	h.persistAPIKeyConfig(c)
+	h.persistAPIKeyRecord(c, "", apiKey)
 }
 
 func (h *Handler) UpdateAPIKeyRecord(c *gin.Context) {
@@ -328,7 +340,7 @@ func (h *Handler) UpdateAPIKeyRecord(c *gin.Context) {
 		removeDuplicatePolicyAlias(&h.cfg.APIKeyPolicies, currentKey, newKey)
 	}
 	h.cfg.SanitizeAPIKeyPolicies()
-	h.persistAPIKeyConfig(c)
+	h.persistAPIKeyRecord(c, currentKey, newKey)
 }
 
 func (h *Handler) DeleteAPIKeyRecord(c *gin.Context) {
@@ -346,7 +358,7 @@ func (h *Handler) DeleteAPIKeyRecord(c *gin.Context) {
 	h.cfg.APIKeys = removeAPIKeyValue(h.cfg.APIKeys, apiKey)
 	removeAPIKeyPolicy(&h.cfg.APIKeyPolicies, apiKey)
 	h.cfg.SanitizeAPIKeyPolicies()
-	h.persistAPIKeyConfig(c)
+	h.deletePersistedAPIKeyRecord(c, apiKey)
 }
 
 func (h *Handler) QueryAPIKeyInsights(c *gin.Context) {
@@ -522,6 +534,9 @@ func (h *Handler) buildAPIKeySummary(ctx context.Context, apiKey string, now tim
 	summary := apiKeyRecordSummaryView{
 		APIKey:             apiKey,
 		MaskedAPIKey:       util.HideAPIKey(apiKey),
+		CreatedAt:          "",
+		ExpiresAt:          "",
+		Disabled:           false,
 		GroupID:            "",
 		GroupName:          "",
 		Registered:         h.apiKeyExists(apiKey),
@@ -538,6 +553,9 @@ func (h *Handler) buildAPIKeySummary(ctx context.Context, apiKey string, now tim
 		FastMode:           false,
 	}
 	if effectivePolicy != nil {
+		summary.CreatedAt = strings.TrimSpace(effectivePolicy.CreatedAt)
+		summary.ExpiresAt = strings.TrimSpace(effectivePolicy.ExpiresAt)
+		summary.Disabled = effectivePolicy.Disabled
 		summary.GroupID = strings.TrimSpace(effectivePolicy.GroupID)
 		summary.DailyLimitCount = len(effectivePolicy.DailyLimits)
 		summary.PolicyFamily = effectivePolicy.ClaudeGPTTargetFamilyOrDefault()
@@ -844,13 +862,19 @@ func (h *Handler) optionalGroupView(group *apikeygroup.Group) *apiKeyGroupView {
 }
 
 func policyToView(apiKey string, p *config.APIKeyPolicy, group *apikeygroup.Group) apiKeyPolicyView {
+	allowClaudeFamily, allowGPTFamily, extraExcludedModels := config.ExcludedModelFamilyAccess(nil)
 	view := apiKeyPolicyView{
 		APIKey:              apiKey,
+		CreatedAt:           "",
+		ExpiresAt:           "",
+		Disabled:            false,
 		GroupID:             "",
 		GroupName:           "",
+		AllowClaudeFamily:   allowClaudeFamily,
+		AllowGPTFamily:      allowGPTFamily,
 		AllowClaudeOpus46:   true,
 		DailyLimits:         map[string]int{},
-		ExcludedModels:      nil,
+		ExcludedModels:      extraExcludedModels,
 		ModelRoutingRules:   nil,
 		ClaudeFailoverRules: nil,
 	}
@@ -858,17 +882,20 @@ func policyToView(apiKey string, p *config.APIKeyPolicy, group *apikeygroup.Grou
 		return view
 	}
 	view.APIKey = strings.TrimSpace(p.APIKey)
+	view.CreatedAt = strings.TrimSpace(p.CreatedAt)
+	view.ExpiresAt = strings.TrimSpace(p.ExpiresAt)
+	view.Disabled = p.Disabled
 	view.GroupID = strings.TrimSpace(p.GroupID)
 	if group != nil {
 		view.GroupName = group.Name
 	}
+	view.AllowClaudeFamily, view.AllowGPTFamily, view.ExcludedModels = config.ExcludedModelFamilyAccess(p.ExcludedModels)
 	view.FastMode = p.FastMode
 	view.EnableClaudeModels = p.ClaudeModelsEnabled()
 	view.ClaudeUsageLimitUSD = p.ClaudeUsageLimitUSD
 	view.ClaudeGPTTargetFamily = p.ClaudeGPTTargetFamily
 	view.EnableClaudeOpus1M = p.ClaudeOpus1MEnabled()
 	view.UpstreamBaseURL = p.UpstreamBaseURL
-	view.ExcludedModels = append([]string(nil), p.ExcludedModels...)
 	view.AllowClaudeOpus46 = p.AllowsClaudeOpus46()
 	view.DailyLimits = copyDailyLimits(p.DailyLimits)
 	view.DailyBudgetUSD = p.DailyBudgetUSD
@@ -889,6 +916,9 @@ func viewToPolicy(apiKey string, view apiKeyPolicyView) config.APIKeyPolicy {
 	allowClaudeOpus46 := view.AllowClaudeOpus46
 	return config.APIKeyPolicy{
 		APIKey:                apiKey,
+		CreatedAt:             strings.TrimSpace(view.CreatedAt),
+		ExpiresAt:             strings.TrimSpace(view.ExpiresAt),
+		Disabled:              view.Disabled,
 		GroupID:               strings.TrimSpace(view.GroupID),
 		FastMode:              view.FastMode,
 		EnableClaudeModels:    &enableClaudeModels,
@@ -896,7 +926,7 @@ func viewToPolicy(apiKey string, view apiKeyPolicyView) config.APIKeyPolicy {
 		ClaudeGPTTargetFamily: strings.TrimSpace(view.ClaudeGPTTargetFamily),
 		EnableClaudeOpus1M:    &enableClaudeOpus1M,
 		UpstreamBaseURL:       strings.TrimSpace(view.UpstreamBaseURL),
-		ExcludedModels:        append([]string(nil), view.ExcludedModels...),
+		ExcludedModels:        config.BuildExcludedModelFamilies(view.AllowClaudeFamily, view.AllowGPTFamily, view.ExcludedModels),
 		AllowClaudeOpus46:     &allowClaudeOpus46,
 		DailyLimits:           copyDailyLimits(view.DailyLimits),
 		DailyBudgetUSD:        view.DailyBudgetUSD,
@@ -996,6 +1026,19 @@ func normalizeUniqueAPIKeys(keys []string) []string {
 	return result
 }
 
+func defaultAPIKeyPolicyView(apiKey string) apiKeyPolicyView {
+	now := time.Now().UTC()
+	return apiKeyPolicyView{
+		APIKey:            strings.TrimSpace(apiKey),
+		CreatedAt:         now.Format(time.RFC3339),
+		ExpiresAt:         now.AddDate(0, 1, 0).Format(time.RFC3339),
+		AllowClaudeFamily: true,
+		AllowGPTFamily:    false,
+		AllowClaudeOpus46: true,
+		DailyLimits:       map[string]int{},
+	}
+}
+
 func copyDailyLimits(src map[string]int) map[string]int {
 	if len(src) == 0 {
 		return map[string]int{}
@@ -1008,7 +1051,13 @@ func copyDailyLimits(src map[string]int) map[string]int {
 }
 
 func isEmptyPolicyView(view apiKeyPolicyView) bool {
-	return strings.TrimSpace(view.GroupID) == "" &&
+	return strings.TrimSpace(view.APIKey) == "" &&
+		strings.TrimSpace(view.CreatedAt) == "" &&
+		strings.TrimSpace(view.ExpiresAt) == "" &&
+		!view.Disabled &&
+		strings.TrimSpace(view.GroupID) == "" &&
+		!view.AllowClaudeFamily &&
+		!view.AllowGPTFamily &&
 		!view.FastMode &&
 		!view.EnableClaudeModels &&
 		view.ClaudeUsageLimitUSD == 0 &&
@@ -1016,7 +1065,7 @@ func isEmptyPolicyView(view apiKeyPolicyView) bool {
 		!view.EnableClaudeOpus1M &&
 		strings.TrimSpace(view.UpstreamBaseURL) == "" &&
 		len(view.ExcludedModels) == 0 &&
-		view.AllowClaudeOpus46 &&
+		!view.AllowClaudeOpus46 &&
 		len(view.DailyLimits) == 0 &&
 		view.DailyBudgetUSD == 0 &&
 		view.WeeklyBudgetUSD == 0 &&

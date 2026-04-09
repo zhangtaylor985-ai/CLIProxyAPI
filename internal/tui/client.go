@@ -239,14 +239,13 @@ func (c *Client) GetLogs(after int64, limit int) ([]string, int64, error) {
 	return lines, latest, nil
 }
 
-// GetAPIKeys fetches the list of API keys.
-// API returns {"api-keys": [...]}.
+// GetAPIKeys fetches the list of API keys from the API key records workbench endpoint.
 func (c *Client) GetAPIKeys() ([]string, error) {
-	wrapper, err := c.getJSON("/v0/management/api-keys")
+	wrapper, err := c.getJSON("/v0/management/api-key-records?range=14d")
 	if err != nil {
 		return nil, err
 	}
-	arr, ok := wrapper["api-keys"]
+	arr, ok := wrapper["items"]
 	if !ok {
 		return nil, nil
 	}
@@ -254,32 +253,38 @@ func (c *Client) GetAPIKeys() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	var result []string
-	if err := json.Unmarshal(raw, &result); err != nil {
+	var items []map[string]any
+	if err := json.Unmarshal(raw, &items); err != nil {
 		return nil, err
+	}
+	result := make([]string, 0, len(items))
+	for _, item := range items {
+		value, _ := item["api_key"].(string)
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		result = append(result, trimmed)
 	}
 	return result, nil
 }
 
-// AddAPIKey adds a new API key by sending old=nil, new=key which appends.
+// AddAPIKey creates a new API key record with default policy values.
 func (c *Client) AddAPIKey(key string) error {
-	body := map[string]any{"old": nil, "new": key}
+	return c.postJSON("/v0/management/api-key-records", map[string]any{"new_api_key": key})
+}
+
+// EditAPIKey renames an API key record.
+func (c *Client) EditAPIKey(currentValue string, newValue string) error {
+	body := map[string]any{"new_api_key": newValue}
 	jsonBody, _ := json.Marshal(body)
-	_, err := c.patch("/v0/management/api-keys", strings.NewReader(string(jsonBody)))
+	_, err := c.patch("/v0/management/api-key-records/"+url.PathEscape(currentValue), strings.NewReader(string(jsonBody)))
 	return err
 }
 
-// EditAPIKey replaces an API key at the given index.
-func (c *Client) EditAPIKey(index int, newValue string) error {
-	body := map[string]any{"index": index, "value": newValue}
-	jsonBody, _ := json.Marshal(body)
-	_, err := c.patch("/v0/management/api-keys", strings.NewReader(string(jsonBody)))
-	return err
-}
-
-// DeleteAPIKey deletes an API key by index.
-func (c *Client) DeleteAPIKey(index int) error {
-	_, code, err := c.doRequest("DELETE", fmt.Sprintf("/v0/management/api-keys?index=%d", index), nil)
+// DeleteAPIKey deletes an API key record by value.
+func (c *Client) DeleteAPIKey(value string) error {
+	_, code, err := c.doRequest("DELETE", "/v0/management/api-key-records/"+url.PathEscape(value), nil)
 	if err != nil {
 		return err
 	}

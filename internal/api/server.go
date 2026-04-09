@@ -729,15 +729,6 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.PUT("/quota-exceeded/switch-preview-model", s.mgmt.PutSwitchPreviewModel)
 		mgmt.PATCH("/quota-exceeded/switch-preview-model", s.mgmt.PutSwitchPreviewModel)
 
-		mgmt.GET("/api-keys", s.mgmt.GetAPIKeys)
-		mgmt.PUT("/api-keys", s.mgmt.PutAPIKeys)
-		mgmt.PATCH("/api-keys", s.mgmt.PatchAPIKeys)
-		mgmt.DELETE("/api-keys", s.mgmt.DeleteAPIKeys)
-
-		mgmt.GET("/api-key-policies", s.mgmt.GetAPIKeyPolicies)
-		mgmt.PUT("/api-key-policies", s.mgmt.PutAPIKeyPolicies)
-		mgmt.PATCH("/api-key-policies", s.mgmt.PatchAPIKeyPolicies)
-		mgmt.DELETE("/api-key-policies", s.mgmt.DeleteAPIKeyPolicies)
 		mgmt.GET("/api-key-groups", s.mgmt.ListAPIKeyGroups)
 		mgmt.POST("/api-key-groups", s.mgmt.CreateAPIKeyGroup)
 		mgmt.PUT("/api-key-groups/:id", s.mgmt.UpdateAPIKeyGroup)

@@ -143,7 +143,11 @@ func (m keysTabModel) Update(msg tea.Msg) (keysTabModel, tea.Cmd) {
 					}
 				}
 				return m, func() tea.Msg {
-					err := m.client.EditAPIKey(editIdx, value)
+					currentValue := ""
+					if editIdx >= 0 && editIdx < len(m.keys) {
+						currentValue = m.keys[editIdx]
+					}
+					err := m.client.EditAPIKey(currentValue, value)
 					if err != nil {
 						return keyActionMsg{err: err}
 					}
@@ -170,7 +174,11 @@ func (m keysTabModel) Update(msg tea.Msg) (keysTabModel, tea.Cmd) {
 				idx := m.confirm
 				m.confirm = -1
 				return m, func() tea.Msg {
-					err := m.client.DeleteAPIKey(idx)
+					value := ""
+					if idx >= 0 && idx < len(m.keys) {
+						value = m.keys[idx]
+					}
+					err := m.client.DeleteAPIKey(value)
 					if err != nil {
 						return keyActionMsg{err: err}
 					}

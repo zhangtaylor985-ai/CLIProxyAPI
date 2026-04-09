@@ -301,8 +301,12 @@ func (h *Handler) Middleware() gin.HandlerFunc {
 // persist saves the current in-memory config to disk.
 func (h *Handler) persist(c *gin.Context) bool {
 	h.mu.Lock()
+	persistCfg := h.cfg
+	if h.apiKeyConfigStore != nil {
+		persistCfg = apikeyconfig.ConfigWithoutAPIKeyState(h.cfg)
+	}
 	// Preserve comments when writing
-	if err := config.SaveConfigPreserveComments(h.configFilePath, h.cfg); err != nil {
+	if err := config.SaveConfigPreserveComments(h.configFilePath, persistCfg); err != nil {
 		h.mu.Unlock()
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to save config: %v", err)})
 		return false
@@ -328,6 +332,55 @@ func (h *Handler) persistAPIKeyConfig(c *gin.Context) bool {
 	h.mu.Unlock()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to save api key config: %v", err)})
+		return false
+	}
+	h.notifyConfigUpdated(currentCfg)
+	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	return true
+}
+
+func (h *Handler) persistAPIKeyRecord(c *gin.Context, previousAPIKey, apiKey string) bool {
+	h.mu.Lock()
+	if h.apiKeyConfigStore == nil {
+		h.mu.Unlock()
+		return h.persist(c)
+	}
+
+	currentCfg := h.cfg
+	record, ok := apikeyconfig.RecordFromConfig(currentCfg, apiKey)
+	if !ok {
+		h.mu.Unlock()
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to build api key record for %q", apiKey)})
+		return false
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	err := h.apiKeyConfigStore.SaveRecord(ctx, previousAPIKey, record)
+	cancel()
+	h.mu.Unlock()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to save api key record: %v", err)})
+		return false
+	}
+	h.notifyConfigUpdated(currentCfg)
+	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	return true
+}
+
+func (h *Handler) deletePersistedAPIKeyRecord(c *gin.Context, apiKey string) bool {
+	h.mu.Lock()
+	if h.apiKeyConfigStore == nil {
+		h.mu.Unlock()
+		return h.persist(c)
+	}
+
+	currentCfg := h.cfg
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	err := h.apiKeyConfigStore.DeleteRecord(ctx, apiKey)
+	cancel()
+	h.mu.Unlock()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to delete api key record: %v", err)})
 		return false
 	}
 	h.notifyConfigUpdated(currentCfg)

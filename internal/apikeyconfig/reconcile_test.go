@@ -30,17 +30,15 @@ func TestReconcileStatesMergesYAMLIntoExistingAndPreservesTokenPackage(t *testin
 
 	merged, stats := ReconcileStates(existing, fromYAML, ReconcileOptions{AssignBudgetGroups: true})
 
-	if len(merged.APIKeys) != 3 {
-		t.Fatalf("merged api keys len = %d, want 3", len(merged.APIKeys))
+	if len(merged.Records) != 3 {
+		t.Fatalf("merged records len = %d, want 3", len(merged.Records))
 	}
-	if merged.APIKeys[0] != "shared" || merged.APIKeys[1] != "yaml-only" || merged.APIKeys[2] != "pg-only" {
-		t.Fatalf("merged api keys = %#v", merged.APIKeys)
+	if merged.Records[0].APIKey != "shared" || merged.Records[1].APIKey != "yaml-only" || merged.Records[2].APIKey != "pg-only" {
+		t.Fatalf("merged records = %#v", merged.Records)
 	}
-	if len(merged.APIKeyPolicies) != 3 {
-		t.Fatalf("merged policies len = %d, want 3", len(merged.APIKeyPolicies))
-	}
+	mergedPolicies := statePolicies(merged.Records)
 
-	shared := findPolicy(merged.APIKeyPolicies, "shared")
+	shared := findPolicy(mergedPolicies, "shared")
 	if shared == nil {
 		t.Fatal("shared policy missing")
 	}
@@ -54,7 +52,7 @@ func TestReconcileStatesMergesYAMLIntoExistingAndPreservesTokenPackage(t *testin
 		t.Fatalf("shared token package = %v/%q", shared.TokenPackageUSD, shared.TokenPackageStartedAt)
 	}
 
-	yamlOnly := findPolicy(merged.APIKeyPolicies, "yaml-only")
+	yamlOnly := findPolicy(mergedPolicies, "yaml-only")
 	if yamlOnly == nil {
 		t.Fatal("yaml-only policy missing")
 	}
@@ -65,7 +63,7 @@ func TestReconcileStatesMergesYAMLIntoExistingAndPreservesTokenPackage(t *testin
 		t.Fatalf("yaml-only budgets = %v/%v, want 60/250", yamlOnly.DailyBudgetUSD, yamlOnly.WeeklyBudgetUSD)
 	}
 
-	pgOnly := findPolicy(merged.APIKeyPolicies, "pg-only")
+	pgOnly := findPolicy(mergedPolicies, "pg-only")
 	if pgOnly == nil {
 		t.Fatal("pg-only policy missing")
 	}
@@ -94,13 +92,14 @@ func TestReconcileStatesKeepsCustomGroupAndSkipsDistantBudgets(t *testing.T) {
 	}
 
 	merged, _ := ReconcileStates(State{}, fromYAML, ReconcileOptions{AssignBudgetGroups: true})
+	mergedPolicies := statePolicies(merged.Records)
 
-	custom := findPolicy(merged.APIKeyPolicies, "custom-group")
+	custom := findPolicy(mergedPolicies, "custom-group")
 	if custom == nil || custom.GroupID != "team-alpha" {
 		t.Fatalf("custom-group = %+v, want team-alpha preserved", custom)
 	}
 
-	distant := findPolicy(merged.APIKeyPolicies, "distant")
+	distant := findPolicy(mergedPolicies, "distant")
 	if distant == nil {
 		t.Fatal("distant policy missing")
 	}
@@ -108,7 +107,7 @@ func TestReconcileStatesKeepsCustomGroupAndSkipsDistantBudgets(t *testing.T) {
 		t.Fatalf("distant group = %q, want empty", distant.GroupID)
 	}
 
-	tripleNear := findPolicy(merged.APIKeyPolicies, "triple-near")
+	tripleNear := findPolicy(mergedPolicies, "triple-near")
 	if tripleNear == nil {
 		t.Fatal("triple-near policy missing")
 	}

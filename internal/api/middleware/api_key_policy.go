@@ -78,6 +78,12 @@ func APIKeyPolicyMiddleware(getConfig func() *config.Config, limiter policy.Dail
 		allowClaudeOpus1M := cfg.AllowsClaudeOpus1M(apiKey)
 		policyEntry := cfg.EffectiveAPIKeyPolicy(apiKey)
 		if policyEntry != nil {
+			if policyEntry.IsDisabledAt(time.Now()) {
+				body := handlers.BuildErrorResponseBody(http.StatusForbidden, "api key disabled or expired")
+				c.Abort()
+				c.Data(http.StatusForbidden, "application/json", body)
+				return
+			}
 			resolved, _, errResolve := apikeygroup.ApplyGroupBudget(c.Request.Context(), groupStore, policyEntry)
 			if errResolve != nil {
 				body := handlers.BuildErrorResponseBody(http.StatusInternalServerError, errResolve.Error())

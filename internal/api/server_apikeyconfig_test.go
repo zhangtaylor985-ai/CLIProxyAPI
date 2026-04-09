@@ -21,6 +21,10 @@ func (s *stubAPIKeyStateStore) LoadState(context.Context) (apikeyconfig.State, b
 }
 
 func (s *stubAPIKeyStateStore) SaveState(context.Context, apikeyconfig.State) error { return nil }
+func (s *stubAPIKeyStateStore) SaveRecord(context.Context, string, apikeyconfig.Record) error {
+	return nil
+}
+func (s *stubAPIKeyStateStore) DeleteRecord(context.Context, string) error { return nil }
 
 func TestApplyAPIKeyConfigOverlay(t *testing.T) {
 	cfg := &config.Config{

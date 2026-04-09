@@ -165,11 +165,21 @@ func (h *Handler) PutConfigYAML(c *gin.Context) {
 	}
 	if h.apiKeyConfigStore != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		if err = h.apiKeyConfigStore.SaveState(ctx, apikeyconfig.StateFromConfig(newCfg)); err != nil {
-			cancel()
+		state, found, errLoad := h.apiKeyConfigStore.LoadState(ctx)
+		if errLoad != nil {
 			h.mu.Unlock()
+			cancel()
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "persist_failed", "message": errLoad.Error()})
+			return
+		}
+		if err = config.SaveConfigPreserveComments(h.configFilePath, apikeyconfig.ConfigWithoutAPIKeyState(newCfg)); err != nil {
+			h.mu.Unlock()
+			cancel()
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "persist_failed", "message": err.Error()})
 			return
+		}
+		if found {
+			state.ApplyToConfig(newCfg)
 		}
 		cancel()
 	}
@@ -208,7 +218,7 @@ func (h *Handler) renderConfigYAML() ([]byte, error) {
 	_, errStat := os.Stat(h.configFilePath)
 	if errStat != nil {
 		if os.IsNotExist(errStat) {
-			return yaml.Marshal(h.cfg)
+			return yaml.Marshal(apikeyconfig.ConfigWithoutAPIKeyState(h.cfg))
 		}
 		return nil, errStat
 	}
@@ -229,10 +239,7 @@ func (h *Handler) renderConfigYAML() ([]byte, error) {
 	if err := os.WriteFile(tmpPath, original, 0o600); err != nil {
 		return nil, err
 	}
-	cfgCopy := *h.cfg
-	cfgCopy.APIKeys = append([]string(nil), h.cfg.APIKeys...)
-	cfgCopy.APIKeyPolicies = append([]config.APIKeyPolicy(nil), h.cfg.APIKeyPolicies...)
-	if err := config.SaveConfigPreserveComments(tmpPath, &cfgCopy); err != nil {
+	if err := config.SaveConfigPreserveComments(tmpPath, apikeyconfig.ConfigWithoutAPIKeyState(h.cfg)); err != nil {
 		return nil, err
 	}
 	return os.ReadFile(tmpPath)

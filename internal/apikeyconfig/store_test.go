@@ -21,8 +21,11 @@ func TestStateFromConfigAndApplyToConfig(t *testing.T) {
 	}
 
 	state := StateFromConfig(source)
-	if len(state.APIKeys) != 2 || state.APIKeys[0] != "key-1" || state.APIKeys[1] != "key-2" {
-		t.Fatalf("unexpected api keys: %#v", state.APIKeys)
+	if len(state.Records) != 2 || state.Records[0].APIKey != "key-1" || state.Records[1].APIKey != "key-2" {
+		t.Fatalf("unexpected records: %#v", state.Records)
+	}
+	if got := state.Records[1].Policy.ExcludedModels; len(got) == 0 || got[0] != "gpt-*" {
+		t.Fatalf("expected default GPT exclusions for key-2, got %#v", got)
 	}
 
 	target := &config.Config{
@@ -38,11 +41,11 @@ func TestStateFromConfigAndApplyToConfig(t *testing.T) {
 	if len(target.APIKeys) != 2 || target.APIKeys[0] != "key-1" || target.APIKeys[1] != "key-2" {
 		t.Fatalf("unexpected target api keys: %#v", target.APIKeys)
 	}
-	if len(target.APIKeyPolicies) != 1 || target.APIKeyPolicies[0].APIKey != "key-1" {
+	if len(target.APIKeyPolicies) != 2 || target.APIKeyPolicies[0].APIKey != "key-1" || target.APIKeyPolicies[1].APIKey != "key-2" {
 		t.Fatalf("unexpected target policies: %#v", target.APIKeyPolicies)
 	}
 
-	state.APIKeyPolicies[0].ExcludedModels[0] = "changed"
+	state.Records[0].Policy.ExcludedModels[0] = "changed"
 	if target.APIKeyPolicies[0].ExcludedModels[0] != "claude-*" {
 		t.Fatalf("target policy should be isolated from state mutation: %#v", target.APIKeyPolicies[0].ExcludedModels)
 	}

@@ -42,38 +42,38 @@ var defaultBudgetGroupTargets = []budgetGroupTarget{
 // ReconcileStates merges YAML-derived state into an existing Postgres state.
 // YAML entries win on conflicts, while PG-only entries are preserved.
 func ReconcileStates(existing State, fromYAML State, opts ReconcileOptions) (State, ReconcileStats) {
+	existing = existing.Normalized()
+	fromYAML = fromYAML.Normalized()
 	stats := ReconcileStats{
-		ExistingAPIKeys:        len(normalizeAPIKeys(existing.APIKeys)),
-		ExistingAPIKeyPolicies: len(clonePolicies(existing.APIKeyPolicies)),
-		YAMLAPIKeys:            len(normalizeAPIKeys(fromYAML.APIKeys)),
-		YAMLAPIKeyPolicies:     len(clonePolicies(fromYAML.APIKeyPolicies)),
+		ExistingAPIKeys:        len(existing.Records),
+		ExistingAPIKeyPolicies: len(existing.Records),
+		YAMLAPIKeys:            len(fromYAML.Records),
+		YAMLAPIKeyPolicies:     len(fromYAML.Records),
 	}
 
-	merged := State{
-		APIKeys:        mergeAPIKeys(fromYAML.APIKeys, existing.APIKeys),
-		APIKeyPolicies: mergePolicies(fromYAML.APIKeyPolicies, existing.APIKeyPolicies, &stats),
-	}
+	merged := State{Records: mergeRecords(fromYAML.Records, existing.Records, &stats)}
 	if opts.AssignBudgetGroups {
-		merged.APIKeyPolicies = assignBudgetGroups(merged.APIKeyPolicies, &stats)
+		merged.Records = assignBudgetGroups(merged.Records, &stats)
 	}
 	merged = sanitizeState(merged)
 
-	stats.MergedAPIKeys = len(merged.APIKeys)
-	stats.MergedAPIKeyPolicies = len(merged.APIKeyPolicies)
-	for _, entry := range merged.APIKeyPolicies {
-		if entry.TokenPackageUSD > 0 {
+	stats.MergedAPIKeys = len(merged.Records)
+	stats.MergedAPIKeyPolicies = len(merged.Records)
+	for _, entry := range merged.Records {
+		if entry.Policy.TokenPackageUSD > 0 {
 			stats.TokenPackagePolicyCount++
 		}
 	}
 	return merged, stats
 }
 
-func mergeAPIKeys(primary, secondary []string) []string {
+func mergeRecords(primary, secondary []Record, stats *ReconcileStats) []Record {
 	seen := make(map[string]struct{}, len(primary)+len(secondary))
-	out := make([]string, 0, len(primary)+len(secondary))
-	appendKeys := func(keys []string) {
-		for _, raw := range keys {
-			key := strings.TrimSpace(raw)
+	out := make([]Record, 0, len(primary)+len(secondary))
+	appendRecords := func(records []Record, preservedOnly bool) {
+		for _, raw := range records {
+			record := raw
+			key := strings.TrimSpace(record.APIKey)
 			if key == "" {
 				continue
 			}
@@ -81,52 +81,24 @@ func mergeAPIKeys(primary, secondary []string) []string {
 				continue
 			}
 			seen[key] = struct{}{}
-			out = append(out, key)
-		}
-	}
-	appendKeys(primary)
-	appendKeys(secondary)
-	if len(out) == 0 {
-		return nil
-	}
-	return out
-}
-
-func mergePolicies(primary, secondary []config.APIKeyPolicy, stats *ReconcileStats) []config.APIKeyPolicy {
-	seen := make(map[string]struct{}, len(primary)+len(secondary))
-	out := make([]config.APIKeyPolicy, 0, len(primary)+len(secondary))
-	appendPolicies := func(policies []config.APIKeyPolicy, preservedOnly bool) {
-		for _, raw := range policies {
-			entry := raw
-			key := strings.TrimSpace(entry.APIKey)
-			if key == "" {
-				continue
-			}
-			if _, ok := seen[key]; ok {
-				continue
-			}
-			seen[key] = struct{}{}
-			out = append(out, entry)
+			out = append(out, record)
 			if preservedOnly && stats != nil {
 				stats.PreservedPGOnlyPolicyCount++
 			}
 		}
 	}
-	appendPolicies(primary, false)
-	appendPolicies(secondary, true)
-	if len(out) == 0 {
-		return nil
-	}
-	return clonePolicies(out)
+	appendRecords(primary, false)
+	appendRecords(secondary, true)
+	return normalizeRecords(out)
 }
 
-func assignBudgetGroups(policies []config.APIKeyPolicy, stats *ReconcileStats) []config.APIKeyPolicy {
-	if len(policies) == 0 {
+func assignBudgetGroups(records []Record, stats *ReconcileStats) []Record {
+	if len(records) == 0 {
 		return nil
 	}
-	out := clonePolicies(policies)
+	out := normalizeRecords(records)
 	for i := range out {
-		entry := &out[i]
+		entry := &out[i].Policy
 		if keepCustomGroup(entry.GroupID) {
 			continue
 		}
@@ -195,10 +167,8 @@ func matchBudgetGroup(entry config.APIKeyPolicy) (budgetGroupTarget, bool) {
 
 func sanitizeState(state State) State {
 	cfg := &config.Config{
-		SDKConfig: config.SDKConfig{
-			APIKeys: append([]string(nil), state.APIKeys...),
-		},
-		APIKeyPolicies: clonePolicies(state.APIKeyPolicies),
+		SDKConfig: config.SDKConfig{APIKeys: stateAPIKeys(state.Normalized().Records)},
+		APIKeyPolicies: statePolicies(state.Normalized().Records),
 	}
 	cfg.SanitizeAPIKeyPolicies()
 	return StateFromConfig(cfg)

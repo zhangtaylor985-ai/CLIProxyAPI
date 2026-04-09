@@ -15,8 +15,11 @@ import (
 )
 
 type stubAPIKeyConfigStore struct {
-	state apikeyconfig.State
-	err   error
+	state            apikeyconfig.State
+	savedRecord      apikeyconfig.Record
+	savedPreviousKey string
+	deletedAPIKey    string
+	err              error
 }
 
 func (s *stubAPIKeyConfigStore) Close() error { return nil }
@@ -30,6 +33,23 @@ func (s *stubAPIKeyConfigStore) SaveState(_ context.Context, state apikeyconfig.
 		return s.err
 	}
 	s.state = state
+	return nil
+}
+
+func (s *stubAPIKeyConfigStore) SaveRecord(_ context.Context, previousAPIKey string, record apikeyconfig.Record) error {
+	if s.err != nil {
+		return s.err
+	}
+	s.savedPreviousKey = previousAPIKey
+	s.savedRecord = record
+	return nil
+}
+
+func (s *stubAPIKeyConfigStore) DeleteRecord(_ context.Context, apiKey string) error {
+	if s.err != nil {
+		return s.err
+	}
+	s.deletedAPIKey = apiKey
 	return nil
 }
 
@@ -65,11 +85,11 @@ func TestPersistAPIKeyConfigUsesStoreAndCallback(t *testing.T) {
 	if callbackCount != 1 {
 		t.Fatalf("expected callback once, got %d", callbackCount)
 	}
-	if len(store.state.APIKeys) != 1 || store.state.APIKeys[0] != "key-1" {
-		t.Fatalf("unexpected stored api keys: %#v", store.state.APIKeys)
+	if len(store.state.Records) != 1 || store.state.Records[0].APIKey != "key-1" {
+		t.Fatalf("unexpected stored records: %#v", store.state.Records)
 	}
-	if len(store.state.APIKeyPolicies) != 1 || store.state.APIKeyPolicies[0].APIKey != "key-1" {
-		t.Fatalf("unexpected stored policies: %#v", store.state.APIKeyPolicies)
+	if got := store.state.Records[0].Policy.DailyBudgetUSD; got != 12 {
+		t.Fatalf("unexpected stored policy daily budget: %v", got)
 	}
 }
 
@@ -101,10 +121,84 @@ func TestRenderConfigYAMLUsesEffectiveConfigWhenStoreEnabled(t *testing.T) {
 		t.Fatalf("renderConfigYAML: %v", err)
 	}
 	text := string(data)
-	if !strings.Contains(text, "pg-key") {
-		t.Fatalf("expected rendered yaml to contain pg-key, got:\n%s", text)
+	if strings.Contains(text, "pg-key") || strings.Contains(text, "old-key") {
+		t.Fatalf("expected rendered yaml to omit api keys when store is enabled, got:\n%s", text)
 	}
-	if strings.Contains(text, "old-key") {
-		t.Fatalf("expected rendered yaml to hide stale key, got:\n%s", text)
+}
+
+func TestPersistAPIKeyRecordUsesRowStoreAndCallback(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(rec)
+	ctx.Request = httptest.NewRequest(http.MethodPatch, "/v0/management/api-key-records/key-1", nil)
+
+	store := &stubAPIKeyConfigStore{}
+	callbackCount := 0
+	handler := &Handler{
+		cfg: &config.Config{
+			SDKConfig: config.SDKConfig{
+				APIKeys: []string{"key-1"},
+			},
+			APIKeyPolicies: []config.APIKeyPolicy{
+				{APIKey: "key-1", DailyBudgetUSD: 12, CreatedAt: "2026-04-06T13:00:00Z"},
+			},
+		},
+		apiKeyConfigStore: store,
+		configUpdated: func(*config.Config) {
+			callbackCount++
+		},
+	}
+
+	if ok := handler.persistAPIKeyRecord(ctx, "", "key-1"); !ok {
+		t.Fatal("persistAPIKeyRecord returned false")
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unexpected status: %d", rec.Code)
+	}
+	if callbackCount != 1 {
+		t.Fatalf("expected callback once, got %d", callbackCount)
+	}
+	if store.savedPreviousKey != "" {
+		t.Fatalf("unexpected previous key: %q", store.savedPreviousKey)
+	}
+	if store.savedRecord.APIKey != "key-1" {
+		t.Fatalf("unexpected saved record: %#v", store.savedRecord)
+	}
+	if got := store.savedRecord.Policy.DailyBudgetUSD; got != 12 {
+		t.Fatalf("unexpected stored policy daily budget: %v", got)
+	}
+}
+
+func TestDeletePersistedAPIKeyRecordUsesRowStoreAndCallback(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(rec)
+	ctx.Request = httptest.NewRequest(http.MethodDelete, "/v0/management/api-key-records/key-1", nil)
+
+	store := &stubAPIKeyConfigStore{}
+	callbackCount := 0
+	handler := &Handler{
+		cfg: &config.Config{
+			SDKConfig: config.SDKConfig{
+				APIKeys: []string{"key-1"},
+			},
+		},
+		apiKeyConfigStore: store,
+		configUpdated: func(*config.Config) {
+			callbackCount++
+		},
+	}
+
+	if ok := handler.deletePersistedAPIKeyRecord(ctx, "key-1"); !ok {
+		t.Fatal("deletePersistedAPIKeyRecord returned false")
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unexpected status: %d", rec.Code)
+	}
+	if callbackCount != 1 {
+		t.Fatalf("expected callback once, got %d", callbackCount)
+	}
+	if store.deletedAPIKey != "key-1" {
+		t.Fatalf("unexpected deleted key: %q", store.deletedAPIKey)
 	}
 }

@@ -218,6 +218,86 @@ func TestAPIKeyRecordSummary_AnchoredWindowUsesExactPeriodAndIgnoresPreAnchorBud
 	}
 }
 
+func TestPolicyViewRoundTripUsesFamilyAccessTogglesAndMetadata(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 6, 9, 0, 0, 0, time.UTC)
+	expiresAt := now.Add(24 * time.Hour)
+	policyEntry := &config.APIKeyPolicy{
+		APIKey:         "k1",
+		CreatedAt:      now.Format(time.RFC3339),
+		ExpiresAt:      expiresAt.Format(time.RFC3339),
+		Disabled:       true,
+		ExcludedModels: []string{"claude-*", "gpt-*", "chatgpt-*", "o1*", "o3*", "o4*", "custom-*"},
+	}
+
+	view := policyToView("k1", policyEntry, nil)
+	if view.AllowClaudeFamily {
+		t.Fatal("expected claude family to be denied")
+	}
+	if view.AllowGPTFamily {
+		t.Fatal("expected gpt family to be denied")
+	}
+	if len(view.ExcludedModels) != 1 || view.ExcludedModels[0] != "custom-*" {
+		t.Fatalf("unexpected extra excluded models: %#v", view.ExcludedModels)
+	}
+	if !view.Disabled || view.CreatedAt == "" || view.ExpiresAt == "" {
+		t.Fatalf("expected metadata to round-trip, got %+v", view)
+	}
+
+	roundTrip := viewToPolicy("k1", view)
+	if !roundTrip.Disabled || roundTrip.CreatedAt != policyEntry.CreatedAt || roundTrip.ExpiresAt != policyEntry.ExpiresAt {
+		t.Fatalf("unexpected round-trip metadata: %+v", roundTrip)
+	}
+	if got := roundTrip.ExcludedModels; len(got) != 7 {
+		t.Fatalf("unexpected round-trip excluded models: %#v", got)
+	}
+}
+
+func TestDefaultAPIKeyPolicyViewSetsOneMonthExpiryAndClaudeOnly(t *testing.T) {
+	t.Parallel()
+
+	view := defaultAPIKeyPolicyView("k-default")
+	if !view.AllowClaudeFamily {
+		t.Fatal("expected claude family to be allowed by default")
+	}
+	if view.AllowGPTFamily {
+		t.Fatal("expected gpt family to be denied by default")
+	}
+	if view.Disabled {
+		t.Fatal("expected default api key to be enabled")
+	}
+	if view.CreatedAt == "" || view.ExpiresAt == "" {
+		t.Fatalf("expected created/expires metadata, got %+v", view)
+	}
+
+	createdAt, err := time.Parse(time.RFC3339, view.CreatedAt)
+	if err != nil {
+		t.Fatalf("parse created_at: %v", err)
+	}
+	expiresAt, err := time.Parse(time.RFC3339, view.ExpiresAt)
+	if err != nil {
+		t.Fatalf("parse expires_at: %v", err)
+	}
+	if !expiresAt.Equal(createdAt.AddDate(0, 1, 0)) {
+		t.Fatalf("expires_at = %s, want %s", expiresAt.Format(time.RFC3339), createdAt.AddDate(0, 1, 0).Format(time.RFC3339))
+	}
+}
+
+func TestIsEmptyPolicyViewTreatsZeroValueAsEmpty(t *testing.T) {
+	t.Parallel()
+
+	if !isEmptyPolicyView(apiKeyPolicyView{}) {
+		t.Fatal("expected zero-value policy view to be treated as empty")
+	}
+	if isEmptyPolicyView(apiKeyPolicyView{AllowClaudeFamily: true}) {
+		t.Fatal("expected non-empty family toggle to prevent empty-policy fallback")
+	}
+	if isEmptyPolicyView(apiKeyPolicyView{Disabled: true}) {
+		t.Fatal("expected disabled policy to be treated as non-empty")
+	}
+}
+
 func newAPIKeyRecordsTestHandler(t *testing.T, cfg *config.Config) (*Handler, func()) {
 	t.Helper()
 	return newPostgresManagementTestHandler(t, cfg)
