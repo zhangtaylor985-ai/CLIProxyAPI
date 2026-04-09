@@ -1,0 +1,4 @@
+interface:
+  display_name: "Session Trajectory Export"
+  short_description: "Export CLIProxyAPI session trajectories"
+  default_prompt: "Export session trajectories from the CLIProxyAPI repo or the configured production host, summarize the output paths, and explain how to retrieve the exported files."

@@ -28,23 +28,9 @@ static/*
 auths/*
 !auths/.gitkeep
 
-# Documentation
-docs/*
-!docs/claude-style-prompt-research_CN.md
-AGENTS.md
-CLAUDE.md
-GEMINI.md
-
 # Tooling metadata
-.vscode/*
-.codex/*
 .claude/*
-.gemini/*
-.serena/*
-.agent/*
-.agents/*
-.agents/*
-.opencode/*
+.vscode/*
 .idea/*
 .bmad/*
 _bmad/*

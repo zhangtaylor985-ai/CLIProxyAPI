@@ -41,6 +41,42 @@ var DefaultPrices = map[string]PriceMicroUSDPer1M{
 		Completion: 25_000_000, // $25.00 / 1M
 		Cached:     500_000,    // $0.50 / 1M
 	},
+	// Google Gemini
+	policy.NormaliseModelKey("gemini-2.5-pro"): {
+		Prompt:     1_250_000,  // $1.25 / 1M (<=200K context)
+		Completion: 10_000_000, // $10.00 / 1M
+		Cached:     125_000,    // $0.125 / 1M
+	},
+	policy.NormaliseModelKey("gemini-2.5-flash"): {
+		Prompt:     300_000,   // $0.30 / 1M
+		Completion: 2_500_000, // $2.50 / 1M
+		Cached:     30_000,    // $0.03 / 1M
+	},
+	policy.NormaliseModelKey("gemini-2.5-flash-lite"): {
+		Prompt:     100_000, // $0.10 / 1M
+		Completion: 400_000, // $0.40 / 1M
+		Cached:     10_000,  // $0.01 / 1M
+	},
+	policy.NormaliseModelKey("gemini-3-flash-preview"): {
+		Prompt:     500_000,   // $0.50 / 1M
+		Completion: 3_000_000, // $3.00 / 1M
+		Cached:     50_000,    // $0.05 / 1M
+	},
+	policy.NormaliseModelKey("gemini-3-pro-preview"): {
+		Prompt:     2_000_000,  // $2.00 / 1M (<=200K context; deprecated, alias to 3.1-pro)
+		Completion: 12_000_000, // $12.00 / 1M
+		Cached:     200_000,    // $0.20 / 1M
+	},
+	policy.NormaliseModelKey("gemini-3.1-pro-preview"): {
+		Prompt:     2_000_000,  // $2.00 / 1M (<=200K context)
+		Completion: 12_000_000, // $12.00 / 1M
+		Cached:     200_000,    // $0.20 / 1M
+	},
+	policy.NormaliseModelKey("gemini-3.1-flash-lite-preview"): {
+		Prompt:     250_000,   // $0.25 / 1M
+		Completion: 1_500_000, // $1.50 / 1M
+		Cached:     25_000,    // $0.025 / 1M
+	},
 	// OpenAI / Codex
 	policy.NormaliseModelKey("gpt-5.2"): {
 		Prompt:     1_750_000,  // $1.75 / 1M
