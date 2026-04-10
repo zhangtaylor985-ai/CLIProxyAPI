@@ -602,6 +602,7 @@ func (p *UsagePersistPlugin) buildPersistRecord(record coreusage.Record) (usageP
 			AuthIndex:       strings.TrimSpace(record.AuthIndex),
 			Model:           modelKey,
 			Failed:          record.Failed,
+			LatencyMs:       max64(0, record.Latency.Milliseconds()),
 			InputTokens:     max64(0, detail.InputTokens),
 			OutputTokens:    max64(0, detail.OutputTokens),
 			ReasoningTokens: max64(0, detail.ReasoningTokens),

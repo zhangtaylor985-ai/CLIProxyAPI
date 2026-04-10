@@ -45,8 +45,8 @@ func TestReconcileStatesMergesYAMLIntoExistingAndPreservesTokenPackage(t *testin
 	if shared.GroupID != "double" {
 		t.Fatalf("shared group = %q, want double", shared.GroupID)
 	}
-	if shared.DailyBudgetUSD != 150 || shared.WeeklyBudgetUSD != 500 {
-		t.Fatalf("shared budgets = %v/%v, want 150/500", shared.DailyBudgetUSD, shared.WeeklyBudgetUSD)
+	if shared.DailyBudgetUSD != 0 || shared.WeeklyBudgetUSD != 0 {
+		t.Fatalf("shared budgets = %v/%v, want 0/0 when group budget is assigned", shared.DailyBudgetUSD, shared.WeeklyBudgetUSD)
 	}
 	if shared.TokenPackageUSD != 30 || shared.TokenPackageStartedAt != "2026-03-29T13:33:00+08:00" {
 		t.Fatalf("shared token package = %v/%q", shared.TokenPackageUSD, shared.TokenPackageStartedAt)
@@ -59,8 +59,8 @@ func TestReconcileStatesMergesYAMLIntoExistingAndPreservesTokenPackage(t *testin
 	if yamlOnly.GroupID != "quad" {
 		t.Fatalf("yaml-only group = %q, want quad", yamlOnly.GroupID)
 	}
-	if yamlOnly.DailyBudgetUSD != 60 || yamlOnly.WeeklyBudgetUSD != 250 {
-		t.Fatalf("yaml-only budgets = %v/%v, want 60/250", yamlOnly.DailyBudgetUSD, yamlOnly.WeeklyBudgetUSD)
+	if yamlOnly.DailyBudgetUSD != 0 || yamlOnly.WeeklyBudgetUSD != 0 {
+		t.Fatalf("yaml-only budgets = %v/%v, want 0/0 when group budget is assigned", yamlOnly.DailyBudgetUSD, yamlOnly.WeeklyBudgetUSD)
 	}
 
 	pgOnly := findPolicy(mergedPolicies, "pg-only")

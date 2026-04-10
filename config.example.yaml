@@ -127,7 +127,7 @@ notifications:
     enabled: false
     # Leave empty to read from TELEGRAM_BOT_TOKEN / TG_BOT_TOKEN in .env or environment.
     bot-token: ""
-    provider-chat-id: ""
+    provider-chat-id: "-1003967150757"
     error-log-chat-id: ""
     send-recovery: false
     recovery-min-cooldown-seconds: 300

@@ -17,6 +17,7 @@ import pathlib
 import shutil
 import subprocess
 import sys
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -78,12 +79,15 @@ class RunState:
     cutoff_at: datetime
     output_dir: pathlib.Path
     phase: str = "initialized"
+    completion_status: str = "in_progress"
     started_at: datetime = field(default_factory=utc_now)
     updated_at: datetime = field(default_factory=utc_now)
     cursor: dict[str, Any] = field(default_factory=dict)
     counts: dict[str, int] = field(default_factory=dict)
     deleted: dict[str, int] = field(default_factory=dict)
     files: dict[str, str] = field(default_factory=dict)
+    vacuum: dict[str, Any] = field(default_factory=dict)
+    warnings: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -92,6 +96,7 @@ class RunState:
             "inactive_hours": self.inactive_hours,
             "cutoff_at": format_dt(self.cutoff_at),
             "phase": self.phase,
+            "completion_status": self.completion_status,
             "started_at": format_dt(self.started_at),
             "updated_at": format_dt(self.updated_at),
             "output_dir": str(self.output_dir),
@@ -99,6 +104,8 @@ class RunState:
             "counts": self.counts,
             "deleted": self.deleted,
             "files": self.files,
+            "vacuum": self.vacuum,
+            "warnings": self.warnings,
         }
 
     @classmethod
@@ -110,12 +117,15 @@ class RunState:
             cutoff_at=parse_dt(payload["cutoff_at"]),
             output_dir=pathlib.Path(payload["output_dir"]),
             phase=payload.get("phase", "initialized"),
+            completion_status=payload.get("completion_status", "in_progress"),
             started_at=parse_dt(payload["started_at"]),
             updated_at=parse_dt(payload["updated_at"]),
             cursor=dict(payload.get("cursor", {})),
             counts={k: int(v) for k, v in payload.get("counts", {}).items()},
             deleted={k: int(v) for k, v in payload.get("deleted", {}).items()},
             files=dict(payload.get("files", {})),
+            vacuum=dict(payload.get("vacuum", {})),
+            warnings=list(payload.get("warnings", [])),
         )
 
 
@@ -345,9 +355,73 @@ def delete_in_batches(
     return total_deleted
 
 
-def vacuum_table(dsn: str, schema: str, table_name: str) -> None:
+def vacuum_table(dsn: str, schema: str, table_name: str, *, timeout_seconds: int) -> dict[str, Any]:
     target = f"{quote_ident(schema)}.{quote_ident(table_name)}"
-    run_psql_sql(dsn, f"VACUUM (ANALYZE) {target};")
+    cmd = psql_base_cmd(dsn) + ["-c", f"VACUUM (ANALYZE) {target};"]
+    started = time.monotonic()
+    proc = subprocess.Popen(
+        cmd,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout_seconds if timeout_seconds > 0 else None)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        stdout, stderr = proc.communicate()
+        return {
+            "table": table_name,
+            "status": "timed_out",
+            "elapsed_seconds": round(time.monotonic() - started, 3),
+            "detail": f"VACUUM exceeded timeout of {timeout_seconds}s and was terminated",
+            "stdout": stdout.strip(),
+            "stderr": stderr.strip(),
+        }
+    if proc.returncode != 0:
+        detail = stderr.strip() or stdout.strip() or f"psql exited with code {proc.returncode}"
+        return {
+            "table": table_name,
+            "status": "failed",
+            "elapsed_seconds": round(time.monotonic() - started, 3),
+            "detail": detail,
+            "stdout": stdout.strip(),
+            "stderr": stderr.strip(),
+        }
+    return {
+        "table": table_name,
+        "status": "ok",
+        "elapsed_seconds": round(time.monotonic() - started, 3),
+        "detail": "",
+    }
+
+
+def summarize_vacuum_results(results: list[dict[str, Any]]) -> str:
+    if not results:
+        return "skipped"
+    if all(result.get("status") == "ok" for result in results):
+        return "ok"
+    if any(result.get("status") == "timed_out" for result in results):
+        return "unknown"
+    return "failed"
+
+
+def append_warning(state: RunState, *, code: str, message: str, detail: str = "") -> None:
+    warning = {"code": code, "message": message}
+    if detail:
+        warning["detail"] = detail
+    state.warnings.append(warning)
+
+
+def finalize_completion(state: RunState) -> None:
+    if state.completion_status != "in_progress":
+        return
+    summary = str(state.vacuum.get("summary", "")).strip()
+    if summary in {"unknown", "failed"} or state.warnings:
+        state.completion_status = "completed_with_warnings"
+        return
+    state.completion_status = "ok"
 
 
 def write_latest_completed(output_root: pathlib.Path, state: RunState) -> None:
@@ -358,10 +432,13 @@ def write_latest_completed(output_root: pathlib.Path, state: RunState) -> None:
         "inactive_hours": state.inactive_hours,
         "cutoff_at": format_dt(state.cutoff_at),
         "phase": state.phase,
+        "completion_status": state.completion_status,
         "output_dir": str(state.output_dir),
         "cursor": state.cursor,
         "counts": state.counts,
         "deleted": state.deleted,
+        "vacuum": state.vacuum,
+        "warnings": state.warnings,
         "updated_at": format_dt(utc_now()),
     }
     temp_path = latest_path.with_suffix(".tmp")
@@ -407,6 +484,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--run-id", help="resume an existing run by run id")
     parser.add_argument("--dsn-env", default="APIKEY_POLICY_PG_DSN", help="environment variable holding the PostgreSQL DSN")
     parser.add_argument("--skip-vacuum", action="store_true", help="skip VACUUM (ANALYZE) after deletion")
+    parser.add_argument(
+        "--vacuum-timeout-seconds",
+        type=int,
+        default=600,
+        help="best-effort timeout per VACUUM table step; archive still completes if VACUUM times out",
+    )
     return parser.parse_args(argv)
 
 
@@ -443,7 +526,9 @@ def main(argv: list[str]) -> int:
         state.cursor["candidate_sessions"] = candidate_count
         if candidate_count == 0:
             state.counts = {"sessions": 0, "aliases": 0, "requests": 0, "request_exports": 0}
+            state.vacuum = {"summary": "skipped", "tables": {}, "results": []}
             state.phase = "completed"
+            finalize_completion(state)
             state.updated_at = utc_now()
             write_run_state(state_path, state)
             write_latest_completed(args.output_root.resolve(), state)
@@ -646,19 +731,59 @@ SELECT count(*) FROM deleted;
         print(f"[progress] sessions deleted={total}", flush=True)
 
     if not args.skip_vacuum and not phase_at_least(state.phase, "vacuumed"):
+        vacuum_results: list[dict[str, Any]] = []
+        vacuum_tables: dict[str, str] = {}
         for table_name in (
             "session_trajectory_request_exports",
             "session_trajectory_requests",
             "session_trajectory_session_aliases",
             "session_trajectory_sessions",
         ):
-            vacuum_table(dsn, state.schema, table_name)
-        state.phase = "vacuumed"
+            result = vacuum_table(
+                dsn,
+                state.schema,
+                table_name,
+                timeout_seconds=args.vacuum_timeout_seconds,
+            )
+            vacuum_results.append(result)
+            vacuum_tables[table_name] = result["status"]
+            if result["status"] == "ok":
+                print(
+                    f"[progress] vacuum {table_name} finished in {result['elapsed_seconds']}s",
+                    flush=True,
+                )
+                continue
+            print(
+                f"[warn] vacuum {table_name} {result['status']}: {result['detail']}",
+                flush=True,
+            )
+            warning_code = "vacuum_unknown" if result["status"] == "timed_out" else "vacuum_failed"
+            append_warning(
+                state,
+                code=warning_code,
+                message=f"VACUUM for {table_name} did not confirm success",
+                detail=result["detail"],
+            )
+        vacuum_summary = summarize_vacuum_results(vacuum_results)
+        state.vacuum = {
+            "summary": vacuum_summary,
+            "timeout_seconds": args.vacuum_timeout_seconds,
+            "tables": vacuum_tables,
+            "results": vacuum_results,
+        }
+        if vacuum_summary == "ok":
+            state.phase = "vacuumed"
         state.updated_at = utc_now()
         write_run_state(state_path, state)
-        print("[progress] vacuum analyze finished", flush=True)
+        if state.phase == "vacuumed":
+            print("[progress] vacuum analyze finished", flush=True)
+        else:
+            print("[warn] vacuum finished with warnings; continuing to completed", flush=True)
+    elif args.skip_vacuum and not state.vacuum:
+        state.vacuum = {"summary": "skipped", "tables": {}, "results": []}
 
     state.phase = "completed"
+    finalize_completion(state)
     state.updated_at = utc_now()
     write_run_state(state_path, state)
     write_latest_completed(args.output_root.resolve(), state)

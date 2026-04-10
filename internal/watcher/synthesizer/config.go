@@ -66,6 +66,7 @@ func (s *ConfigSynthesizer) synthesizeGeminiKeys(ctx *SynthesisContext) []*corea
 		if base != "" {
 			attrs["base_url"] = base
 		}
+		addHealthCheckConfigAttrs(attrs, entry.ProbeMode, entry.ProbePath, entry.CanaryEnabled, entry.CanaryPrompt, entry.CanaryIntervalSeconds)
 		if hash := diff.ComputeGeminiModelsHash(entry.Models); hash != "" {
 			attrs["models_hash"] = hash
 		}
@@ -113,6 +114,7 @@ func (s *ConfigSynthesizer) synthesizeClaudeKeys(ctx *SynthesisContext) []*corea
 		if base != "" {
 			attrs["base_url"] = base
 		}
+		addHealthCheckConfigAttrs(attrs, ck.ProbeMode, ck.ProbePath, ck.CanaryEnabled, ck.CanaryPrompt, ck.CanaryIntervalSeconds)
 		if hash := diff.ComputeClaudeModelsHash(ck.Models); hash != "" {
 			attrs["models_hash"] = hash
 		}
@@ -166,6 +168,7 @@ func (s *ConfigSynthesizer) synthesizeCodexKeys(ctx *SynthesisContext) []*coreau
 		if ck.BaseURL != "" {
 			attrs["base_url"] = ck.BaseURL
 		}
+		addHealthCheckConfigAttrs(attrs, ck.ProbeMode, ck.ProbePath, ck.CanaryEnabled, ck.CanaryPrompt, ck.CanaryIntervalSeconds)
 		if ck.Websockets {
 			attrs["websockets"] = "true"
 		}
@@ -224,6 +227,7 @@ func (s *ConfigSynthesizer) synthesizeOpenAICompat(ctx *SynthesisContext) []*cor
 			if compat.Priority != 0 {
 				attrs["priority"] = strconv.Itoa(compat.Priority)
 			}
+			addHealthCheckConfigAttrs(attrs, compat.ProbeMode, compat.ProbePath, compat.CanaryEnabled, compat.CanaryPrompt, compat.CanaryIntervalSeconds)
 			if key != "" {
 				attrs["api_key"] = key
 			}
@@ -258,6 +262,7 @@ func (s *ConfigSynthesizer) synthesizeOpenAICompat(ctx *SynthesisContext) []*cor
 			if compat.Priority != 0 {
 				attrs["priority"] = strconv.Itoa(compat.Priority)
 			}
+			addHealthCheckConfigAttrs(attrs, compat.ProbeMode, compat.ProbePath, compat.CanaryEnabled, compat.CanaryPrompt, compat.CanaryIntervalSeconds)
 			if hash := diff.ComputeOpenAICompatModelsHash(compat.Models); hash != "" {
 				attrs["models_hash"] = hash
 			}
@@ -303,6 +308,7 @@ func (s *ConfigSynthesizer) synthesizeVertexCompat(ctx *SynthesisContext) []*cor
 		if compat.Priority != 0 {
 			attrs["priority"] = strconv.Itoa(compat.Priority)
 		}
+		addHealthCheckConfigAttrs(attrs, compat.ProbeMode, compat.ProbePath, compat.CanaryEnabled, compat.CanaryPrompt, compat.CanaryIntervalSeconds)
 		if key != "" {
 			attrs["api_key"] = key
 		}
@@ -325,4 +331,25 @@ func (s *ConfigSynthesizer) synthesizeVertexCompat(ctx *SynthesisContext) []*cor
 		out = append(out, a)
 	}
 	return out
+}
+
+func addHealthCheckConfigAttrs(attrs map[string]string, probeMode, probePath string, canaryEnabled *bool, canaryPrompt string, canaryIntervalSeconds int) {
+	if len(attrs) == 0 {
+		return
+	}
+	if trimmed := strings.TrimSpace(probeMode); trimmed != "" {
+		attrs["probe_mode"] = trimmed
+	}
+	if trimmed := strings.TrimSpace(probePath); trimmed != "" {
+		attrs["probe_path"] = trimmed
+	}
+	if canaryEnabled != nil {
+		attrs["canary_enabled"] = strconv.FormatBool(*canaryEnabled)
+	}
+	if trimmed := strings.TrimSpace(canaryPrompt); trimmed != "" {
+		attrs["canary_prompt"] = trimmed
+	}
+	if canaryIntervalSeconds > 0 {
+		attrs["canary_interval_seconds"] = strconv.Itoa(canaryIntervalSeconds)
+	}
 }

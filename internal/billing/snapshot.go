@@ -59,6 +59,7 @@ func addUsageEventToSnapshot(snapshot *internalusage.StatisticsSnapshot, row Usa
 	timestamp := time.Unix(row.RequestedAt, 0).In(policy.ChinaLocation())
 	detail := internalusage.RequestDetail{
 		Timestamp: timestamp,
+		LatencyMs: max64(0, row.LatencyMs),
 		Source:    strings.TrimSpace(row.Source),
 		AuthIndex: strings.TrimSpace(row.AuthIndex),
 		Tokens: internalusage.TokenStats{

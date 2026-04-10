@@ -27,6 +27,15 @@ def write_jsonl_gz(path: pathlib.Path, rows: list[dict]) -> None:
             handle.write("\n")
 
 
+def write_copy_escaped_jsonl_gz(path: pathlib.Path, rows: list[dict]) -> None:
+    with gzip.open(path, "wt", encoding="utf-8", newline="\n") as handle:
+        for row in rows:
+            # session_trajectory_archive.py currently writes COPY text output,
+            # which doubles backslashes inside the JSON payload.
+            handle.write(json.dumps(row).replace("\\", "\\\\"))
+            handle.write("\n")
+
+
 class ImportSessionTrajectoryArchiveTests(unittest.TestCase):
     def test_select_candidate_sessions_with_time_window(self):
         mod = load_module()
@@ -99,6 +108,30 @@ class ImportSessionTrajectoryArchiveTests(unittest.TestCase):
                 end_time=mod.parse_dt("2026-04-07T00:00:00Z"),
             )
 
+    def test_read_jsonl_gz_accepts_copy_escaped_rows(self):
+        mod = load_module()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = pathlib.Path(tmpdir)
+            path = tmp / "session_trajectory_requests.jsonl.gz"
+            rows = [
+                {
+                    "id": "0fccfb68-ff7d-4fb0-96a0-3cc02c80c773",
+                    "request_json": {
+                        "tools": [
+                            {
+                                "description": 'before running \\"mkdir foo/bar\\", first use `ls foo`',
+                            }
+                        ]
+                    },
+                }
+            ]
+            write_copy_escaped_jsonl_gz(path, rows)
+
+            loaded = list(mod.read_jsonl_gz(path))
+
+            self.assertEqual(loaded, rows)
+
     def test_build_storage_workflow_sql_mentions_volumes_storage_and_tables(self):
         mod = load_module()
 
@@ -113,6 +146,18 @@ class ImportSessionTrajectoryArchiveTests(unittest.TestCase):
         self.assertIn('ALTER DATABASE "cliproxy" SET default_tablespace = \'cliproxy_ts\'', sql)
         self.assertIn('"public"."session_trajectory_sessions"', sql)
         self.assertIn('"public"."session_trajectory_requests"', sql)
+
+    def test_build_copy_csv_script_uses_single_backslash_null_marker(self):
+        mod = load_module()
+
+        script = mod.build_copy_csv_script(
+            schema="public",
+            table_name="session_trajectory_sessions",
+            csv_file=pathlib.Path("/tmp/session_trajectory_sessions.csv"),
+        )
+
+        self.assertIn("WITH (FORMAT csv, NULL '\\N')", script)
+        self.assertNotIn("NULL '\\\\N'", script)
 
 
 if __name__ == "__main__":

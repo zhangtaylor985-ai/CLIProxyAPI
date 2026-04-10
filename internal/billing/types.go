@@ -45,6 +45,7 @@ type UsageEventRow struct {
 	AuthIndex   string `json:"auth_index"`
 	Model       string `json:"model"`
 	Failed      bool   `json:"failed"`
+	LatencyMs   int64  `json:"latency_ms,omitempty"`
 
 	InputTokens     int64 `json:"input_tokens"`
 	OutputTokens    int64 `json:"output_tokens"`
@@ -61,6 +62,7 @@ type UsageEventAggregateRow struct {
 	AuthIndex    string `json:"auth_index"`
 	SuccessCount int64  `json:"success_count"`
 	FailureCount int64  `json:"failure_count"`
+	SlowCount    int64  `json:"slow_count"`
 }
 
 type DailyUsageReport struct {

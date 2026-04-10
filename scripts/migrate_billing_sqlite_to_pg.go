@@ -306,11 +306,19 @@ func (m migrator) migrateDailyUsage(ctx context.Context) error {
 }
 
 func (m migrator) migrateUsageEvents(ctx context.Context) error {
-	rows, err := m.sqlite.QueryContext(ctx, `
-		SELECT id, requested_at, api_key, source, auth_index, model, failed, input_tokens, output_tokens, reasoning_tokens, cached_tokens, total_tokens, cost_micro_usd, updated_at
+	hasLatencyColumn, err := m.sqliteColumnExists(ctx, "usage_events", "latency_ms")
+	if err != nil {
+		return err
+	}
+	selectColumns := "id, requested_at, api_key, source, auth_index, model, failed, input_tokens, output_tokens, reasoning_tokens, cached_tokens, total_tokens, cost_micro_usd, updated_at"
+	if hasLatencyColumn {
+		selectColumns = "id, requested_at, api_key, source, auth_index, model, failed, latency_ms, input_tokens, output_tokens, reasoning_tokens, cached_tokens, total_tokens, cost_micro_usd, updated_at"
+	}
+	rows, err := m.sqlite.QueryContext(ctx, fmt.Sprintf(`
+		SELECT %s
 		FROM usage_events
 		ORDER BY id ASC
-	`)
+	`, selectColumns))
 	if err != nil {
 		return fmt.Errorf("query sqlite usage_events: %w", err)
 	}
@@ -324,10 +332,10 @@ func (m migrator) migrateUsageEvents(ctx context.Context) error {
 
 	stmt, err := tx.PrepareContext(ctx, fmt.Sprintf(`
 		INSERT INTO %s (
-			id, requested_at, api_key, source, auth_index, model, failed, input_tokens, output_tokens,
+			id, requested_at, api_key, source, auth_index, model, failed, latency_ms, input_tokens, output_tokens,
 			reasoning_tokens, cached_tokens, total_tokens, cost_micro_usd, updated_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 		ON CONFLICT(id) DO UPDATE SET
 			requested_at = EXCLUDED.requested_at,
 			api_key = EXCLUDED.api_key,
@@ -335,6 +343,7 @@ func (m migrator) migrateUsageEvents(ctx context.Context) error {
 			auth_index = EXCLUDED.auth_index,
 			model = EXCLUDED.model,
 			failed = EXCLUDED.failed,
+			latency_ms = EXCLUDED.latency_ms,
 			input_tokens = EXCLUDED.input_tokens,
 			output_tokens = EXCLUDED.output_tokens,
 			reasoning_tokens = EXCLUDED.reasoning_tokens,
@@ -359,6 +368,7 @@ func (m migrator) migrateUsageEvents(ctx context.Context) error {
 			AuthIndex       string
 			Model           string
 			Failed          bool
+			LatencyMs       int64
 			InputTokens     int64
 			OutputTokens    int64
 			ReasoningTokens int64
@@ -367,7 +377,7 @@ func (m migrator) migrateUsageEvents(ctx context.Context) error {
 			CostMicroUSD    int64
 			UpdatedAt       int64
 		}
-		if err := rows.Scan(
+		scanArgs := []any{
 			&row.ID,
 			&row.RequestedAt,
 			&row.APIKey,
@@ -375,6 +385,11 @@ func (m migrator) migrateUsageEvents(ctx context.Context) error {
 			&row.AuthIndex,
 			&row.Model,
 			&row.Failed,
+		}
+		if hasLatencyColumn {
+			scanArgs = append(scanArgs, &row.LatencyMs)
+		}
+		scanArgs = append(scanArgs,
 			&row.InputTokens,
 			&row.OutputTokens,
 			&row.ReasoningTokens,
@@ -382,7 +397,8 @@ func (m migrator) migrateUsageEvents(ctx context.Context) error {
 			&row.TotalTokens,
 			&row.CostMicroUSD,
 			&row.UpdatedAt,
-		); err != nil {
+		)
+		if err := rows.Scan(scanArgs...); err != nil {
 			return fmt.Errorf("scan sqlite usage_events row: %w", err)
 		}
 		if _, err := stmt.ExecContext(
@@ -394,6 +410,7 @@ func (m migrator) migrateUsageEvents(ctx context.Context) error {
 			row.AuthIndex,
 			row.Model,
 			row.Failed,
+			row.LatencyMs,
 			row.InputTokens,
 			row.OutputTokens,
 			row.ReasoningTokens,
@@ -421,6 +438,33 @@ func (m migrator) migrateUsageEvents(ctx context.Context) error {
 
 	log.Printf("migrated usage_events: %d rows", count)
 	return nil
+}
+
+func (m migrator) sqliteColumnExists(ctx context.Context, table, column string) (bool, error) {
+	rows, err := m.sqlite.QueryContext(ctx, fmt.Sprintf(`PRAGMA table_info(%s)`, table))
+	if err != nil {
+		return false, fmt.Errorf("query sqlite table info %s: %w", table, err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var cid int
+		var name string
+		var columnType string
+		var notNull int
+		var defaultValue any
+		var pk int
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &pk); err != nil {
+			return false, fmt.Errorf("scan sqlite table info %s: %w", table, err)
+		}
+		if strings.EqualFold(strings.TrimSpace(name), column) {
+			return true, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, fmt.Errorf("iterate sqlite table info %s: %w", table, err)
+	}
+	return false, nil
 }
 
 func (m migrator) bumpUsageEventSequence(ctx context.Context, tx *sql.Tx, maxID int64) error {

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import fcntl
 import gzip
 import json
 import os
@@ -17,9 +18,18 @@ import pathlib
 import shutil
 import subprocess
 import tempfile
+import time
 from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlparse
+
+FILTER_PROGRESS_EVERY = 100_000
+PSQL_CANDIDATE_PATHS = (
+    "/opt/homebrew/opt/libpq/bin/psql",
+    "/opt/homebrew/bin/psql",
+    "/usr/local/bin/psql",
+    "/usr/bin/psql",
+)
 
 
 TABLE_EXPORT_FILES = {
@@ -136,8 +146,19 @@ def quote_literal(value: str) -> str:
 
 
 def require_binary(name: str) -> None:
-    if shutil.which(name) is None:
+    if resolve_binary_path(name) is None:
         raise SystemExit(f"required binary not found in PATH: {name}")
+
+
+def resolve_binary_path(name: str) -> str | None:
+    found = shutil.which(name)
+    if found:
+        return found
+    if name == "psql":
+        for candidate in PSQL_CANDIDATE_PATHS:
+            if pathlib.Path(candidate).exists():
+                return candidate
+    return None
 
 
 def resolve_import_tables(*, skip_request_exports: bool) -> list[str]:
@@ -155,10 +176,62 @@ def read_jsonl_gz(path: pathlib.Path) -> Any:
             try:
                 row = json.loads(line)
             except json.JSONDecodeError as exc:
-                raise RuntimeError(f"invalid JSON at {path}:{index}") from exc
+                try:
+                    row = json.loads(decode_pg_copy_text_line(line))
+                except json.JSONDecodeError as fallback_exc:
+                    raise RuntimeError(f"invalid JSON at {path}:{index}") from fallback_exc
             if not isinstance(row, dict):
                 raise RuntimeError(f"non-object JSON row at {path}:{index}")
             yield row
+
+
+def decode_pg_copy_text_line(raw: str) -> str:
+    """Reverse PostgreSQL COPY text escaping for a single-column JSON line."""
+    out: list[str] = []
+    i = 0
+    length = len(raw)
+    while i < length:
+        ch = raw[i]
+        if ch != "\\" or i + 1 >= length:
+            out.append(ch)
+            i += 1
+            continue
+        nxt = raw[i + 1]
+        if nxt == "\\":
+            out.append("\\")
+            i += 2
+            continue
+        if nxt == "n":
+            out.append("\n")
+            i += 2
+            continue
+        if nxt == "r":
+            out.append("\r")
+            i += 2
+            continue
+        if nxt == "t":
+            out.append("\t")
+            i += 2
+            continue
+        if nxt == "b":
+            out.append("\b")
+            i += 2
+            continue
+        if nxt == "f":
+            out.append("\f")
+            i += 2
+            continue
+        if nxt == "v":
+            out.append("\v")
+            i += 2
+            continue
+        if i + 3 < length and all("0" <= c <= "7" for c in raw[i + 1 : i + 4]):
+            out.append(chr(int(raw[i + 1 : i + 4], 8)))
+            i += 4
+            continue
+        out.append(nxt)
+        i += 2
+    return "".join(out)
 
 
 def session_matches_window(
@@ -224,19 +297,32 @@ def filter_table_to_csv(
     input_file: pathlib.Path,
     output_file: pathlib.Path,
     candidate_sessions: set[str],
+    progress_every: int,
 ) -> int:
     session_key = "id" if table_name == "session_trajectory_sessions" else "session_id"
     columns = TABLE_COLUMNS[table_name]
     count = 0
+    scanned = 0
     output_file.parent.mkdir(parents=True, exist_ok=True)
     with output_file.open("w", encoding="utf-8", newline="") as out:
         writer = csv.writer(out)
         for row in read_jsonl_gz(input_file):
+            scanned += 1
             session_id = str(row.get(session_key) or "").strip()
             if not session_id or session_id not in candidate_sessions:
+                if progress_every > 0 and scanned % progress_every == 0:
+                    print(
+                        f"[progress] scanning {table_name} scanned_rows={scanned} matched_rows={count}",
+                        flush=True,
+                    )
                 continue
             writer.writerow([csv_value(row.get(col)) for col in columns])
             count += 1
+            if progress_every > 0 and scanned % progress_every == 0:
+                print(
+                    f"[progress] scanning {table_name} scanned_rows={scanned} matched_rows={count}",
+                    flush=True,
+                )
     return count
 
 
@@ -259,7 +345,10 @@ def run_command(cmd: list[str], *, input_text: str | None = None) -> str:
 
 
 def psql_base_cmd(dsn: str) -> list[str]:
-    return ["psql", dsn, "-q", "-X", "-v", "ON_ERROR_STOP=1", "-P", "pager=off"]
+    psql_path = resolve_binary_path("psql")
+    if not psql_path:
+        raise SystemExit("required binary not found in PATH: psql")
+    return [psql_path, dsn, "-q", "-X", "-v", "ON_ERROR_STOP=1", "-P", "pager=off"]
 
 
 def run_psql_sql(dsn: str, sql: str) -> str:
@@ -301,12 +390,25 @@ def copy_csv_into_table(
 ) -> None:
     if csv_file.stat().st_size == 0:
         return
-    columns = ", ".join(quote_ident(name) for name in TABLE_COLUMNS[table_name])
-    script = (
-        f"\\copy {quote_ident(schema)}.{quote_ident(table_name)} ({columns}) "
-        f"FROM {quote_literal(str(csv_file))} WITH (FORMAT csv, NULL '\\\\N')\n"
+    script = build_copy_csv_script(
+        schema=schema,
+        table_name=table_name,
+        csv_file=csv_file,
     )
     run_psql_script(dsn, script)
+
+
+def build_copy_csv_script(
+    *,
+    schema: str,
+    table_name: str,
+    csv_file: pathlib.Path,
+) -> str:
+    columns = ", ".join(quote_ident(name) for name in TABLE_COLUMNS[table_name])
+    return (
+        f"\\copy {quote_ident(schema)}.{quote_ident(table_name)} ({columns}) "
+        f"FROM {quote_literal(str(csv_file))} WITH (FORMAT csv, NULL '\\N')\n"
+    )
 
 
 def extract_database_name(dsn: str) -> str:
@@ -391,6 +493,18 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--work-dir", type=pathlib.Path, help="directory for intermediate filtered CSV files")
     parser.add_argument("--keep-work-dir", action="store_true", help="do not remove intermediate work directory")
     parser.add_argument(
+        "--progress-every",
+        type=int,
+        default=FILTER_PROGRESS_EVERY,
+        help="emit a progress line every N scanned rows while filtering large archive files",
+    )
+    parser.add_argument(
+        "--import-lock-path",
+        type=pathlib.Path,
+        default=pathlib.Path("/tmp/cliproxy-session-trajectory-import.lock"),
+        help="serialize restore/import jobs so multiple large CSV builds do not run at the same time",
+    )
+    parser.add_argument(
         "--require-storage-prefix",
         default="",
         help="fail if PostgreSQL storage is not under this prefix (e.g. /Volumes/Storage)",
@@ -459,6 +573,43 @@ def resolve_work_dir(*, run_dir: pathlib.Path, requested: pathlib.Path | None) -
     return work_dir, True
 
 
+class ImportLock:
+    def __init__(self, path: pathlib.Path) -> None:
+        self.path = path
+        self._handle: Any | None = None
+
+    def __enter__(self) -> "ImportLock":
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._handle = self.path.open("a+", encoding="utf-8")
+        waiting_logged = False
+        while True:
+            try:
+                fcntl.flock(self._handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                self._handle.seek(0)
+                self._handle.truncate()
+                self._handle.write(f"pid={os.getpid()} acquired_at={datetime.now(timezone.utc).isoformat()}\n")
+                self._handle.flush()
+                print(f"[lock] acquired import lock {self.path}", flush=True)
+                return self
+            except BlockingIOError:
+                if not waiting_logged:
+                    print(f"[wait] import lock busy {self.path}; waiting for current restore/import to finish", flush=True)
+                    waiting_logged = True
+                time.sleep(5)
+
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        if self._handle is None:
+            return
+        try:
+            self._handle.seek(0)
+            self._handle.truncate()
+            self._handle.flush()
+            fcntl.flock(self._handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            self._handle.close()
+            self._handle = None
+
+
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
     require_binary("psql")
@@ -493,52 +644,54 @@ def main(argv: list[str]) -> int:
     work_dir, should_cleanup = resolve_work_dir(run_dir=run_dir, requested=args.work_dir)
     print(f"[start] run_dir={run_dir} work_dir={work_dir} schema={args.schema}", flush=True)
     try:
-        candidate_file = work_dir / "candidate_sessions.csv"
-        candidate_sessions, selected_count = select_candidate_sessions(
-            sessions_file=run_files["session_trajectory_sessions"],
-            candidate_file=candidate_file,
-            start_time=start_time,
-            end_time=end_time,
-        )
-        if selected_count == 0:
-            print("[done] selected sessions=0; nothing to import", flush=True)
+        with ImportLock(args.import_lock_path.expanduser().resolve()):
+            candidate_file = work_dir / "candidate_sessions.csv"
+            candidate_sessions, selected_count = select_candidate_sessions(
+                sessions_file=run_files["session_trajectory_sessions"],
+                candidate_file=candidate_file,
+                start_time=start_time,
+                end_time=end_time,
+            )
+            if selected_count == 0:
+                print("[done] selected sessions=0; nothing to import", flush=True)
+                return 0
+
+            print(f"[progress] selected sessions={selected_count}", flush=True)
+            filtered_counts: dict[str, int] = {}
+            filtered_files: dict[str, pathlib.Path] = {}
+            for table_name in import_tables:
+                filtered_csv = work_dir / f"{table_name}.csv"
+                count = filter_table_to_csv(
+                    table_name=table_name,
+                    input_file=run_files[table_name],
+                    output_file=filtered_csv,
+                    candidate_sessions=candidate_sessions,
+                    progress_every=max(0, args.progress_every),
+                )
+                filtered_counts[table_name] = count
+                filtered_files[table_name] = filtered_csv
+                print(f"[progress] prepared {table_name} rows={count}", flush=True)
+
+            if args.truncate_target:
+                truncate_target_tables(dsn=dsn, schema=args.schema)
+                print("[progress] target tables truncated", flush=True)
+
+            for table_name in import_tables:
+                copy_csv_into_table(
+                    dsn=dsn,
+                    schema=args.schema,
+                    table_name=table_name,
+                    csv_file=filtered_files[table_name],
+                )
+                print(f"[progress] imported {table_name} rows={filtered_counts[table_name]}", flush=True)
+
+            print(
+                "[done] imported tables="
+                + ", ".join(f"{name}:{filtered_counts[name]}" for name in import_tables),
+                flush=True,
+            )
+            print(f"[cursor] work_dir={work_dir}", flush=True)
             return 0
-
-        print(f"[progress] selected sessions={selected_count}", flush=True)
-        filtered_counts: dict[str, int] = {}
-        filtered_files: dict[str, pathlib.Path] = {}
-        for table_name in import_tables:
-            filtered_csv = work_dir / f"{table_name}.csv"
-            count = filter_table_to_csv(
-                table_name=table_name,
-                input_file=run_files[table_name],
-                output_file=filtered_csv,
-                candidate_sessions=candidate_sessions,
-            )
-            filtered_counts[table_name] = count
-            filtered_files[table_name] = filtered_csv
-            print(f"[progress] prepared {table_name} rows={count}", flush=True)
-
-        if args.truncate_target:
-            truncate_target_tables(dsn=dsn, schema=args.schema)
-            print("[progress] target tables truncated", flush=True)
-
-        for table_name in import_tables:
-            copy_csv_into_table(
-                dsn=dsn,
-                schema=args.schema,
-                table_name=table_name,
-                csv_file=filtered_files[table_name],
-            )
-            print(f"[progress] imported {table_name} rows={filtered_counts[table_name]}", flush=True)
-
-        print(
-            "[done] imported tables="
-            + ", ".join(f"{name}:{filtered_counts[name]}" for name in import_tables),
-            flush=True,
-        )
-        print(f"[cursor] work_dir={work_dir}", flush=True)
-        return 0
     finally:
         if should_cleanup and not args.keep_work_dir:
             shutil.rmtree(work_dir, ignore_errors=True)

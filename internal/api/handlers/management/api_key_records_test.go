@@ -271,6 +271,35 @@ func TestPolicyViewRoundTripUsesFamilyAccessTogglesAndMetadata(t *testing.T) {
 	}
 }
 
+func TestViewToPolicyClearsBaseBudgetsWhenGroupBoundAfterSanitize(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{
+		APIKeyPolicies: []config.APIKeyPolicy{
+			viewToPolicy("k1", apiKeyPolicyView{
+				APIKey:               "k1",
+				GroupID:              "triple",
+				DailyBudgetUSD:       100,
+				WeeklyBudgetUSD:      300,
+				WeeklyBudgetAnchorAt: "2026-04-02T10:00:00+08:00",
+			}),
+		},
+	}
+
+	cfg.SanitizeAPIKeyPolicies()
+
+	got := cfg.FindAPIKeyPolicy("k1")
+	if got == nil {
+		t.Fatal("expected k1 policy")
+	}
+	if got.GroupID != "triple" {
+		t.Fatalf("group id = %q, want triple", got.GroupID)
+	}
+	if got.DailyBudgetUSD != 0 || got.WeeklyBudgetUSD != 0 || got.WeeklyBudgetAnchorAt != "" {
+		t.Fatalf("expected group-bound base budgets cleared, got %+v", got)
+	}
+}
+
 func TestDefaultAPIKeyPolicyViewSetsOneMonthExpiryAndClaudeOnly(t *testing.T) {
 	t.Parallel()
 

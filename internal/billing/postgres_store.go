@@ -127,6 +127,7 @@ func (s *PostgresStore) ensureSchema(ctx context.Context) error {
 			auth_index TEXT NOT NULL,
 			model TEXT NOT NULL,
 			failed BOOLEAN NOT NULL,
+			latency_ms BIGINT NOT NULL DEFAULT 0,
 			input_tokens BIGINT NOT NULL,
 			output_tokens BIGINT NOT NULL,
 			reasoning_tokens BIGINT NOT NULL,
@@ -140,6 +141,7 @@ func (s *PostgresStore) ensureSchema(ctx context.Context) error {
 		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS %s ON %s (source, requested_at)`, billingQuoteIdentifier("idx_usage_events_source_requested_at"), s.table("usage_events")),
 		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS %s ON %s (auth_index, requested_at)`, billingQuoteIdentifier("idx_usage_events_auth_index_requested_at"), s.table("usage_events")),
 		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS %s ON %s (api_key, requested_at)`, billingQuoteIdentifier("idx_usage_events_api_key_requested_at"), s.table("usage_events")),
+		fmt.Sprintf(`ALTER TABLE %s ADD COLUMN IF NOT EXISTS latency_ms BIGINT NOT NULL DEFAULT 0`, s.table("usage_events")),
 	}
 	for _, stmt := range stmts {
 		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
@@ -339,9 +341,9 @@ func (s *PostgresStore) addUsageEventExec(ctx context.Context, exec interface {
 	}
 	_, err := exec.ExecContext(ctx, fmt.Sprintf(`
 		INSERT INTO %s (
-			requested_at, api_key, source, auth_index, model, failed, input_tokens, output_tokens,
+			requested_at, api_key, source, auth_index, model, failed, latency_ms, input_tokens, output_tokens,
 			reasoning_tokens, cached_tokens, total_tokens, cost_micro_usd, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 	`, s.table("usage_events")),
 		event.RequestedAt,
 		strings.TrimSpace(event.APIKey),
@@ -349,6 +351,7 @@ func (s *PostgresStore) addUsageEventExec(ctx context.Context, exec interface {
 		strings.TrimSpace(event.AuthIndex),
 		policy.NormaliseModelKey(event.Model),
 		event.Failed,
+		max64(0, event.LatencyMs),
 		max64(0, event.InputTokens),
 		max64(0, event.OutputTokens),
 		max64(0, event.ReasoningTokens),
@@ -561,6 +564,7 @@ func (s *PostgresStore) ImportUsageStatisticsSnapshot(ctx context.Context, snaps
 						AuthIndex:       strings.TrimSpace(normalized.AuthIndex),
 						Model:           modelKey,
 						Failed:          failureCount > 0,
+						LatencyMs:       max64(0, normalized.LatencyMs),
 						InputTokens:     delta.InputTokens,
 						OutputTokens:    delta.OutputTokens,
 						ReasoningTokens: delta.ReasoningTokens,
@@ -758,7 +762,7 @@ func (s *PostgresStore) ListUsageEventsByAPIKey(ctx context.Context, apiKey stri
 }
 
 func (s *PostgresStore) listUsageEvents(ctx context.Context, apiKey string, startAt, endAt time.Time, limit int, desc bool) ([]UsageEventRow, error) {
-	query := fmt.Sprintf(`SELECT id, requested_at, api_key, source, auth_index, model, failed, input_tokens, output_tokens, reasoning_tokens, cached_tokens, total_tokens, cost_micro_usd, updated_at FROM %s WHERE 1=1`, s.table("usage_events"))
+	query := fmt.Sprintf(`SELECT id, requested_at, api_key, source, auth_index, model, failed, latency_ms, input_tokens, output_tokens, reasoning_tokens, cached_tokens, total_tokens, cost_micro_usd, updated_at FROM %s WHERE 1=1`, s.table("usage_events"))
 	args := make([]any, 0, 4)
 	if apiKey != "" {
 		args = append(args, apiKey)
@@ -789,7 +793,7 @@ func (s *PostgresStore) listUsageEvents(ctx context.Context, apiKey string, star
 	result := make([]UsageEventRow, 0)
 	for rows.Next() {
 		var row UsageEventRow
-		if err := rows.Scan(&row.ID, &row.RequestedAt, &row.APIKey, &row.Source, &row.AuthIndex, &row.Model, &row.Failed, &row.InputTokens, &row.OutputTokens, &row.ReasoningTokens, &row.CachedTokens, &row.TotalTokens, &row.CostMicroUSD, &row.UpdatedAt); err != nil {
+		if err := rows.Scan(&row.ID, &row.RequestedAt, &row.APIKey, &row.Source, &row.AuthIndex, &row.Model, &row.Failed, &row.LatencyMs, &row.InputTokens, &row.OutputTokens, &row.ReasoningTokens, &row.CachedTokens, &row.TotalTokens, &row.CostMicroUSD, &row.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("billing postgres: scan usage event: %w", err)
 		}
 		result = append(result, row)
@@ -916,7 +920,8 @@ func (s *PostgresStore) ListUsageEventAggregateRows(ctx context.Context) ([]Usag
 	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`
 		SELECT source, auth_index,
 			COALESCE(SUM(CASE WHEN failed THEN 0 ELSE 1 END), 0) AS success_count,
-			COALESCE(SUM(CASE WHEN failed THEN 1 ELSE 0 END), 0) AS failure_count
+			COALESCE(SUM(CASE WHEN failed THEN 1 ELSE 0 END), 0) AS failure_count,
+			COALESCE(SUM(CASE WHEN NOT failed AND latency_ms >= 90000 THEN 1 ELSE 0 END), 0) AS slow_count
 		FROM %s
 		GROUP BY source, auth_index
 		ORDER BY source ASC, auth_index ASC
@@ -928,7 +933,7 @@ func (s *PostgresStore) ListUsageEventAggregateRows(ctx context.Context) ([]Usag
 	result := make([]UsageEventAggregateRow, 0)
 	for rows.Next() {
 		var row UsageEventAggregateRow
-		if err := rows.Scan(&row.Source, &row.AuthIndex, &row.SuccessCount, &row.FailureCount); err != nil {
+		if err := rows.Scan(&row.Source, &row.AuthIndex, &row.SuccessCount, &row.FailureCount, &row.SlowCount); err != nil {
 			return nil, fmt.Errorf("billing postgres: scan usage event aggregate: %w", err)
 		}
 		result = append(result, row)

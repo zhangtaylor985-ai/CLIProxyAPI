@@ -25,6 +25,8 @@ type exportConfig struct {
 	PostgresSchema       string
 	ExportRoot           string
 	ManifestDir          string
+	SessionIDFile        string
+	WriteSessionIDFile   string
 	UserID               string
 	Source               string
 	CallType             string
@@ -36,6 +38,7 @@ type exportConfig struct {
 	PageSize             int
 	ConnectTimeout       time.Duration
 	DryRun               bool
+	SkipExisting         bool
 }
 
 type exportFilters struct {
@@ -97,6 +100,8 @@ func parseFlags() exportConfig {
 	flag.StringVar(&cfg.PostgresSchema, "pg-schema", defaultSchema, "Postgres schema for session trajectory tables")
 	flag.StringVar(&cfg.ExportRoot, "export-root", filepath.Join("session-data", "session-exports"), "Directory used for exported trajectory files")
 	flag.StringVar(&cfg.ManifestDir, "manifest-dir", filepath.Join("session-data", "session-export-manifests"), "Directory used for export manifest files")
+	flag.StringVar(&cfg.SessionIDFile, "session-id-file", "", "Optional file containing one session id per line to export")
+	flag.StringVar(&cfg.WriteSessionIDFile, "write-session-id-file", "", "Optional file path used to persist the resolved session id snapshot")
 	flag.StringVar(&cfg.UserID, "user-id", "", "Optional exact user_id filter")
 	flag.StringVar(&cfg.Source, "source", "", "Optional exact source filter")
 	flag.StringVar(&cfg.CallType, "call-type", "", "Optional exact call_type filter")
@@ -108,6 +113,7 @@ func parseFlags() exportConfig {
 	flag.IntVar(&cfg.PageSize, "page-size", 100, "Number of sessions fetched per page (1-500)")
 	flag.DurationVar(&cfg.ConnectTimeout, "connect-timeout", 30*time.Second, "Database connection timeout")
 	flag.BoolVar(&cfg.DryRun, "dry-run", false, "Only count and page matching sessions without exporting files")
+	flag.BoolVar(&cfg.SkipExisting, "skip-existing", false, "Reuse already complete export directories instead of rewriting them")
 	flag.Parse()
 	return cfg
 }
@@ -117,6 +123,8 @@ func run(cfg exportConfig) error {
 	cfg.PostgresSchema = strings.TrimSpace(cfg.PostgresSchema)
 	cfg.ExportRoot = strings.TrimSpace(cfg.ExportRoot)
 	cfg.ManifestDir = strings.TrimSpace(cfg.ManifestDir)
+	cfg.SessionIDFile = strings.TrimSpace(cfg.SessionIDFile)
+	cfg.WriteSessionIDFile = strings.TrimSpace(cfg.WriteSessionIDFile)
 	cfg.UserID = strings.TrimSpace(cfg.UserID)
 	cfg.Source = strings.TrimSpace(cfg.Source)
 	cfg.CallType = strings.TrimSpace(cfg.CallType)
@@ -192,53 +200,64 @@ func run(cfg exportConfig) error {
 		filters.EndTime = endTime
 	}
 
-	totalSessions, err := countSessions(context.Background(), db, cfg.PostgresSchema, filters)
+	sessionIDs, err := resolveSessionIDs(context.Background(), db, cfg, filters)
 	if err != nil {
 		return err
 	}
+	if cfg.WriteSessionIDFile != "" && cfg.SessionIDFile == "" {
+		if err := writeSessionIDsFile(cfg.WriteSessionIDFile, sessionIDs); err != nil {
+			return err
+		}
+		log.Printf("wrote %d session ids to %s", len(sessionIDs), resolvePath(cfg.WriteSessionIDFile))
+	}
+
+	totalSessions := int64(len(sessionIDs))
 	log.Printf("matched %d sessions for export", totalSessions)
 
 	results := make([]sessiontrajectory.SessionExportResult, 0)
 	exportedFiles := 0
 	exportedSessions := 0
 	tokenTotals := sessiontrajectory.ExportTokenTotals{}
-	page := 0
-	var cursor *sessionCursor
+	for _, sessionID := range sessionIDs {
+		exportedSessions++
+		if cfg.DryRun {
+			log.Printf("[dry-run] %d/%d session=%s", exportedSessions, totalSessions, sessionID)
+			continue
+		}
 
-	for {
-		items, err := fetchSessionsPage(context.Background(), db, cfg.PostgresSchema, filters, cursor)
-		if err != nil {
-			return err
-		}
-		if len(items) == 0 {
-			break
-		}
-		page++
-		log.Printf("page %d fetched %d sessions", page, len(items))
-		for _, item := range items {
-			exportedSessions++
-			if cfg.DryRun {
-				log.Printf("[dry-run] %d/%d session=%s last_activity_at=%s", exportedSessions, totalSessions, item.SessionID, item.LastActivityAt.Format(time.RFC3339))
-				continue
+		var result sessiontrajectory.SessionExportResult
+		if cfg.SkipExisting {
+			existing, complete, inspectErr := store.InspectExportSession(context.Background(), sessionID, cfg.ExportRoot)
+			if inspectErr != nil {
+				return fmt.Errorf("inspect existing export for session %s: %w", sessionID, inspectErr)
 			}
-			result, err := store.ExportSession(context.Background(), item.SessionID, cfg.ExportRoot)
-			if err != nil {
-				return fmt.Errorf("export session %s: %w", item.SessionID, err)
+			if complete {
+				result = existing
+				log.Printf("reused %d/%d sessions (%d files) session=%s dir=%s", exportedSessions, totalSessions, exportedFiles+result.FileCount, result.SessionID, result.ExportDir)
+			} else {
+				exported, exportErr := store.ExportSession(context.Background(), sessionID, cfg.ExportRoot)
+				if exportErr != nil {
+					return fmt.Errorf("export session %s: %w", sessionID, exportErr)
+				}
+				result = exported
+				log.Printf("exported %d/%d sessions (%d files) session=%s dir=%s", exportedSessions, totalSessions, exportedFiles+result.FileCount, result.SessionID, result.ExportDir)
 			}
-			results = append(results, result)
-			exportedFiles += result.FileCount
-			tokenTotals.InputTokens += result.TokenTotals.InputTokens
-			tokenTotals.OutputTokens += result.TokenTotals.OutputTokens
-			tokenTotals.ReasoningTokens += result.TokenTotals.ReasoningTokens
-			tokenTotals.CachedTokens += result.TokenTotals.CachedTokens
-			tokenTotals.TotalTokens += result.TokenTotals.TotalTokens
-			log.Printf("exported %d/%d sessions (%d files) session=%s dir=%s", exportedSessions, totalSessions, exportedFiles, result.SessionID, result.ExportDir)
+		} else {
+			exported, exportErr := store.ExportSession(context.Background(), sessionID, cfg.ExportRoot)
+			if exportErr != nil {
+				return fmt.Errorf("export session %s: %w", sessionID, exportErr)
+			}
+			result = exported
+			log.Printf("exported %d/%d sessions (%d files) session=%s dir=%s", exportedSessions, totalSessions, exportedFiles+result.FileCount, result.SessionID, result.ExportDir)
 		}
-		last := items[len(items)-1]
-		cursor = &sessionCursor{
-			LastActivityAt: last.LastActivityAt,
-			SessionID:      last.SessionID,
-		}
+
+		results = append(results, result)
+		exportedFiles += result.FileCount
+		tokenTotals.InputTokens += result.TokenTotals.InputTokens
+		tokenTotals.OutputTokens += result.TokenTotals.OutputTokens
+		tokenTotals.ReasoningTokens += result.TokenTotals.ReasoningTokens
+		tokenTotals.CachedTokens += result.TokenTotals.CachedTokens
+		tokenTotals.TotalTokens += result.TokenTotals.TotalTokens
 	}
 
 	manifest := exportManifest{
@@ -303,7 +322,7 @@ func countSessions(ctx context.Context, db *sql.DB, schema string, filters expor
 	return count, nil
 }
 
-func fetchSessionsPage(ctx context.Context, db *sql.DB, schema string, filters exportFilters, cursor *sessionCursor) ([]sessiontrajectory.SessionSummary, error) {
+func fetchSessionIDsSnapshot(ctx context.Context, db *sql.DB, schema string, filters exportFilters) ([]string, error) {
 	var (
 		args       []any
 		conditions []string
@@ -313,41 +332,33 @@ func fetchSessionsPage(ctx context.Context, db *sql.DB, schema string, filters e
 		conditions = append(conditions, fmt.Sprintf(expr, len(args)))
 	}
 	appendFilterConditions(filters, appendCond)
-	if cursor != nil {
-		args = append(args, cursor.LastActivityAt.UTC(), cursor.SessionID)
-		conditions = append(conditions, fmt.Sprintf("(last_activity_at < $%d OR (last_activity_at = $%d AND id < $%d))", len(args)-1, len(args)-1, len(args)))
-	}
-	args = append(args, filters.PageSize)
 	query := fmt.Sprintf(`
-		SELECT id, user_id, source, call_type, provider, canonical_model_family,
-		       COALESCE(provider_session_id, ''), COALESCE(session_name, ''),
-		       message_count, request_count, started_at, last_activity_at, closed_at,
-		       status, metadata
+		SELECT id
 		FROM %s
 	`, tableName(schema, "session_trajectory_sessions"))
 	if len(conditions) > 0 {
 		query += " WHERE " + strings.Join(conditions, " AND ")
 	}
-	query += fmt.Sprintf(" ORDER BY last_activity_at DESC, id DESC LIMIT $%d", len(args))
+	query += " ORDER BY last_activity_at DESC, id DESC"
 
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("query session trajectories page: %w", err)
+		return nil, fmt.Errorf("query session trajectory snapshot: %w", err)
 	}
 	defer rows.Close()
 
-	items := make([]sessiontrajectory.SessionSummary, 0, filters.PageSize)
+	ids := make([]string, 0, 256)
 	for rows.Next() {
-		item, err := scanSessionSummary(rows)
-		if err != nil {
-			return nil, err
+		var sessionID string
+		if err := rows.Scan(&sessionID); err != nil {
+			return nil, fmt.Errorf("scan session trajectory snapshot id: %w", err)
 		}
-		items = append(items, item)
+		ids = append(ids, sessionID)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate session trajectories page: %w", err)
+		return nil, fmt.Errorf("iterate session trajectory snapshot rows: %w", err)
 	}
-	return items, nil
+	return ids, nil
 }
 
 func appendFilterConditions(filters exportFilters, appendCond func(string, any)) {
@@ -377,43 +388,11 @@ func appendFilterConditions(filters exportFilters, appendCond func(string, any))
 	}
 }
 
-func scanSessionSummary(scanner interface {
-	Scan(dest ...any) error
-}) (sessiontrajectory.SessionSummary, error) {
-	var (
-		item     sessiontrajectory.SessionSummary
-		closedAt sql.NullTime
-		metadata []byte
-	)
-	if err := scanner.Scan(
-		&item.SessionID,
-		&item.UserID,
-		&item.Source,
-		&item.CallType,
-		&item.Provider,
-		&item.CanonicalModelFamily,
-		&item.ProviderSessionID,
-		&item.SessionName,
-		&item.MessageCount,
-		&item.RequestCount,
-		&item.StartedAt,
-		&item.LastActivityAt,
-		&closedAt,
-		&item.Status,
-		&metadata,
-	); err != nil {
-		return sessiontrajectory.SessionSummary{}, fmt.Errorf("scan session summary: %w", err)
+func resolveSessionIDs(ctx context.Context, db *sql.DB, cfg exportConfig, filters exportFilters) ([]string, error) {
+	if cfg.SessionIDFile != "" {
+		return loadSessionIDsFile(cfg.SessionIDFile)
 	}
-	item.StartedAt = item.StartedAt.UTC()
-	item.LastActivityAt = item.LastActivityAt.UTC()
-	if closedAt.Valid {
-		value := closedAt.Time.UTC()
-		item.ClosedAt = &value
-	}
-	if len(metadata) > 0 {
-		item.Metadata = append(item.Metadata[:0], metadata...)
-	}
-	return item, nil
+	return fetchSessionIDsSnapshot(ctx, db, cfg.PostgresSchema, filters)
 }
 
 func writeManifest(manifestDir string, manifest exportManifest) (string, error) {
@@ -427,6 +406,43 @@ func writeManifest(manifestDir string, manifest exportManifest) (string, error) 
 		return "", err
 	}
 	return path, nil
+}
+
+func loadSessionIDsFile(path string) ([]string, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read session id file: %w", err)
+	}
+	lines := strings.Split(string(raw), "\n")
+	ids := make([]string, 0, len(lines))
+	seen := make(map[string]struct{}, len(lines))
+	for _, line := range lines {
+		sessionID := strings.TrimSpace(line)
+		if sessionID == "" {
+			continue
+		}
+		if _, ok := seen[sessionID]; ok {
+			continue
+		}
+		seen[sessionID] = struct{}{}
+		ids = append(ids, sessionID)
+	}
+	return ids, nil
+}
+
+func writeSessionIDsFile(path string, ids []string) error {
+	resolved := resolvePath(path)
+	if err := os.MkdirAll(filepath.Dir(resolved), 0o755); err != nil {
+		return fmt.Errorf("create session id file dir: %w", err)
+	}
+	payload := strings.Join(ids, "\n")
+	if payload != "" {
+		payload += "\n"
+	}
+	if err := os.WriteFile(resolved, []byte(payload), 0o644); err != nil {
+		return fmt.Errorf("write session id file: %w", err)
+	}
+	return nil
 }
 
 func rewriteManifest(path string, manifest exportManifest) error {

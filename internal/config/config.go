@@ -394,6 +394,23 @@ type ClaudeKey struct {
 
 	// Cloak configures request cloaking for non-Claude-Code clients.
 	Cloak *CloakConfig `yaml:"cloak,omitempty" json:"cloak,omitempty"`
+
+	// ProbeMode overrides the active health probe protocol for this provider.
+	// Supported values include: auto, claude_messages, openai_chat, openai_responses,
+	// codex_responses, gemini_generate_content.
+	ProbeMode string `yaml:"probe-mode,omitempty" json:"probe-mode,omitempty"`
+
+	// ProbePath optionally overrides the HTTP path used by active health checks.
+	ProbePath string `yaml:"probe-path,omitempty" json:"probe-path,omitempty"`
+
+	// CanaryEnabled toggles low-frequency fixed-prompt canary checks.
+	CanaryEnabled *bool `yaml:"canary-enabled,omitempty" json:"canary-enabled,omitempty"`
+
+	// CanaryPrompt overrides the default fixed prompt used by canary checks.
+	CanaryPrompt string `yaml:"canary-prompt,omitempty" json:"canary-prompt,omitempty"`
+
+	// CanaryIntervalSeconds overrides the default 5-minute canary interval.
+	CanaryIntervalSeconds int `yaml:"canary-interval-seconds,omitempty" json:"canary-interval-seconds,omitempty"`
 }
 
 func (k ClaudeKey) GetAPIKey() string  { return k.APIKey }
@@ -449,6 +466,23 @@ type CodexKey struct {
 
 	// Websockets enables Codex websocket execution for this credential when downstream transport supports it.
 	Websockets bool `yaml:"websockets,omitempty" json:"websockets,omitempty"`
+
+	// ProbeMode overrides the active health probe protocol for this provider.
+	// Supported values include: auto, claude_messages, openai_chat, openai_responses,
+	// codex_responses, gemini_generate_content.
+	ProbeMode string `yaml:"probe-mode,omitempty" json:"probe-mode,omitempty"`
+
+	// ProbePath optionally overrides the HTTP path used by active health checks.
+	ProbePath string `yaml:"probe-path,omitempty" json:"probe-path,omitempty"`
+
+	// CanaryEnabled toggles low-frequency fixed-prompt canary checks.
+	CanaryEnabled *bool `yaml:"canary-enabled,omitempty" json:"canary-enabled,omitempty"`
+
+	// CanaryPrompt overrides the default fixed prompt used by canary checks.
+	CanaryPrompt string `yaml:"canary-prompt,omitempty" json:"canary-prompt,omitempty"`
+
+	// CanaryIntervalSeconds overrides the default 5-minute canary interval.
+	CanaryIntervalSeconds int `yaml:"canary-interval-seconds,omitempty" json:"canary-interval-seconds,omitempty"`
 }
 
 func (k CodexKey) GetAPIKey() string  { return k.APIKey }
@@ -493,6 +527,23 @@ type GeminiKey struct {
 
 	// ExcludedModels lists model IDs that should be excluded for this provider.
 	ExcludedModels []string `yaml:"excluded-models,omitempty" json:"excluded-models,omitempty"`
+
+	// ProbeMode overrides the active health probe protocol for this provider.
+	// Supported values include: auto, claude_messages, openai_chat, openai_responses,
+	// codex_responses, gemini_generate_content.
+	ProbeMode string `yaml:"probe-mode,omitempty" json:"probe-mode,omitempty"`
+
+	// ProbePath optionally overrides the HTTP path used by active health checks.
+	ProbePath string `yaml:"probe-path,omitempty" json:"probe-path,omitempty"`
+
+	// CanaryEnabled toggles low-frequency fixed-prompt canary checks.
+	CanaryEnabled *bool `yaml:"canary-enabled,omitempty" json:"canary-enabled,omitempty"`
+
+	// CanaryPrompt overrides the default fixed prompt used by canary checks.
+	CanaryPrompt string `yaml:"canary-prompt,omitempty" json:"canary-prompt,omitempty"`
+
+	// CanaryIntervalSeconds overrides the default 5-minute canary interval.
+	CanaryIntervalSeconds int `yaml:"canary-interval-seconds,omitempty" json:"canary-interval-seconds,omitempty"`
 }
 
 func (k GeminiKey) GetAPIKey() string  { return k.APIKey }
@@ -534,6 +585,23 @@ type OpenAICompatibility struct {
 
 	// Headers optionally adds extra HTTP headers for requests sent to this provider.
 	Headers map[string]string `yaml:"headers,omitempty" json:"headers,omitempty"`
+
+	// ProbeMode overrides the active health probe protocol for this provider.
+	// Supported values include: auto, claude_messages, openai_chat, openai_responses,
+	// codex_responses, gemini_generate_content.
+	ProbeMode string `yaml:"probe-mode,omitempty" json:"probe-mode,omitempty"`
+
+	// ProbePath optionally overrides the HTTP path used by active health checks.
+	ProbePath string `yaml:"probe-path,omitempty" json:"probe-path,omitempty"`
+
+	// CanaryEnabled toggles low-frequency fixed-prompt canary checks.
+	CanaryEnabled *bool `yaml:"canary-enabled,omitempty" json:"canary-enabled,omitempty"`
+
+	// CanaryPrompt overrides the default fixed prompt used by canary checks.
+	CanaryPrompt string `yaml:"canary-prompt,omitempty" json:"canary-prompt,omitempty"`
+
+	// CanaryIntervalSeconds overrides the default 5-minute canary interval.
+	CanaryIntervalSeconds int `yaml:"canary-interval-seconds,omitempty" json:"canary-interval-seconds,omitempty"`
 }
 
 // OpenAICompatibilityAPIKey represents an API key configuration with optional proxy setting.
@@ -876,6 +944,7 @@ func (cfg *Config) SanitizeOpenAICompatibility() {
 		e.Prefix = normalizeModelPrefix(e.Prefix)
 		e.BaseURL = strings.TrimSpace(e.BaseURL)
 		e.Headers = NormalizeHeaders(e.Headers)
+		normalizeHealthCheckConfig(&e.ProbeMode, &e.ProbePath, e.CanaryEnabled, &e.CanaryPrompt, &e.CanaryIntervalSeconds)
 		if e.BaseURL == "" {
 			// Skip providers with no base-url; treated as removed
 			continue
@@ -898,6 +967,7 @@ func (cfg *Config) SanitizeCodexKeys() {
 		e.BaseURL = strings.TrimSpace(e.BaseURL)
 		e.Headers = NormalizeHeaders(e.Headers)
 		e.ExcludedModels = NormalizeExcludedModels(e.ExcludedModels)
+		normalizeHealthCheckConfig(&e.ProbeMode, &e.ProbePath, e.CanaryEnabled, &e.CanaryPrompt, &e.CanaryIntervalSeconds)
 		if e.BaseURL == "" {
 			continue
 		}
@@ -918,6 +988,7 @@ func (cfg *Config) SanitizeClaudeKeys() {
 		entry.ProxyURL = strings.TrimSpace(entry.ProxyURL)
 		entry.Headers = NormalizeHeaders(entry.Headers)
 		entry.ExcludedModels = NormalizeExcludedModels(entry.ExcludedModels)
+		normalizeHealthCheckConfig(&entry.ProbeMode, &entry.ProbePath, entry.CanaryEnabled, &entry.CanaryPrompt, &entry.CanaryIntervalSeconds)
 	}
 }
 
@@ -940,6 +1011,7 @@ func (cfg *Config) SanitizeGeminiKeys() {
 		entry.ProxyURL = strings.TrimSpace(entry.ProxyURL)
 		entry.Headers = NormalizeHeaders(entry.Headers)
 		entry.ExcludedModels = NormalizeExcludedModels(entry.ExcludedModels)
+		normalizeHealthCheckConfig(&entry.ProbeMode, &entry.ProbePath, entry.CanaryEnabled, &entry.CanaryPrompt, &entry.CanaryIntervalSeconds)
 		if _, exists := seen[entry.APIKey]; exists {
 			continue
 		}
@@ -959,6 +1031,24 @@ func normalizeModelPrefix(prefix string) string {
 		return ""
 	}
 	return trimmed
+}
+
+func normalizeHealthCheckConfig(probeMode, probePath *string, canaryEnabled *bool, canaryPrompt *string, canaryIntervalSeconds *int) {
+	if probeMode != nil {
+		*probeMode = strings.TrimSpace(*probeMode)
+	}
+	if probePath != nil {
+		*probePath = strings.TrimSpace(*probePath)
+	}
+	if canaryEnabled != nil {
+		_ = *canaryEnabled
+	}
+	if canaryPrompt != nil {
+		*canaryPrompt = strings.TrimSpace(*canaryPrompt)
+	}
+	if canaryIntervalSeconds != nil && *canaryIntervalSeconds < 0 {
+		*canaryIntervalSeconds = 0
+	}
 }
 
 // looksLikeBcrypt returns true if the provided string appears to be a bcrypt hash.

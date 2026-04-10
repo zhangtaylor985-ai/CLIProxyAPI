@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 )
 
 const exportVersion = "session-trajectory-v1"
+const exportRequestsPageSize = 500
 
 func (s *PostgresStore) ExportSession(ctx context.Context, sessionID string, exportRoot string) (SessionExportResult, error) {
 	if s == nil || s.db == nil {
@@ -25,11 +27,7 @@ func (s *PostgresStore) ExportSession(ctx context.Context, sessionID string, exp
 	if !found {
 		return SessionExportResult{}, fmt.Errorf("session trajectory postgres: session not found")
 	}
-	requests, err := s.ListSessionRequests(ctx, SessionRequestFilter{
-		SessionID:       sessionID,
-		Limit:           1000,
-		IncludePayloads: true,
-	})
+	requests, err := s.listAllSessionRequests(ctx, sessionID, true)
 	if err != nil {
 		return SessionExportResult{}, err
 	}
@@ -120,6 +118,86 @@ func (s *PostgresStore) ExportSession(ctx context.Context, sessionID string, exp
 	}, nil
 }
 
+func (s *PostgresStore) InspectExportSession(ctx context.Context, sessionID string, exportRoot string) (SessionExportResult, bool, error) {
+	if s == nil || s.db == nil {
+		return SessionExportResult{}, false, fmt.Errorf("session trajectory postgres: not initialized")
+	}
+	session, found, err := s.GetSession(ctx, sessionID)
+	if err != nil {
+		return SessionExportResult{}, false, err
+	}
+	if !found {
+		return SessionExportResult{}, false, fmt.Errorf("session trajectory postgres: session not found")
+	}
+	requests, err := s.listAllSessionRequests(ctx, sessionID, false)
+	if err != nil {
+		return SessionExportResult{}, false, err
+	}
+	root, err := resolveExportRoot(exportRoot)
+	if err != nil {
+		return SessionExportResult{}, false, err
+	}
+	exportDir := filepath.Join(root, exportSessionDirectoryName(session))
+	dirInfo, err := os.Stat(exportDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return SessionExportResult{}, false, nil
+		}
+		return SessionExportResult{}, false, fmt.Errorf("session trajectory postgres: stat export dir: %w", err)
+	}
+	if !dirInfo.IsDir() {
+		return SessionExportResult{}, false, fmt.Errorf("session trajectory postgres: export path is not a directory: %s", exportDir)
+	}
+
+	files := make([]ExportedFile, 0, len(requests))
+	tokenTotals := ExportTokenTotals{}
+	latestModTime := dirInfo.ModTime().UTC()
+	complete := true
+	for _, request := range requests {
+		exportPath := filepath.Join(exportDir, exportFileName(request.RequestIndex, request.RequestID))
+		info, statErr := os.Stat(exportPath)
+		if statErr != nil {
+			if os.IsNotExist(statErr) {
+				complete = false
+				break
+			}
+			return SessionExportResult{}, false, fmt.Errorf("session trajectory postgres: stat export file: %w", statErr)
+		}
+		if info.ModTime().After(latestModTime) {
+			latestModTime = info.ModTime().UTC()
+		}
+		files = append(files, ExportedFile{
+			RequestID:    request.RequestID,
+			RequestIndex: request.RequestIndex,
+			ExportIndex:  request.RequestIndex,
+			ExportPath:   exportPath,
+		})
+		tokenTotals.InputTokens += request.InputTokens
+		tokenTotals.OutputTokens += request.OutputTokens
+		tokenTotals.ReasoningTokens += request.ReasoningTokens
+		tokenTotals.CachedTokens += request.CachedTokens
+		tokenTotals.TotalTokens += request.TotalTokens
+	}
+
+	if !complete {
+		return SessionExportResult{}, false, nil
+	}
+
+	sort.Slice(files, func(i, j int) bool {
+		return files[i].RequestIndex < files[j].RequestIndex
+	})
+
+	return SessionExportResult{
+		SessionID:   session.SessionID,
+		UserID:      session.UserID,
+		ExportDir:   exportDir,
+		FileCount:   len(files),
+		ExportedAt:  latestModTime,
+		TokenTotals: tokenTotals,
+		Files:       files,
+	}, true, nil
+}
+
 func (s *PostgresStore) ExportSessions(ctx context.Context, filter SessionExportFilter, exportRoot string) ([]SessionExportResult, error) {
 	sessions, err := s.ListSessions(ctx, SessionListFilter{
 		UserID:   filter.UserID,
@@ -141,6 +219,31 @@ func (s *PostgresStore) ExportSessions(ctx context.Context, filter SessionExport
 		results = append(results, item)
 	}
 	return results, nil
+}
+
+func (s *PostgresStore) listAllSessionRequests(ctx context.Context, sessionID string, includePayloads bool) ([]SessionRequest, error) {
+	requests := make([]SessionRequest, 0, exportRequestsPageSize)
+	var afterRequestIndex int64
+	for {
+		items, err := s.ListSessionRequests(ctx, SessionRequestFilter{
+			SessionID:         sessionID,
+			Limit:             exportRequestsPageSize,
+			AfterRequestIndex: afterRequestIndex,
+			IncludePayloads:   includePayloads,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if len(items) == 0 {
+			break
+		}
+		requests = append(requests, items...)
+		afterRequestIndex = items[len(items)-1].RequestIndex
+		if len(items) < exportRequestsPageSize {
+			break
+		}
+	}
+	return requests, nil
 }
 
 func buildExportPayload(session SessionSummary, request SessionRequest) (map[string]any, error) {

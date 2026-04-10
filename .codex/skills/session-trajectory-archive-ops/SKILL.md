@@ -135,6 +135,130 @@ python3 scripts/session_trajectory_archive.py \
 - 是否已经进入删除阶段
 - 如果现在中断，下一条续跑命令是什么
 
+如果当前不是单一 archive，而是“archive / handoff / live export”多任务并行，统一按下面格式回报：
+
+- `任务号`
+- `任务类型`
+- `时间窗或游标`
+- `当前阶段`
+- `关键计数`
+- `增长信号`
+- `百分比估计`
+- `后续衔接点`
+
+推荐固定成这 3 类任务名，避免口径漂移：
+
+- `task 1`
+  - 已完成 raw archive 的恢复导入
+- `task 2`
+  - 已完成 archive 的 handoff
+  - 即 `migrate -> import -> export`
+- `task 3`
+  - 直接从 PG 导需求方格式
+
+## Progress Estimation
+
+回报百分比时，不要拍脑袋；优先按实际阶段给区间。
+
+### Archive Mainline
+
+- `initialized`
+  - `0%`
+- `candidates_materialized`
+  - 如果只有候选集，没有导出文件增长
+  - `5% - 10%`
+- `candidates_materialized`
+  - 且 `session_trajectory_requests.jsonl.gz` 正在增长
+  - `10% - 50%`
+- `exported`
+  - 四类 raw archive 文件已落盘，但还没开始删除
+  - `50% - 60%`
+- `request_exports_deleted` / `requests_deleted` / `aliases_deleted` / `sessions_deleted`
+  - 已进入线上清理
+  - `60% - 90%`
+- `vacuumed`
+  - `90% - 99%`
+- `completed`
+  - `100%`
+
+### Import / Restore
+
+- 仅完成 `candidate_sessions.csv`
+  - `0% - 5%`
+- 已准备 `session_trajectory_sessions.csv`
+  - `5% - 10%`
+- `session_trajectory_requests.csv` 正在增长
+  - `10% - 35%`
+- 开始 `\copy` 入 PG，且本地 PG 表行数上涨
+  - `40% - 75%`
+- PG 内数据已齐，但需求方格式导出还没开始
+  - `75% - 85%`
+- manifest / handoff 记录已生成
+  - `100%`
+
+### Direct Export
+
+如果 stdout 能拿到：
+
+- `matched <N> sessions for export`
+- `exported <M>/<N> sessions`
+
+则直接按 `M / N` 给百分比，这是优先级最高的口径。
+
+如果 stdout 暂时拿不到，再降级看：
+
+- session 目录数
+- `.json` 文件数
+- export root 体积是否继续增长
+- manifest 是否已生成
+
+### Growth Signals
+
+进度汇报时，至少给一个“还在前进”的证据：
+
+- 某个 `.jsonl.gz` 或 `.csv` 文件 10 秒采样内继续变大
+- PG `n_live_tup` 继续上涨
+- `exported M/N sessions` 中的 `M` 继续增加
+- manifest 从不存在变成已生成
+
+如果进程还活着，但 2 次短采样都没有增长信号，不要说“稳定推进”，应改成：
+
+- `进程仍在，但当前采样窗口内未观察到增长`
+- `需要继续确认是否卡住或只是处于单个大 session 的长尾阶段`
+
+## Standard Progress Reply
+
+给用户汇报时，优先按下面模板：
+
+```text
+task 1
+- 类型：raw archive restore -> temp PG
+- 游标：run_id=... / min_last_activity_at=... / max_last_activity_at=... / cutoff_at=...
+- 阶段：正在生成 session_trajectory_requests.csv
+- 关键计数：selected sessions=... / requests.csv=...
+- 增长信号：10 秒内从 ... 增长到 ...
+- 百分比：约 ...
+- 下一步：进入 \copy 入 PG
+
+task 2
+- 类型：archive handoff
+- 游标：run_id=... / archive_cutoff_at=...
+- 阶段：migrate 已完成，import 进行中
+- 关键计数：selected sessions=... / requests.csv=...
+- 增长信号：...
+- 百分比：约 ...
+- 下一步：导入 5434 后自动转 export
+
+task 3
+- 类型：live direct export
+- 时间窗：start-time=... / end-time=...
+- 阶段：exporting requirement-format files
+- 关键计数：exported ... / ... sessions / ... files
+- 增长信号：5 秒内 JSON 文件数从 ... 到 ...
+- 百分比：...
+- 下一步：生成 manifest
+```
+
 ## Quick Reference
 
 继续监控目录大小：
@@ -167,6 +291,45 @@ python3 scripts/session_trajectory_archive.py \
 
 `.codex/skills/session-trajectory-archive-ops/references/commands.md`
 
+## macOS Background Jobs
+
+在 macOS 上，如果任务需要脱离当前 agent / 终端会话长期运行，优先使用 `launchctl submit`，不要默认依赖临时 PTY 或普通后台 `&`。
+
+示例：
+
+```bash
+launchctl submit -l com.codex.session_handoff_<run-id> \
+  -o /path/to/handoff.log \
+  -e /path/to/handoff.log -- \
+  /bin/zsh -lc 'cd /Users/taylor/code/tools/CLIProxyAPI-ori && python3 scripts/archive_export_handoff.py ...'
+```
+
+注意：
+
+- `launchd` 的默认 PATH 很短
+- 当前导入脚本已自动探测 Homebrew/libpq 的 `psql`
+- 但如果你自己写包装命令，仍应假设环境变量比交互 shell 更少
+- `scripts/archive_export_handoff.py` 现在默认对同一个 `run_id` 幂等
+- 如果对应的 handoff record 和 manifest 已存在，它会直接 `skip`，不会重复 `truncate/import/export`
+- 只有在明确需要重做时，才加 `--force-rerun`
+
+## Import Lock
+
+当前 `scripts/import_session_trajectory_archive.py` 默认会拿一个全局锁：
+
+- `/tmp/cliproxy-session-trajectory-import.lock`
+
+目的只有一个：
+
+- 避免多条大 restore/import 同时生成超大 `session_trajectory_requests.csv`
+- 减少本机内存、swap、磁盘写放大和互相抢资源导致的中断
+
+如果看到：
+
+- `[wait] import lock busy ...`
+
+这不是卡死，而是在等前一条大恢复任务完成。
+
 ## Common Mistakes
 
 - 按 `started_at` 直接删老 request
@@ -187,3 +350,52 @@ python3 scripts/session_trajectory_archive.py \
 - `deleted` 中四类删除计数均存在
 - 如未使用 `--skip-vacuum`，则 `phase` 先经过 `vacuumed`
 - 已把 `run_id`、状态文件路径和续跑命令反馈给用户
+
+## Post-Archive Handoff
+
+当用户后续要把某轮归档继续转成“数据方要求的会话目录格式”时，不要重新回线上库读老数据，直接把这轮 `run_id` 交给导出链路。
+
+只有在这些条件都满足后，才允许 handoff：
+
+- `phase=completed`
+- 四类归档文件都在同一 `output_dir`
+- `run_id`、`cutoff_at`、`counts` 已核对
+
+交接时至少要给出：
+
+- `run_id`
+- `output_dir`
+- `cutoff_at`
+- `counts`
+- 是否需要整轮导出，还是只导某个 `last_activity_at` 时间窗
+
+后续具体恢复到临时 PG 并导成需求格式时，切到：
+
+`.codex/skills/session-trajectory-export/SKILL.md`
+
+如果用户要求“本轮 archive 一完成就自动继续恢复并导出”，直接使用：
+
+`scripts/archive_export_handoff.py`
+
+这条路径现在就是默认路径。
+
+如果用户没有明确要求停在 raw archive、也没有改目标时间窗或目标目录，就不要在 `phase=completed` 后停住等待，再次确认；应直接继续 handoff。
+
+这个脚本会在归档完成后继续执行：
+
+- `scripts/migrate_session_trajectory_pg`
+- `scripts/import_session_trajectory_archive.py`
+- `scripts/export_session_trajectories`
+
+并把两类游标写入：
+
+- `/Volumes/Storage/CLIProxyAPI-session-archives/handoffs/active_archive_cursor.json`
+- `/Volumes/Storage/CLIProxyAPI-session-archives/handoffs/latest_handoff.json`
+- `/Volumes/Storage/CLIProxyAPI-session-archives/handoffs/<run-id>.json`
+
+只有在以下情况才暂停默认 handoff 并回到人工确认：
+
+- `run-state.json` 未进入 `completed`
+- `/Volumes/Storage` 可用空间不足
+- 临时 PG 不可用
+- 用户显式要求修改时间窗、PG DSN 或导出根目录

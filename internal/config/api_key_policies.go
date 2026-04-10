@@ -25,6 +25,12 @@ var defaultClientHiddenClaudeModelPatterns = []string{
 type APIKeyPolicy struct {
 	APIKey string `yaml:"api-key" json:"api-key"`
 
+	// Name is an optional display name for the client API key.
+	Name string `yaml:"name,omitempty" json:"name,omitempty"`
+
+	// Note is an optional operator note for the client API key.
+	Note string `yaml:"note,omitempty" json:"note,omitempty"`
+
 	// CreatedAt records when this client API key record was created in the external store.
 	// It is not persisted to config.yaml.
 	CreatedAt string `yaml:"-" json:"created_at,omitempty"`
@@ -748,6 +754,8 @@ func (cfg *Config) SanitizeAPIKeyPolicies() {
 		if entry.APIKey == "" {
 			continue
 		}
+		entry.Name = strings.TrimSpace(entry.Name)
+		entry.Note = strings.TrimSpace(entry.Note)
 		entry.GroupID = strings.TrimSpace(entry.GroupID)
 
 		entry.UpstreamBaseURL = strings.TrimSpace(entry.UpstreamBaseURL)
@@ -830,6 +838,11 @@ func (cfg *Config) SanitizeAPIKeyPolicies() {
 		if normalized, ok := policy.NormalizeHourlyAnchorRFC3339(entry.WeeklyBudgetAnchorAt); ok {
 			entry.WeeklyBudgetAnchorAt = normalized
 		} else {
+			entry.WeeklyBudgetAnchorAt = ""
+		}
+		if entry.UsesGroupBudget() {
+			entry.DailyBudgetUSD = 0
+			entry.WeeklyBudgetUSD = 0
 			entry.WeeklyBudgetAnchorAt = ""
 		}
 		if entry.TokenPackageUSD <= 0 {
