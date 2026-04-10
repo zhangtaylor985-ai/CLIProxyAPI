@@ -12,11 +12,12 @@ import (
 const defaultSessionTTL = 24 * time.Hour
 
 type Session struct {
-	Token     string
-	Username  string
-	Role      Role
-	ExpiresAt time.Time
-	CreatedAt time.Time
+	Token        string
+	Username     string
+	Role         Role
+	PasswordHash string
+	ExpiresAt    time.Time
+	CreatedAt    time.Time
 }
 
 type SessionManager struct {
@@ -37,7 +38,7 @@ func NewSessionManager(ttl time.Duration) *SessionManager {
 	return manager
 }
 
-func (m *SessionManager) Create(username string, role Role) (Session, error) {
+func (m *SessionManager) Create(username string, role Role, passwordHash string) (Session, error) {
 	if m == nil {
 		return Session{}, fmt.Errorf("management session manager: not initialized")
 	}
@@ -47,11 +48,12 @@ func (m *SessionManager) Create(username string, role Role) (Session, error) {
 	}
 	now := time.Now().UTC()
 	session := Session{
-		Token:     token,
-		Username:  strings.TrimSpace(username),
-		Role:      normalizeRole(role),
-		CreatedAt: now,
-		ExpiresAt: now.Add(m.ttl),
+		Token:        token,
+		Username:     strings.TrimSpace(username),
+		Role:         normalizeRole(role),
+		PasswordHash: strings.TrimSpace(passwordHash),
+		CreatedAt:    now,
+		ExpiresAt:    now.Add(m.ttl),
 	}
 	m.mu.Lock()
 	m.sessions[token] = session

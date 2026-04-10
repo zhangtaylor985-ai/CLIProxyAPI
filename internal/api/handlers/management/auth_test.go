@@ -147,3 +147,85 @@ func TestHasManagementUserStoreRequiresSessionManager(t *testing.T) {
 		t.Fatal("expected username/password login to become available once session manager is configured")
 	}
 }
+
+func TestManagementSessionExpiresAfterPasswordChange(t *testing.T) {
+	t.Parallel()
+
+	gin.SetMode(gin.TestMode)
+
+	passwordHash, err := bcrypt.GenerateFromPassword([]byte("staff-pass"), bcrypt.DefaultCost)
+	if err != nil {
+		t.Fatalf("GenerateFromPassword: %v", err)
+	}
+	updatedPasswordHash, err := bcrypt.GenerateFromPassword([]byte("staff-pass-2"), bcrypt.DefaultCost)
+	if err != nil {
+		t.Fatalf("GenerateFromPassword updated: %v", err)
+	}
+
+	userStore := &memoryManagementUserStore{
+		items: map[string]managementauth.User{
+			"user_01": {
+				Username:     "user_01",
+				PasswordHash: string(passwordHash),
+				Role:         managementauth.RoleStaff,
+				Enabled:      true,
+			},
+		},
+	}
+
+	handler := NewHandlerWithoutConfigFilePath(&config.Config{}, nil)
+	handler.SetManagementUserStore(userStore)
+	handler.SetSessionManager(managementauth.NewSessionManager(30 * time.Minute))
+
+	router := gin.New()
+	public := router.Group("/v0/management")
+	public.POST("/login", handler.Login)
+	authenticated := router.Group("/v0/management")
+	authenticated.Use(handler.Middleware())
+	authenticated.GET("/me", handler.Me)
+
+	body, _ := json.Marshal(gin.H{
+		"username": "user_01",
+		"password": "staff-pass",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v0/management/login", bytes.NewReader(body))
+	req.RemoteAddr = "127.0.0.1:12345"
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("login status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+
+	var loginResp managementLoginResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &loginResp); err != nil {
+		t.Fatalf("Unmarshal login response: %v", err)
+	}
+	if loginResp.Token == "" {
+		t.Fatalf("expected token in login response: %+v", loginResp)
+	}
+
+	userStore.mu.Lock()
+	user := userStore.items["user_01"]
+	user.PasswordHash = string(updatedPasswordHash)
+	userStore.items["user_01"] = user
+	userStore.mu.Unlock()
+
+	meReq := httptest.NewRequest(http.MethodGet, "/v0/management/me", nil)
+	meReq.RemoteAddr = "127.0.0.1:12345"
+	meReq.Header.Set("Authorization", "Bearer "+loginResp.Token)
+	meRec := httptest.NewRecorder()
+	router.ServeHTTP(meRec, meReq)
+	if meRec.Code != http.StatusUnauthorized {
+		t.Fatalf("me status = %d, want 401, body=%s", meRec.Code, meRec.Body.String())
+	}
+
+	retryReq := httptest.NewRequest(http.MethodGet, "/v0/management/me", nil)
+	retryReq.RemoteAddr = "127.0.0.1:12345"
+	retryReq.Header.Set("Authorization", "Bearer "+loginResp.Token)
+	retryRec := httptest.NewRecorder()
+	router.ServeHTTP(retryRec, retryReq)
+	if retryRec.Code != http.StatusUnauthorized {
+		t.Fatalf("retry me status = %d, want 401, body=%s", retryRec.Code, retryRec.Body.String())
+	}
+}

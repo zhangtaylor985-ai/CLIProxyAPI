@@ -83,7 +83,7 @@ func (h *Handler) Login(c *gin.Context) {
 	if !localClient {
 		h.clearFailedAttempts(clientIP)
 	}
-	session, err := h.sessionManager.Create(user.Username, user.Role)
+	session, err := h.sessionManager.Create(user.Username, user.Role, user.PasswordHash)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create management session"})
 		return
@@ -168,6 +168,21 @@ func (h *Handler) authenticateManagementRequest(c *gin.Context) bool {
 
 	if h.sessionManager != nil {
 		if session, ok := h.sessionManager.Get(provided); ok {
+			if h.managementUserStore != nil {
+				user, found, err := h.managementUserStore.GetByUsername(c.Request.Context(), session.Username)
+				if err != nil {
+					c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "failed to validate management session"})
+					return false
+				}
+				if !found ||
+					!user.Enabled ||
+					normalizeManagementRole(user.Role) != normalizeManagementRole(session.Role) ||
+					strings.TrimSpace(user.PasswordHash) != strings.TrimSpace(session.PasswordHash) {
+					h.sessionManager.Delete(provided)
+					c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "management session expired"})
+					return false
+				}
+			}
 			if !localClient {
 				h.clearFailedAttempts(clientIP)
 			}
