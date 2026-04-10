@@ -10,8 +10,10 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/apikeygroup"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/billing"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/managementauth"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/policy"
 	sdkconfig "github.com/router-for-me/CLIProxyAPI/v6/sdk/config"
 )
@@ -224,11 +226,14 @@ func TestPolicyViewRoundTripUsesFamilyAccessTogglesAndMetadata(t *testing.T) {
 	now := time.Date(2026, 4, 6, 9, 0, 0, 0, time.UTC)
 	expiresAt := now.Add(24 * time.Hour)
 	policyEntry := &config.APIKeyPolicy{
-		APIKey:         "k1",
-		CreatedAt:      now.Format(time.RFC3339),
-		ExpiresAt:      expiresAt.Format(time.RFC3339),
-		Disabled:       true,
-		ExcludedModels: []string{"claude-*", "gpt-*", "chatgpt-*", "o1*", "o3*", "o4*", "custom-*"},
+		APIKey:           "k1",
+		Name:             "Test Key",
+		Note:             "Operator note",
+		CreatedAt:        now.Format(time.RFC3339),
+		ExpiresAt:        expiresAt.Format(time.RFC3339),
+		Disabled:         true,
+		CodexChannelMode: "provider",
+		ExcludedModels:   []string{"claude-*", "gpt-*", "chatgpt-*", "o1*", "o3*", "o4*", "custom-*"},
 	}
 
 	view := policyToView("k1", policyEntry, nil)
@@ -241,13 +246,25 @@ func TestPolicyViewRoundTripUsesFamilyAccessTogglesAndMetadata(t *testing.T) {
 	if len(view.ExcludedModels) != 1 || view.ExcludedModels[0] != "custom-*" {
 		t.Fatalf("unexpected extra excluded models: %#v", view.ExcludedModels)
 	}
+	if view.Name != "Test Key" || view.Note != "Operator note" {
+		t.Fatalf("expected name/note to round-trip, got %+v", view)
+	}
 	if !view.Disabled || view.CreatedAt == "" || view.ExpiresAt == "" {
 		t.Fatalf("expected metadata to round-trip, got %+v", view)
+	}
+	if view.CodexChannelMode != "provider" {
+		t.Fatalf("expected codex channel mode to round-trip, got %+v", view)
 	}
 
 	roundTrip := viewToPolicy("k1", view)
 	if !roundTrip.Disabled || roundTrip.CreatedAt != policyEntry.CreatedAt || roundTrip.ExpiresAt != policyEntry.ExpiresAt {
 		t.Fatalf("unexpected round-trip metadata: %+v", roundTrip)
+	}
+	if roundTrip.CodexChannelMode != policyEntry.CodexChannelMode {
+		t.Fatalf("unexpected codex channel mode: %+v", roundTrip)
+	}
+	if roundTrip.Name != policyEntry.Name || roundTrip.Note != policyEntry.Note {
+		t.Fatalf("unexpected round-trip name/note: %+v", roundTrip)
 	}
 	if got := roundTrip.ExcludedModels; len(got) != 7 {
 		t.Fatalf("unexpected round-trip excluded models: %#v", got)
@@ -266,6 +283,9 @@ func TestDefaultAPIKeyPolicyViewSetsOneMonthExpiryAndClaudeOnly(t *testing.T) {
 	}
 	if view.Disabled {
 		t.Fatal("expected default api key to be enabled")
+	}
+	if view.CodexChannelMode != "auto" {
+		t.Fatalf("expected default codex channel mode auto, got %+v", view)
 	}
 	if view.CreatedAt == "" || view.ExpiresAt == "" {
 		t.Fatalf("expected created/expires metadata, got %+v", view)
@@ -293,8 +313,79 @@ func TestIsEmptyPolicyViewTreatsZeroValueAsEmpty(t *testing.T) {
 	if isEmptyPolicyView(apiKeyPolicyView{AllowClaudeFamily: true}) {
 		t.Fatal("expected non-empty family toggle to prevent empty-policy fallback")
 	}
+	if isEmptyPolicyView(apiKeyPolicyView{CodexChannelMode: "auto"}) {
+		t.Fatal("expected codex channel mode to prevent empty-policy fallback")
+	}
 	if isEmptyPolicyView(apiKeyPolicyView{Disabled: true}) {
 		t.Fatal("expected disabled policy to be treated as non-empty")
+	}
+}
+
+func TestGetAPIKeyRecord_StaffReceivesPolicyOnlyDetailWithoutBillingStore(t *testing.T) {
+	t.Parallel()
+	gin.SetMode(gin.TestMode)
+
+	handler, cleanup := newAPIKeyRecordsTestHandler(t, &config.Config{
+		SDKConfig: sdkconfig.SDKConfig{APIKeys: []string{"k-staff"}},
+		APIKeyPolicies: []config.APIKeyPolicy{
+			{
+				APIKey:                "k-staff",
+				Name:                  "Staff Key",
+				Note:                  "Editable by staff",
+				GroupID:               "team-alpha",
+				DailyBudgetUSD:        12.5,
+				WeeklyBudgetUSD:       44.25,
+				TokenPackageUSD:       99.99,
+				TokenPackageStartedAt: "2026-04-10T08:00:00Z",
+			},
+		},
+	})
+	defer cleanup()
+
+	if _, err := handler.groupStore.UpsertGroup(context.Background(), apikeygroup.Group{
+		ID:                   "team-alpha",
+		Name:                 "Team Alpha",
+		DailyBudgetMicroUSD:  12_500_000,
+		WeeklyBudgetMicroUSD: 44_250_000,
+	}); err != nil {
+		t.Fatalf("UpsertGroup: %v", err)
+	}
+
+	handler.billingStore = nil
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Params = gin.Params{{Key: "apiKey", Value: "k-staff"}}
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/v0/management/api-key-records/k-staff", nil)
+	setManagementPrincipal(ctx, managementPrincipal{
+		Username: "user_01",
+		Role:     managementauth.RoleStaff,
+	})
+
+	handler.GetAPIKeyRecord(ctx)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+
+	var body apiKeyRecordDetailView
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+	if body.Summary.Name != "Staff Key" || body.Summary.Note != "Editable by staff" {
+		t.Fatalf("unexpected summary metadata: %+v", body.Summary)
+	}
+	if body.Summary.Today.CostUSD != 0 || body.CurrentPeriod.CostUSD != 0 {
+		t.Fatalf("staff detail should not include usage totals: %+v", body)
+	}
+	if len(body.RecentDays) != 0 || len(body.ModelUsage) != 0 || len(body.RecentEvents) != 0 {
+		t.Fatalf("staff detail should omit analytics: %+v", body)
+	}
+	if !body.Summary.TokenPackage.Enabled || body.Summary.TokenPackage.TotalUSD != 99.99 {
+		t.Fatalf("unexpected token package summary: %+v", body.Summary.TokenPackage)
+	}
+	if body.Group == nil || body.Group.ID != "team-alpha" {
+		t.Fatalf("expected resolved group, got %+v", body.Group)
 	}
 }
 

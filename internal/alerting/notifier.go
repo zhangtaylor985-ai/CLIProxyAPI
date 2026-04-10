@@ -68,23 +68,42 @@ type suppressionState struct {
 
 // ProviderEvent describes a provider-side timeout, degradation, or failover event.
 type ProviderEvent struct {
-	Kind                 string
-	Provider             string
-	AuthID               string
-	AuthIndex            string
-	AuthLabel            string
-	Model                string
-	RequestID            string
-	ErrorCode            string
-	ErrorMessage         string
-	HTTPStatus           int
-	Cooldown             time.Duration
-	RetryAfter           time.Duration
-	FirstActivityLatency time.Duration
-	CompletedLatency     time.Duration
-	SwitchedToProvider   string
-	SwitchedToAuthID     string
-	SwitchedToAuthIndex  string
+	Kind                   string
+	Provider               string
+	AuthID                 string
+	AuthIndex              string
+	AuthLabel              string
+	MaskedAPIKey           string
+	BaseURL                string
+	Model                  string
+	RequestID              string
+	ErrorCode              string
+	ErrorMessage           string
+	HTTPStatus             int
+	Cooldown               time.Duration
+	CooldownUntil          time.Time
+	RetryAfter             time.Duration
+	FirstActivityLatency   time.Duration
+	CompletedLatency       time.Duration
+	SwitchedToProvider     string
+	SwitchedToAuthID       string
+	SwitchedToAuthIndex    string
+	SwitchedToMaskedAPIKey string
+	SwitchedToBaseURL      string
+}
+
+type ManagementEvent struct {
+	Action            string
+	Username          string
+	APIKey            string
+	APIKeyName        string
+	GroupID           string
+	GroupName         string
+	CustomGroup       bool
+	DailyBudgetUSD    float64
+	WeeklyBudgetUSD   float64
+	TokenPackageUSD   float64
+	TokenPackageStart string
 }
 
 type notifier struct {
@@ -111,6 +130,10 @@ func ConfigureFromConfig(cfg *internalconfig.Config) {
 // NotifyProviderEvent emits a provider alert routed to the provider chat when enabled.
 func NotifyProviderEvent(event ProviderEvent) {
 	globalNotifier.notifyProvider(event)
+}
+
+func NotifyManagementEvent(event ManagementEvent) {
+	globalNotifier.notifyManagement(event)
 }
 
 func (n *notifier) configure(cfg *internalconfig.Config) {
@@ -269,6 +292,19 @@ func (n *notifier) notifyErrorEntry(entry *log.Entry) {
 	go n.dispatch(cfg, cfg.errorChatID, text)
 }
 
+func (n *notifier) notifyManagement(event ManagementEvent) {
+	n.mu.Lock()
+	cfg := n.cfg
+	if !cfg.enabled || cfg.token == "" || cfg.providerChatID == "" {
+		n.mu.Unlock()
+		return
+	}
+	n.mu.Unlock()
+
+	text := formatManagementEvent(event)
+	go n.dispatch(cfg, cfg.providerChatID, text)
+}
+
 func allowNotification(states map[string]*suppressionState, fingerprint string, backoff []time.Duration, now time.Time) (int, bool) {
 	if fingerprint == "" {
 		fingerprint = "default"
@@ -384,6 +420,12 @@ func formatProviderEvent(event ProviderEvent, suppressed int) string {
 	if authRef := formatAuthRef(event.AuthIndex, event.AuthID, event.AuthLabel); authRef != "" {
 		builder.WriteString("Auth: " + authRef + "\n")
 	}
+	if apiKey := strings.TrimSpace(event.MaskedAPIKey); apiKey != "" {
+		builder.WriteString("Key: " + apiKey + "\n")
+	}
+	if baseURL := strings.TrimSpace(event.BaseURL); baseURL != "" {
+		builder.WriteString("Base URL: " + trimForTelegram(baseURL, 240) + "\n")
+	}
 	if model := strings.TrimSpace(event.Model); model != "" {
 		builder.WriteString("Model: " + model + "\n")
 	}
@@ -404,6 +446,9 @@ func formatProviderEvent(event ProviderEvent, suppressed int) string {
 	if event.Cooldown > 0 {
 		builder.WriteString("Cooldown: " + event.Cooldown.String() + "\n")
 	}
+	if !event.CooldownUntil.IsZero() {
+		builder.WriteString("Cooldown until: " + event.CooldownUntil.UTC().Format(time.RFC3339) + "\n")
+	}
 	if event.RetryAfter > 0 {
 		builder.WriteString("Retry after: " + event.RetryAfter.String() + "\n")
 	}
@@ -416,6 +461,12 @@ func formatProviderEvent(event ProviderEvent, suppressed int) string {
 			target = target + " (" + to + ")"
 		}
 		builder.WriteString("Switched to: " + target + "\n")
+		if apiKey := strings.TrimSpace(event.SwitchedToMaskedAPIKey); apiKey != "" {
+			builder.WriteString("Switched key: " + apiKey + "\n")
+		}
+		if baseURL := strings.TrimSpace(event.SwitchedToBaseURL); baseURL != "" {
+			builder.WriteString("Switched base URL: " + trimForTelegram(baseURL, 240) + "\n")
+		}
 	}
 	if requestID := strings.TrimSpace(event.RequestID); requestID != "" {
 		builder.WriteString("Request ID: " + requestID + "\n")
@@ -441,6 +492,43 @@ func formatErrorEntry(entry *log.Entry, normalizedMessage string, suppressed int
 	}
 	if suppressed > 0 {
 		builder.WriteString(fmt.Sprintf("Suppressed similar alerts: %d\n", suppressed))
+	}
+	return strings.TrimRight(builder.String(), "\n")
+}
+
+func formatManagementEvent(event ManagementEvent) string {
+	var builder strings.Builder
+	builder.WriteString("Management action\n")
+	if action := strings.TrimSpace(event.Action); action != "" {
+		builder.WriteString("Action: " + action + "\n")
+	}
+	if username := strings.TrimSpace(event.Username); username != "" {
+		builder.WriteString("Username: " + username + "\n")
+	}
+	if apiKey := strings.TrimSpace(event.APIKey); apiKey != "" {
+		builder.WriteString("API Key: " + apiKey + "\n")
+	}
+	if apiKeyName := strings.TrimSpace(event.APIKeyName); apiKeyName != "" {
+		builder.WriteString("Key name: " + trimForTelegram(apiKeyName, 120) + "\n")
+	}
+	groupLabel := strings.TrimSpace(event.GroupName)
+	if groupLabel == "" {
+		groupLabel = strings.TrimSpace(event.GroupID)
+	}
+	if groupLabel == "" {
+		groupLabel = "unassigned"
+	}
+	if event.GroupID != "" && event.GroupName != "" && event.GroupID != event.GroupName {
+		groupLabel = event.GroupName + " (" + event.GroupID + ")"
+	}
+	builder.WriteString("Account group: " + groupLabel + "\n")
+	if event.CustomGroup {
+		builder.WriteString(fmt.Sprintf("Custom group daily budget: $%.4f\n", event.DailyBudgetUSD))
+		builder.WriteString(fmt.Sprintf("Custom group weekly budget: $%.4f\n", event.WeeklyBudgetUSD))
+		builder.WriteString(fmt.Sprintf("Token package quota: $%.4f\n", event.TokenPackageUSD))
+		if started := strings.TrimSpace(event.TokenPackageStart); started != "" {
+			builder.WriteString("Token package start: " + started + "\n")
+		}
 	}
 	return strings.TrimRight(builder.String(), "\n")
 }

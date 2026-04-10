@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -147,6 +148,108 @@ func TestNotifyProviderRecoveryHonorsMinCooldown(t *testing.T) {
 	case msg := <-sent:
 		t.Fatalf("expected short-cooldown recovery to be suppressed, got %q", msg)
 	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+func TestFormatProviderEventIncludesProviderIdentityAndFailoverTarget(t *testing.T) {
+	cooldownUntil := time.Date(2026, 4, 10, 9, 30, 0, 0, time.UTC)
+	text := formatProviderEvent(ProviderEvent{
+		Kind:                   "degraded",
+		Provider:               "claude",
+		AuthID:                 "auth-source",
+		AuthIndex:              "claude:source",
+		AuthLabel:              "Claude Pool A",
+		MaskedAPIKey:           "sk-abcd****wxyz",
+		BaseURL:                "https://cc.claudepool.com/",
+		Model:                  "claude-sonnet-4-5",
+		Cooldown:               5 * time.Minute,
+		CooldownUntil:          cooldownUntil,
+		SwitchedToProvider:     "claude",
+		SwitchedToAuthID:       "auth-target",
+		SwitchedToAuthIndex:    "claude:target",
+		SwitchedToMaskedAPIKey: "sk-zzzz****9999",
+		SwitchedToBaseURL:      "https://backup.claudepool.com/",
+	}, 0)
+
+	expected := []string{
+		"Provider alert",
+		"Kind: degraded",
+		"Auth: Claude Pool A / claude:sourc",
+		"Key: sk-abcd****wxyz",
+		"Base URL: https://cc.claudepool.com/",
+		"Cooldown: 5m0s",
+		"Cooldown until: 2026-04-10T09:30:00Z",
+		"Switched to: claude (claude:targe)",
+		"Switched key: sk-zzzz****9999",
+		"Switched base URL: https://backup.claudepool.com/",
+	}
+	for _, fragment := range expected {
+		if !strings.Contains(text, fragment) {
+			t.Fatalf("expected %q in %q", fragment, text)
+		}
+	}
+}
+
+func TestFormatManagementEventIncludesCustomGroupDetails(t *testing.T) {
+	text := formatManagementEvent(ManagementEvent{
+		Action:            "api_key_created",
+		Username:          "user_01",
+		APIKey:            "sk-test",
+		APIKeyName:        "Key A",
+		GroupID:           "team-alpha",
+		GroupName:         "Team Alpha",
+		CustomGroup:       true,
+		DailyBudgetUSD:    12.5,
+		WeeklyBudgetUSD:   44.25,
+		TokenPackageUSD:   99.99,
+		TokenPackageStart: "2026-04-10T08:00:00Z",
+	})
+
+	expected := []string{
+		"Action: api_key_created",
+		"Username: user_01",
+		"API Key: sk-test",
+		"Key name: Key A",
+		"Account group: Team Alpha (team-alpha)",
+		"Custom group daily budget: $12.5000",
+		"Custom group weekly budget: $44.2500",
+		"Token package quota: $99.9900",
+		"Token package start: 2026-04-10T08:00:00Z",
+	}
+	for _, fragment := range expected {
+		if !strings.Contains(text, fragment) {
+			t.Fatalf("expected %q in %q", fragment, text)
+		}
+	}
+}
+
+func TestNotifyManagementSendsTelegram(t *testing.T) {
+	sent := make(chan string, 1)
+	n := newNotifier()
+	n.sendTelegram = func(_ context.Context, _ *http.Client, _, _, text string) error {
+		sent <- text
+		return nil
+	}
+	n.cfg = runtimeConfig{
+		enabled:        true,
+		token:          "token",
+		providerChatID: "chat-id",
+		httpClient:     &http.Client{},
+	}
+
+	n.notifyManagement(ManagementEvent{
+		Action:   "api_key_deleted",
+		Username: "user_02",
+		APIKey:   "sk-delete",
+	})
+
+	select {
+	case msg := <-sent:
+		if !strings.Contains(msg, "Action: api_key_deleted") {
+			t.Fatalf("unexpected management alert: %q", msg)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected management alert to be sent")
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/alerting"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/apikeygroup"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/billing"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
@@ -20,6 +21,8 @@ import (
 
 type apiKeyPolicyView struct {
 	APIKey                string                     `json:"api_key"`
+	Name                  string                     `json:"name"`
+	Note                  string                     `json:"note"`
 	CreatedAt             string                     `json:"created_at"`
 	ExpiresAt             string                     `json:"expires_at"`
 	Disabled              bool                       `json:"disabled"`
@@ -28,6 +31,7 @@ type apiKeyPolicyView struct {
 	AllowClaudeFamily     bool                       `json:"allow_claude_family"`
 	AllowGPTFamily        bool                       `json:"allow_gpt_family"`
 	FastMode              bool                       `json:"fast_mode"`
+	CodexChannelMode      string                     `json:"codex_channel_mode"`
 	EnableClaudeModels    bool                       `json:"enable_claude_models"`
 	ClaudeUsageLimitUSD   float64                    `json:"claude_usage_limit_usd"`
 	ClaudeGPTTargetFamily string                     `json:"claude_gpt_target_family"`
@@ -128,6 +132,8 @@ type apiKeyEventView struct {
 type apiKeyRecordSummaryView struct {
 	APIKey             string                 `json:"api_key"`
 	MaskedAPIKey       string                 `json:"masked_api_key"`
+	Name               string                 `json:"name"`
+	Note               string                 `json:"note"`
 	CreatedAt          string                 `json:"created_at"`
 	ExpiresAt          string                 `json:"expires_at"`
 	Disabled           bool                   `json:"disabled"`
@@ -181,16 +187,22 @@ func (h *Handler) billingStoreAvailable(c *gin.Context) bool {
 }
 
 func (h *Handler) GetAPIKeyRecord(c *gin.Context) {
-	if !h.billingStoreAvailable(c) {
-		return
-	}
 	apiKey, err := url.PathUnescape(strings.TrimSpace(c.Param("apiKey")))
 	if err != nil || strings.TrimSpace(apiKey) == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid api key"})
 		return
 	}
 
-	detail, err := h.buildAPIKeyRecordDetail(c.Request.Context(), apiKey, time.Now().In(policy.ChinaLocation()), parseRangeDays(c.DefaultQuery("range", "14d")), parsePositiveInt(c.DefaultQuery("events_limit", "100"), 100))
+	now := time.Now().In(policy.ChinaLocation())
+	var detail apiKeyRecordDetailView
+	if managementIsStaff(c) {
+		detail, err = h.buildAPIKeyRecordPolicyDetail(c.Request.Context(), apiKey, now)
+	} else {
+		if !h.billingStoreAvailable(c) {
+			return
+		}
+		detail, err = h.buildAPIKeyRecordDetail(c.Request.Context(), apiKey, now, parseRangeDays(c.DefaultQuery("range", "14d")), parsePositiveInt(c.DefaultQuery("events_limit", "100"), 100))
+	}
 	if err != nil {
 		status := http.StatusInternalServerError
 		if errors.Is(err, errAPIKeyNotFound) {
@@ -263,7 +275,10 @@ func (h *Handler) CreateAPIKeyRecord(c *gin.Context) {
 		upsertAPIKeyPolicy(&h.cfg.APIKeyPolicies, viewToPolicy(apiKey, policyView))
 	}
 	h.cfg.SanitizeAPIKeyPolicies()
-	h.persistAPIKeyRecord(c, "", apiKey)
+	if !h.persistAPIKeyRecord(c, "", apiKey) {
+		return
+	}
+	h.notifyAPIKeyManagementAction(c, "api_key_created", apiKey, h.cfg.EffectiveAPIKeyPolicy(apiKey))
 }
 
 func (h *Handler) UpdateAPIKeyRecord(c *gin.Context) {
@@ -282,6 +297,13 @@ func (h *Handler) UpdateAPIKeyRecord(c *gin.Context) {
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
 		return
+	}
+	beforePolicy := h.cfg.FindAPIKeyPolicy(currentKey)
+	beforeTokenUSD := 0.0
+	beforeTokenStartedAt := ""
+	if beforePolicy != nil {
+		beforeTokenUSD = beforePolicy.TokenPackageUSD
+		beforeTokenStartedAt = strings.TrimSpace(beforePolicy.TokenPackageStartedAt)
 	}
 
 	newKey := strings.TrimSpace(body.NewAPIKey)
@@ -315,7 +337,13 @@ func (h *Handler) UpdateAPIKeyRecord(c *gin.Context) {
 		removeDuplicatePolicyAlias(&h.cfg.APIKeyPolicies, currentKey, newKey)
 	}
 	h.cfg.SanitizeAPIKeyPolicies()
-	h.persistAPIKeyRecord(c, currentKey, newKey)
+	if !h.persistAPIKeyRecord(c, currentKey, newKey) {
+		return
+	}
+	afterPolicy := h.cfg.FindAPIKeyPolicy(newKey)
+	if tokenPackageChanged(beforeTokenUSD, beforeTokenStartedAt, afterPolicy) {
+		h.notifyAPIKeyManagementAction(c, "api_key_token_package_updated", newKey, h.cfg.EffectiveAPIKeyPolicy(newKey))
+	}
 }
 
 func (h *Handler) DeleteAPIKeyRecord(c *gin.Context) {
@@ -330,10 +358,14 @@ func (h *Handler) DeleteAPIKeyRecord(c *gin.Context) {
 		return
 	}
 
+	beforePolicy := h.cfg.EffectiveAPIKeyPolicy(apiKey)
 	h.cfg.APIKeys = removeAPIKeyValue(h.cfg.APIKeys, apiKey)
 	removeAPIKeyPolicy(&h.cfg.APIKeyPolicies, apiKey)
 	h.cfg.SanitizeAPIKeyPolicies()
-	h.deletePersistedAPIKeyRecord(c, apiKey)
+	if !h.deletePersistedAPIKeyRecord(c, apiKey) {
+		return
+	}
+	h.notifyAPIKeyManagementAction(c, "api_key_deleted", apiKey, beforePolicy)
 }
 
 func (h *Handler) QueryAPIKeyInsights(c *gin.Context) {
@@ -472,6 +504,34 @@ func (h *Handler) buildAPIKeyRecordDetail(ctx context.Context, apiKey string, no
 	}, nil
 }
 
+func (h *Handler) buildAPIKeyRecordPolicyDetail(ctx context.Context, apiKey string, now time.Time) (apiKeyRecordDetailView, error) {
+	if !h.apiKeyExists(apiKey) && (h.cfg == nil || h.cfg.FindAPIKeyPolicy(apiKey) == nil) {
+		return apiKeyRecordDetailView{}, errAPIKeyNotFound
+	}
+
+	explicitPolicyEntry, explicitGroup, err := h.resolvePolicyWithGroup(ctx, h.cfg.FindAPIKeyPolicy(apiKey))
+	if err != nil {
+		return apiKeyRecordDetailView{}, err
+	}
+	effectivePolicyEntry, effectiveGroup, err := h.resolvePolicyWithGroup(ctx, h.cfg.EffectiveAPIKeyPolicy(apiKey))
+	if err != nil {
+		return apiKeyRecordDetailView{}, err
+	}
+
+	return apiKeyRecordDetailView{
+		Summary:         h.buildAPIKeyPolicyOnlySummary(apiKey, now, effectivePolicyEntry, effectiveGroup),
+		ExplicitPolicy:  policyToView(apiKey, explicitPolicyEntry, explicitGroup),
+		EffectivePolicy: policyToView(apiKey, effectivePolicyEntry, effectiveGroup),
+		TodayReport:     apiKeyUsageTotals{},
+		CurrentPeriod:   apiKeyUsageTotals{},
+		Group:           h.optionalGroupView(effectiveGroup),
+		RecentDays:      []apiKeyRecentDayView{},
+		ModelUsage:      []apiKeyModelUsageView{},
+		DailyLimits:     []apiKeyDailyLimitView{},
+		RecentEvents:    []apiKeyEventView{},
+	}, nil
+}
+
 func (h *Handler) buildAPIKeySummary(ctx context.Context, apiKey string, now time.Time, rangeDays int) (apiKeyRecordSummaryView, error) {
 	todayTotals, err := h.loadDayTotals(ctx, apiKey, policy.DayKeyChina(now))
 	if err != nil {
@@ -509,6 +569,8 @@ func (h *Handler) buildAPIKeySummary(ctx context.Context, apiKey string, now tim
 	summary := apiKeyRecordSummaryView{
 		APIKey:             apiKey,
 		MaskedAPIKey:       util.HideAPIKey(apiKey),
+		Name:               "",
+		Note:               "",
 		CreatedAt:          "",
 		ExpiresAt:          "",
 		Disabled:           false,
@@ -528,6 +590,8 @@ func (h *Handler) buildAPIKeySummary(ctx context.Context, apiKey string, now tim
 		FastMode:           false,
 	}
 	if effectivePolicy != nil {
+		summary.Name = strings.TrimSpace(effectivePolicy.Name)
+		summary.Note = strings.TrimSpace(effectivePolicy.Note)
 		summary.CreatedAt = strings.TrimSpace(effectivePolicy.CreatedAt)
 		summary.ExpiresAt = strings.TrimSpace(effectivePolicy.ExpiresAt)
 		summary.Disabled = effectivePolicy.Disabled
@@ -543,6 +607,65 @@ func (h *Handler) buildAPIKeySummary(ctx context.Context, apiKey string, now tim
 
 	_ = rangeDays
 	return summary, nil
+}
+
+func (h *Handler) buildAPIKeyPolicyOnlySummary(apiKey string, now time.Time, effectivePolicy *config.APIKeyPolicy, effectiveGroup *apikeygroup.Group) apiKeyRecordSummaryView {
+	summary := apiKeyRecordSummaryView{
+		APIKey:            apiKey,
+		MaskedAPIKey:      util.HideAPIKey(apiKey),
+		Registered:        h.apiKeyExists(apiKey),
+		HasExplicitPolicy: h.cfg != nil && h.cfg.FindAPIKeyPolicy(apiKey) != nil,
+		DailyBudget: apiKeyBudgetWindowView{
+			Enabled: false,
+			StartAt: time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, policy.ChinaLocation()),
+			EndAt:   time.Date(now.Year(), now.Month(), now.Day(), 23, 59, 59, 0, policy.ChinaLocation()),
+		},
+		WeeklyBudget: apiKeyBudgetWindowView{
+			Enabled: false,
+			StartAt: now,
+			EndAt:   now,
+		},
+		TokenPackage: apiKeyTokenPackageView{
+			Enabled: false,
+		},
+	}
+	if effectivePolicy != nil {
+		summary.Name = strings.TrimSpace(effectivePolicy.Name)
+		summary.Note = strings.TrimSpace(effectivePolicy.Note)
+		summary.CreatedAt = strings.TrimSpace(effectivePolicy.CreatedAt)
+		summary.ExpiresAt = strings.TrimSpace(effectivePolicy.ExpiresAt)
+		summary.Disabled = effectivePolicy.Disabled
+		summary.GroupID = strings.TrimSpace(effectivePolicy.GroupID)
+		summary.DailyLimitCount = len(effectivePolicy.DailyLimits)
+		summary.PolicyFamily = effectivePolicy.ClaudeGPTTargetFamilyOrDefault()
+		summary.EnableClaudeModels = effectivePolicy.ClaudeModelsEnabled()
+		summary.FastMode = effectivePolicy.FastModeEnabled()
+		if effectivePolicy.DailyBudgetUSD > 0 {
+			summary.DailyBudget.Enabled = true
+			summary.DailyBudget.Label = "daily"
+			summary.DailyBudget.LimitUSD = effectivePolicy.DailyBudgetUSD
+			summary.DailyBudget.RemainingUSD = effectivePolicy.DailyBudgetUSD
+		}
+		if effectivePolicy.WeeklyBudgetUSD > 0 {
+			summary.WeeklyBudget.Enabled = true
+			summary.WeeklyBudget.Label = "weekly"
+			summary.WeeklyBudget.LimitUSD = effectivePolicy.WeeklyBudgetUSD
+			summary.WeeklyBudget.RemainingUSD = effectivePolicy.WeeklyBudgetUSD
+		}
+		if effectivePolicy.TokenPackageUSD > 0 {
+			summary.TokenPackage.Enabled = true
+			summary.TokenPackage.TotalUSD = effectivePolicy.TokenPackageUSD
+			summary.TokenPackage.RemainingUSD = effectivePolicy.TokenPackageUSD
+			summary.TokenPackage.Active = true
+			if parsed, err := time.Parse(time.RFC3339, strings.TrimSpace(effectivePolicy.TokenPackageStartedAt)); err == nil {
+				summary.TokenPackage.StartedAt = parsed
+			}
+		}
+	}
+	if effectiveGroup != nil {
+		summary.GroupName = effectiveGroup.Name
+	}
+	return summary
 }
 
 func (h *Handler) loadCurrentPeriodRows(ctx context.Context, apiKey string, now time.Time) ([]billing.DailyUsageRow, error) {
@@ -840,6 +963,8 @@ func policyToView(apiKey string, p *config.APIKeyPolicy, group *apikeygroup.Grou
 	allowClaudeFamily, allowGPTFamily, extraExcludedModels := config.ExcludedModelFamilyAccess(nil)
 	view := apiKeyPolicyView{
 		APIKey:              apiKey,
+		Name:                "",
+		Note:                "",
 		CreatedAt:           "",
 		ExpiresAt:           "",
 		Disabled:            false,
@@ -852,11 +977,14 @@ func policyToView(apiKey string, p *config.APIKeyPolicy, group *apikeygroup.Grou
 		ExcludedModels:      extraExcludedModels,
 		ModelRoutingRules:   nil,
 		ClaudeFailoverRules: nil,
+		CodexChannelMode:    "auto",
 	}
 	if p == nil {
 		return view
 	}
 	view.APIKey = strings.TrimSpace(p.APIKey)
+	view.Name = strings.TrimSpace(p.Name)
+	view.Note = strings.TrimSpace(p.Note)
 	view.CreatedAt = strings.TrimSpace(p.CreatedAt)
 	view.ExpiresAt = strings.TrimSpace(p.ExpiresAt)
 	view.Disabled = p.Disabled
@@ -866,6 +994,7 @@ func policyToView(apiKey string, p *config.APIKeyPolicy, group *apikeygroup.Grou
 	}
 	view.AllowClaudeFamily, view.AllowGPTFamily, view.ExcludedModels = config.ExcludedModelFamilyAccess(p.ExcludedModels)
 	view.FastMode = p.FastMode
+	view.CodexChannelMode = p.CodexChannelModeOrDefault()
 	view.EnableClaudeModels = p.ClaudeModelsEnabled()
 	view.ClaudeUsageLimitUSD = p.ClaudeUsageLimitUSD
 	view.ClaudeGPTTargetFamily = p.ClaudeGPTTargetFamily
@@ -910,11 +1039,14 @@ func viewToPolicy(apiKey string, view apiKeyPolicyView) config.APIKeyPolicy {
 	}
 	return config.APIKeyPolicy{
 		APIKey:                apiKey,
+		Name:                  strings.TrimSpace(view.Name),
+		Note:                  strings.TrimSpace(view.Note),
 		CreatedAt:             strings.TrimSpace(view.CreatedAt),
 		ExpiresAt:             strings.TrimSpace(view.ExpiresAt),
 		Disabled:              view.Disabled,
 		GroupID:               strings.TrimSpace(view.GroupID),
 		FastMode:              view.FastMode,
+		CodexChannelMode:      config.NormalizeCodexChannelMode(view.CodexChannelMode),
 		EnableClaudeModels:    &enableClaudeModels,
 		ClaudeUsageLimitUSD:   view.ClaudeUsageLimitUSD,
 		ClaudeGPTTargetFamily: strings.TrimSpace(view.ClaudeGPTTargetFamily),
@@ -1025,11 +1157,14 @@ func defaultAPIKeyPolicyView(apiKey string) apiKeyPolicyView {
 	now := time.Now().UTC()
 	return apiKeyPolicyView{
 		APIKey:             strings.TrimSpace(apiKey),
+		Name:               "",
+		Note:               "",
 		CreatedAt:          now.Format(time.RFC3339),
 		ExpiresAt:          now.AddDate(0, 1, 0).Format(time.RFC3339),
 		AllowClaudeFamily:  true,
 		AllowGPTFamily:     false,
 		ClaudeCodeOnlyMode: "inherit",
+		CodexChannelMode:   "auto",
 		AllowClaudeOpus46:  true,
 		DailyLimits:        map[string]int{},
 	}
@@ -1048,6 +1183,8 @@ func copyDailyLimits(src map[string]int) map[string]int {
 
 func isEmptyPolicyView(view apiKeyPolicyView) bool {
 	return strings.TrimSpace(view.APIKey) == "" &&
+		strings.TrimSpace(view.Name) == "" &&
+		strings.TrimSpace(view.Note) == "" &&
 		strings.TrimSpace(view.CreatedAt) == "" &&
 		strings.TrimSpace(view.ExpiresAt) == "" &&
 		!view.Disabled &&
@@ -1055,6 +1192,7 @@ func isEmptyPolicyView(view apiKeyPolicyView) bool {
 		!view.AllowClaudeFamily &&
 		!view.AllowGPTFamily &&
 		!view.FastMode &&
+		strings.TrimSpace(view.CodexChannelMode) == "" &&
 		!view.EnableClaudeModels &&
 		strings.TrimSpace(view.ClaudeCodeOnlyMode) == "" &&
 		view.ClaudeUsageLimitUSD == 0 &&
@@ -1073,6 +1211,65 @@ func isEmptyPolicyView(view apiKeyPolicyView) bool {
 		!view.ClaudeFailoverEnabled &&
 		strings.TrimSpace(view.ClaudeFailoverTarget) == "" &&
 		len(view.ClaudeFailoverRules) == 0
+}
+
+func tokenPackageChanged(previousUSD float64, previousStartedAt string, afterPolicy *config.APIKeyPolicy) bool {
+	nextUSD := 0.0
+	nextStartedAt := ""
+	if afterPolicy != nil {
+		nextUSD = afterPolicy.TokenPackageUSD
+		nextStartedAt = strings.TrimSpace(afterPolicy.TokenPackageStartedAt)
+	}
+	return previousUSD != nextUSD || strings.TrimSpace(previousStartedAt) != nextStartedAt
+}
+
+func (h *Handler) notifyAPIKeyManagementAction(c *gin.Context, action, apiKey string, policyEntry *config.APIKeyPolicy) {
+	if h == nil {
+		return
+	}
+	group, _ := h.resolveNotificationGroup(c.Request.Context(), policyEntry)
+	event := alerting.ManagementEvent{
+		Action:            action,
+		Username:          managementUsername(c),
+		APIKey:            strings.TrimSpace(apiKey),
+		APIKeyName:        "",
+		GroupID:           "",
+		GroupName:         "",
+		CustomGroup:       false,
+		DailyBudgetUSD:    0,
+		WeeklyBudgetUSD:   0,
+		TokenPackageUSD:   0,
+		TokenPackageStart: "",
+	}
+	if policyEntry != nil {
+		event.APIKeyName = strings.TrimSpace(policyEntry.Name)
+		event.GroupID = strings.TrimSpace(policyEntry.GroupID)
+		event.TokenPackageUSD = policyEntry.TokenPackageUSD
+		event.TokenPackageStart = strings.TrimSpace(policyEntry.TokenPackageStartedAt)
+	}
+	if group != nil {
+		event.GroupID = group.ID
+		event.GroupName = group.Name
+		event.CustomGroup = !group.IsSystem
+		event.DailyBudgetUSD = microToBillingUSD(group.DailyBudgetMicroUSD)
+		event.WeeklyBudgetUSD = microToBillingUSD(group.WeeklyBudgetMicroUSD)
+	}
+	alerting.NotifyManagementEvent(event)
+}
+
+func (h *Handler) resolveNotificationGroup(ctx context.Context, policyEntry *config.APIKeyPolicy) (*apikeygroup.Group, error) {
+	if policyEntry == nil || h == nil || h.groupStore == nil {
+		return nil, nil
+	}
+	groupID := strings.TrimSpace(policyEntry.GroupID)
+	if groupID == "" {
+		return nil, nil
+	}
+	group, ok, err := h.groupStore.GetGroup(ctx, groupID)
+	if err != nil || !ok {
+		return nil, err
+	}
+	return &group, nil
 }
 
 func totalsFromRows(rows []billing.DailyUsageRow) apiKeyUsageTotals {

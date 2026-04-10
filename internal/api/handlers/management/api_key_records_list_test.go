@@ -108,10 +108,10 @@ func TestListAPIKeyRecordsLite_FiltersStatusAndGroup(t *testing.T) {
 	past := now.Add(-48 * time.Hour).Format(time.RFC3339)
 	future := now.AddDate(0, 0, 30).Format(time.RFC3339)
 	policies := []config.APIKeyPolicy{
-		{APIKey: "alpha-active", ExpiresAt: future, GroupID: "team-alpha"},
+		{APIKey: "alpha-active", Name: "Alpha Console", ExpiresAt: future, GroupID: "team-alpha"},
 		{APIKey: "alpha-disabled", ExpiresAt: future, Disabled: true, GroupID: "team-alpha"},
 		{APIKey: "beta-expired", ExpiresAt: past, GroupID: "team-beta"},
-		{APIKey: "beta-active", ExpiresAt: future, GroupID: "team-beta"},
+		{APIKey: "beta-active", Note: "night shift", ExpiresAt: future, GroupID: "team-beta"},
 	}
 	handler, cleanup := newAPIKeyRecordsTestHandler(t, &config.Config{
 		SDKConfig: sdkconfig.SDKConfig{APIKeys: []string{
@@ -144,6 +144,14 @@ func TestListAPIKeyRecordsLite_FiltersStatusAndGroup(t *testing.T) {
 	searchResp, _ := runListAPIKeyRecords(t, handler, "search="+url.QueryEscape("beta"))
 	if got := collectAPIKeysFromList(searchResp); len(got) != 2 {
 		t.Fatalf("search beta = %v, want 2 items", got)
+	}
+	nameResp, _ := runListAPIKeyRecords(t, handler, "search="+url.QueryEscape("console"))
+	if got := collectAPIKeysFromList(nameResp); len(got) != 1 || got[0] != "alpha-active" {
+		t.Fatalf("search name = %v, want [alpha-active]", got)
+	}
+	noteResp, _ := runListAPIKeyRecords(t, handler, "search="+url.QueryEscape("night shift"))
+	if got := collectAPIKeysFromList(noteResp); len(got) != 1 || got[0] != "beta-active" {
+		t.Fatalf("search note = %v, want [beta-active]", got)
 	}
 
 	// Combined: beta + active leaves only beta-active.

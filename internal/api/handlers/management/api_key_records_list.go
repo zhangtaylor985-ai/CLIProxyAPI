@@ -21,6 +21,8 @@ import (
 type apiKeyRecordSummaryLiteView struct {
 	APIKey             string     `json:"api_key"`
 	MaskedAPIKey       string     `json:"masked_api_key"`
+	Name               string     `json:"name"`
+	Note               string     `json:"note"`
 	CreatedAt          string     `json:"created_at"`
 	ExpiresAt          string     `json:"expires_at"`
 	Disabled           bool       `json:"disabled"`
@@ -277,12 +279,16 @@ func (h *Handler) buildAPIKeyRecordSummariesLite(ctx context.Context, now time.T
 		view := apiKeyRecordSummaryLiteView{
 			APIKey:       apiKey,
 			MaskedAPIKey: util.HideAPIKey(apiKey),
+			Name:         "",
+			Note:         "",
 			Registered:   h.apiKeyExists(apiKey),
 		}
 		explicit := h.cfg.FindAPIKeyPolicy(apiKey)
 		view.HasExplicitPolicy = explicit != nil
 		effective := h.cfg.EffectiveAPIKeyPolicy(apiKey)
 		if effective != nil {
+			view.Name = strings.TrimSpace(effective.Name)
+			view.Note = strings.TrimSpace(effective.Note)
 			view.CreatedAt = strings.TrimSpace(effective.CreatedAt)
 			view.ExpiresAt = strings.TrimSpace(effective.ExpiresAt)
 			view.Disabled = effective.Disabled
@@ -346,7 +352,12 @@ func filterAPIKeyRecordsLite(items []apiKeyRecordSummaryLiteView, params apiKeyR
 		if search != "" {
 			apiKeyLower := strings.ToLower(item.APIKey)
 			maskedLower := strings.ToLower(item.MaskedAPIKey)
-			if !strings.Contains(apiKeyLower, search) && !strings.Contains(maskedLower, search) {
+			nameLower := strings.ToLower(strings.TrimSpace(item.Name))
+			noteLower := strings.ToLower(strings.TrimSpace(item.Note))
+			if !strings.Contains(apiKeyLower, search) &&
+				!strings.Contains(maskedLower, search) &&
+				!strings.Contains(nameLower, search) &&
+				!strings.Contains(noteLower, search) {
 				continue
 			}
 		}
@@ -442,4 +453,3 @@ func compareStringWithEmptyLast(a, b string, asc bool, tieA, tieB string) bool {
 	}
 	return a > b
 }
-
