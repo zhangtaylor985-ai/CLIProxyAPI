@@ -25,6 +25,28 @@ func TestDowngradeClaudeOpus46(t *testing.T) {
 	}
 }
 
+func TestRewriteClaudeOpus1MToBase(t *testing.T) {
+	tests := []struct {
+		in      string
+		want    string
+		changed bool
+	}{
+		{"claude-opus-4-6[1m]", "claude-opus-4-6", true},
+		{"claude-opus-4-6[1m](8192)", "claude-opus-4-6(8192)", true},
+		{"claude-opus-4-6", "claude-opus-4-6", false},
+		{"claude-sonnet-4-6[1m]", "claude-sonnet-4-6[1m]", false},
+	}
+	for _, tt := range tests {
+		got, changed := RewriteClaudeOpus1MToBase(tt.in)
+		if changed != tt.changed {
+			t.Fatalf("RewriteClaudeOpus1MToBase(%q) changed=%v, want %v", tt.in, changed, tt.changed)
+		}
+		if got != tt.want {
+			t.Fatalf("RewriteClaudeOpus1MToBase(%q)=%q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
 func TestNormaliseModelKey_StripsSuffix(t *testing.T) {
 	if got := NormaliseModelKey("claude-opus-4-6(8192)"); got != "claude-opus-4-6" {
 		t.Fatalf("NormaliseModelKey got %q", got)

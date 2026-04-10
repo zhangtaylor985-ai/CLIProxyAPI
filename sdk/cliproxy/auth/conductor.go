@@ -18,6 +18,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/alerting"
 	internalconfig "github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/logging"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/policy"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/thinking"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
@@ -1741,7 +1742,19 @@ func resolveUpstreamModelForClaudeAPIKey(cfg *internalconfig.Config, auth *Auth,
 	if entry == nil {
 		return ""
 	}
-	return resolveModelAliasFromConfigModels(requestedModel, asModelAliasEntries(entry.Models))
+	normalizedRequested := requestedModel
+	if entry.OpusBaseOnly {
+		if rewritten, changed := policy.RewriteClaudeOpus1MToBase(requestedModel); changed {
+			normalizedRequested = rewritten
+		}
+	}
+	if resolved := resolveModelAliasFromConfigModels(normalizedRequested, asModelAliasEntries(entry.Models)); resolved != "" {
+		return resolved
+	}
+	if normalizedRequested != requestedModel {
+		return normalizedRequested
+	}
+	return ""
 }
 
 func resolveUpstreamModelForCodexAPIKey(cfg *internalconfig.Config, auth *Auth, requestedModel string) string {

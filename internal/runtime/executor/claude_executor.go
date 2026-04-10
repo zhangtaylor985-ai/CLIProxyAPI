@@ -44,9 +44,94 @@ type ClaudeExecutor struct {
 // Previously "proxy_" was used but this is a detectable fingerprint difference.
 const claudeToolPrefix = ""
 
+const (
+	claudeOpus1MHeaderName = "X-CPA-CLAUDE-1M"
+	claudeOpus1MBetaName   = "context-1m-2025-08-07"
+)
+
 func NewClaudeExecutor(cfg *config.Config) *ClaudeExecutor { return &ClaudeExecutor{cfg: cfg} }
 
 func (e *ClaudeExecutor) Identifier() string { return "claude" }
+
+func resolveClaudeKeyConfig(cfg *config.Config, auth *cliproxyauth.Auth) *config.ClaudeKey {
+	if cfg == nil || auth == nil || len(cfg.ClaudeKey) == 0 {
+		return nil
+	}
+
+	attrKey := ""
+	attrBase := ""
+	if auth.Attributes != nil {
+		attrKey = strings.TrimSpace(auth.Attributes["api_key"])
+		attrBase = strings.TrimSpace(auth.Attributes["base_url"])
+	}
+
+	for i := range cfg.ClaudeKey {
+		entry := &cfg.ClaudeKey[i]
+		cfgKey := strings.TrimSpace(entry.APIKey)
+		cfgBase := strings.TrimSpace(entry.BaseURL)
+		if attrKey != "" && attrBase != "" {
+			if strings.EqualFold(cfgKey, attrKey) && strings.EqualFold(cfgBase, attrBase) {
+				return entry
+			}
+			continue
+		}
+		if attrKey != "" && strings.EqualFold(cfgKey, attrKey) {
+			if cfgBase == "" || attrBase == "" || strings.EqualFold(cfgBase, attrBase) {
+				return entry
+			}
+		}
+		if attrKey == "" && attrBase != "" && strings.EqualFold(cfgBase, attrBase) {
+			return entry
+		}
+	}
+	if attrKey != "" {
+		for i := range cfg.ClaudeKey {
+			entry := &cfg.ClaudeKey[i]
+			if strings.EqualFold(strings.TrimSpace(entry.APIKey), attrKey) {
+				return entry
+			}
+		}
+	}
+	return nil
+}
+
+func claudeOpusBaseOnlyEnabled(cfg *config.Config, auth *cliproxyauth.Auth) bool {
+	entry := resolveClaudeKeyConfig(cfg, auth)
+	return entry != nil && entry.OpusBaseOnly
+}
+
+func filterClaudeBetaFeatures(header string, featureToRemove string) string {
+	parts := strings.Split(header, ",")
+	filtered := make([]string, 0, len(parts))
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed == "" || trimmed == featureToRemove {
+			continue
+		}
+		filtered = append(filtered, trimmed)
+	}
+	return strings.Join(filtered, ",")
+}
+
+func filterClaudeBetas(extraBetas []string, featureToRemove string) []string {
+	if len(extraBetas) == 0 {
+		return nil
+	}
+	filtered := make([]string, 0, len(extraBetas))
+	for _, beta := range extraBetas {
+		for _, item := range strings.Split(beta, ",") {
+			trimmed := strings.TrimSpace(item)
+			if trimmed == "" || trimmed == featureToRemove {
+				continue
+			}
+			filtered = append(filtered, trimmed)
+		}
+	}
+	if len(filtered) == 0 {
+		return nil
+	}
+	return filtered
+}
 
 // PrepareRequest injects Claude credentials into the outgoing HTTP request.
 func (e *ClaudeExecutor) PrepareRequest(req *http.Request, auth *cliproxyauth.Auth) error {
@@ -149,6 +234,10 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 	// Extract betas from body and convert to header
 	var extraBetas []string
 	extraBetas, body = extractAndRemoveBetas(body)
+	stripClaudeOpus1M := claudeOpusBaseOnlyEnabled(e.cfg, auth) && strings.HasPrefix(baseModel, "claude-opus-")
+	if stripClaudeOpus1M {
+		extraBetas = filterClaudeBetas(extraBetas, claudeOpus1MBetaName)
+	}
 	bodyForTranslation := body
 	bodyForUpstream := body
 	if isClaudeOAuthToken(apiKey) && !auth.ToolPrefixDisabled() {
@@ -160,7 +249,7 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 	if err != nil {
 		return resp, err
 	}
-	applyClaudeHeaders(httpReq, auth, apiKey, false, extraBetas, e.cfg)
+	applyClaudeHeaders(httpReq, auth, apiKey, false, extraBetas, e.cfg, stripClaudeOpus1M)
 	var authID, authLabel, authType, authValue string
 	if auth != nil {
 		authID = auth.ID
@@ -313,6 +402,10 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 	// Extract betas from body and convert to header
 	var extraBetas []string
 	extraBetas, body = extractAndRemoveBetas(body)
+	stripClaudeOpus1M := claudeOpusBaseOnlyEnabled(e.cfg, auth) && strings.HasPrefix(baseModel, "claude-opus-")
+	if stripClaudeOpus1M {
+		extraBetas = filterClaudeBetas(extraBetas, claudeOpus1MBetaName)
+	}
 	bodyForTranslation := body
 	bodyForUpstream := body
 	if isClaudeOAuthToken(apiKey) && !auth.ToolPrefixDisabled() {
@@ -324,7 +417,7 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 	if err != nil {
 		return nil, err
 	}
-	applyClaudeHeaders(httpReq, auth, apiKey, true, extraBetas, e.cfg)
+	applyClaudeHeaders(httpReq, auth, apiKey, true, extraBetas, e.cfg, stripClaudeOpus1M)
 	var authID, authLabel, authType, authValue string
 	if auth != nil {
 		authID = auth.ID
@@ -483,6 +576,10 @@ func (e *ClaudeExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Aut
 	// Extract betas from body and convert to header (for count_tokens too)
 	var extraBetas []string
 	extraBetas, body = extractAndRemoveBetas(body)
+	stripClaudeOpus1M := claudeOpusBaseOnlyEnabled(e.cfg, auth) && strings.HasPrefix(baseModel, "claude-opus-")
+	if stripClaudeOpus1M {
+		extraBetas = filterClaudeBetas(extraBetas, claudeOpus1MBetaName)
+	}
 	if isClaudeOAuthToken(apiKey) && !auth.ToolPrefixDisabled() {
 		body = applyClaudeToolPrefix(body, claudeToolPrefix)
 	}
@@ -492,7 +589,7 @@ func (e *ClaudeExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Aut
 	if err != nil {
 		return cliproxyexecutor.Response{}, err
 	}
-	applyClaudeHeaders(httpReq, auth, apiKey, false, extraBetas, e.cfg)
+	applyClaudeHeaders(httpReq, auth, apiKey, false, extraBetas, e.cfg, stripClaudeOpus1M)
 	var authID, authLabel, authType, authValue string
 	if auth != nil {
 		authID = auth.ID
@@ -867,7 +964,11 @@ func decodeResponseBody(body io.ReadCloser, contentEncoding string) (io.ReadClos
 	return body, nil
 }
 
-func applyClaudeHeaders(r *http.Request, auth *cliproxyauth.Auth, apiKey string, stream bool, extraBetas []string, cfg *config.Config) {
+func applyClaudeHeaders(r *http.Request, auth *cliproxyauth.Auth, apiKey string, stream bool, extraBetas []string, cfg *config.Config, stripClaudeOpus1M bool) {
+	if stripClaudeOpus1M {
+		extraBetas = filterClaudeBetas(extraBetas, claudeOpus1MBetaName)
+	}
+
 	hdrDefault := func(cfgVal, fallback string) string {
 		if cfgVal != "" {
 			return cfgVal
@@ -902,15 +1003,21 @@ func applyClaudeHeaders(r *http.Request, auth *cliproxyauth.Auth, apiKey string,
 
 	baseBetas := "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05"
 	if val := strings.TrimSpace(ginHeaders.Get("Anthropic-Beta")); val != "" {
+		if stripClaudeOpus1M {
+			val = filterClaudeBetaFeatures(val, claudeOpus1MBetaName)
+		}
 		baseBetas = val
 		if !strings.Contains(val, "oauth") {
-			baseBetas += ",oauth-2025-04-20"
+			if baseBetas != "" {
+				baseBetas += ","
+			}
+			baseBetas += "oauth-2025-04-20"
 		}
 	}
 
 	hasClaude1MHeader := false
-	if ginHeaders != nil {
-		if _, ok := ginHeaders[textproto.CanonicalMIMEHeaderKey("X-CPA-CLAUDE-1M")]; ok {
+	if !stripClaudeOpus1M && ginHeaders != nil {
+		if _, ok := ginHeaders[textproto.CanonicalMIMEHeaderKey(claudeOpus1MHeaderName)]; ok {
 			hasClaude1MHeader = true
 		}
 	}
@@ -927,12 +1034,18 @@ func applyClaudeHeaders(r *http.Request, auth *cliproxyauth.Auth, apiKey string,
 		for _, beta := range extraBetas {
 			beta = strings.TrimSpace(beta)
 			if beta != "" && !existingSet[beta] {
-				baseBetas += "," + beta
+				if baseBetas != "" {
+					baseBetas += ","
+				}
+				baseBetas += beta
 				existingSet[beta] = true
 			}
 		}
-		if hasClaude1MHeader && !existingSet["context-1m-2025-08-07"] {
-			baseBetas += ",context-1m-2025-08-07"
+		if hasClaude1MHeader && !existingSet[claudeOpus1MBetaName] {
+			if baseBetas != "" {
+				baseBetas += ","
+			}
+			baseBetas += claudeOpus1MBetaName
 		}
 	}
 	r.Header.Set("Anthropic-Beta", baseBetas)

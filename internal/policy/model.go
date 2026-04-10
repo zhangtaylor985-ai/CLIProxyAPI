@@ -11,6 +11,7 @@ const (
 	claudeOpusPrefix               = "claude-opus-"
 	claudeOpus46Prefix             = "claude-opus-4-6"
 	claudeOpus45FallbackPrefix     = "claude-opus-4-5-20251101"
+	claudeOpus1MMarker             = "[1m]"
 	claudeThinkingSuffixLiteral    = "-thinking"
 	ClaudeGPTTargetFamilyGPT52     = "gpt-5.2"
 	ClaudeGPTTargetFamilyGPT54     = "gpt-5.4"
@@ -48,6 +49,28 @@ func DowngradeClaudeOpus46(model string) (string, bool) {
 	rewritten := claudeOpus45FallbackPrefix + remainder
 	if parsed.HasSuffix {
 		rewritten = rewritten + "(" + parsed.RawSuffix + ")"
+	}
+	return rewritten, true
+}
+
+// RewriteClaudeOpus1MToBase rewrites Claude Opus 1M variants such as
+// claude-opus-4-6[1m] to their base Opus model while preserving any "(...)"
+// thinking suffix.
+func RewriteClaudeOpus1MToBase(model string) (string, bool) {
+	trimmed := strings.TrimSpace(model)
+	if trimmed == "" {
+		return model, false
+	}
+	parsed := thinking.ParseSuffix(trimmed)
+	base := strings.TrimSpace(parsed.ModelName)
+	baseLower := strings.ToLower(base)
+	if !strings.HasPrefix(baseLower, claudeOpusPrefix) || !strings.HasSuffix(baseLower, claudeOpus1MMarker) {
+		return model, false
+	}
+
+	rewritten := strings.TrimSpace(base[:len(base)-len(claudeOpus1MMarker)])
+	if parsed.HasSuffix {
+		rewritten += "(" + parsed.RawSuffix + ")"
 	}
 	return rewritten, true
 }
