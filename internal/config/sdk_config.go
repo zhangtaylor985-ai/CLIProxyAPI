@@ -53,6 +53,10 @@ type SDKConfig struct {
 	// explicitly enables Opus 1M for that key.
 	DisableClaudeOpus1M bool `yaml:"disable-claude-opus-1m" json:"disable-claude-opus-1m"`
 
+	// ClaudeCodeOnlyEnabled restricts client API key access to Claude Code fingerprints by default.
+	// Individual API key policies may explicitly override this global default.
+	ClaudeCodeOnlyEnabled bool `yaml:"claude-code-only-enabled" json:"claude-code-only-enabled"`
+
 	// ForceModelPrefix requires explicit model prefixes (e.g., "teamA/gemini-3-pro-preview")
 	// to target prefixed credentials. When false, unprefixed model requests may use prefixed
 	// credentials as well.

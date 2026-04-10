@@ -359,6 +359,14 @@ func (h *Handler) PutClaudeStyleEnabled(c *gin.Context) {
 	h.updateBoolField(c, func(v bool) { h.cfg.ClaudeStyleEnabled = v })
 }
 
+// ClaudeCodeOnlyEnabled
+func (h *Handler) GetClaudeCodeOnlyEnabled(c *gin.Context) {
+	c.JSON(200, gin.H{"claude-code-only-enabled": h.cfg.ClaudeCodeOnlyEnabled})
+}
+func (h *Handler) PutClaudeCodeOnlyEnabled(c *gin.Context) {
+	h.updateBoolField(c, func(v bool) { h.cfg.ClaudeCodeOnlyEnabled = v })
+}
+
 // ClaudeStylePrompt
 func (h *Handler) GetClaudeStylePrompt(c *gin.Context) {
 	c.JSON(200, gin.H{"claude-style-prompt": strings.TrimSpace(h.cfg.ClaudeStylePrompt)})

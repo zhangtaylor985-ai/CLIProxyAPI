@@ -26,6 +26,7 @@ type PendingUsageProvider interface {
 	PendingCostMicroUSDByModelPrefix(apiKey, modelPrefix string) int64
 	PendingUsageEvents(apiKey string, startInclusive, endExclusive time.Time, limit int, desc bool) []UsageEventRow
 	PendingLatestRequestedAt(apiKey string) int64
+	PendingLatestRequestedAtBatch(apiKeys []string) map[string]int64
 	MergePendingSnapshot(snapshot *internalusage.StatisticsSnapshot)
 }
 
@@ -54,6 +55,7 @@ type Store interface {
 	ListUsageEvents(ctx context.Context, startAt, endAt time.Time) ([]UsageEventRow, error)
 	ListUsageEventsByAPIKey(ctx context.Context, apiKey string, startAt, endAt time.Time, limit int, desc bool) ([]UsageEventRow, error)
 	GetLatestUsageEventTime(ctx context.Context, apiKey string) (time.Time, bool, error)
+	GetLatestUsageEventTimesBatch(ctx context.Context, apiKeys []string) (map[string]time.Time, error)
 	ListUsageEventAggregateRows(ctx context.Context) ([]UsageEventAggregateRow, error)
 }
 

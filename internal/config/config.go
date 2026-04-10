@@ -615,6 +615,7 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 	cfg.Pprof.Addr = DefaultPprofAddr
 	cfg.AmpCode.RestrictManagementToLocalhost = false // Default to false: API key auth is sufficient
 	cfg.RemoteManagement.PanelGitHubRepository = DefaultPanelGitHubRepository
+	cfg.ClaudeCodeOnlyEnabled = true
 	if err = yaml.Unmarshal(data, &cfg); err != nil {
 		if optional {
 			// In cloud deploy mode, if YAML parsing fails, return empty config instead of error.
@@ -1235,7 +1236,7 @@ func mergeMappingPreserve(dst, src *yaml.Node, path ...[]string) {
 			// New key: only add if value is non-zero and not a known default
 			candidate := deepCopyNode(sv)
 			pruneKnownDefaultsInNewNode(childPath, candidate)
-			if isKnownDefaultValue(childPath, candidate) {
+			if isKnownDefaultValue(childPath, candidate) && !shouldPreserveExplicitZeroValue(childPath, candidate) {
 				continue
 			}
 			dst.Content = append(dst.Content, deepCopyNode(sk), candidate)
@@ -1408,7 +1409,7 @@ func pruneKnownDefaultsInNewNode(path []string, node *yaml.Node) {
 			}
 
 			childPath := appendPath(path, keyNode.Value)
-			if isKnownDefaultValue(childPath, valueNode) {
+			if isKnownDefaultValue(childPath, valueNode) && !shouldPreserveExplicitZeroValue(childPath, valueNode) {
 				continue
 			}
 
@@ -1425,6 +1426,22 @@ func pruneKnownDefaultsInNewNode(path []string, node *yaml.Node) {
 		for _, child := range node.Content {
 			pruneKnownDefaultsInNewNode(path, child)
 		}
+	}
+}
+
+func shouldPreserveExplicitZeroValue(path []string, node *yaml.Node) bool {
+	if node == nil || node.Kind != yaml.ScalarNode || node.Tag != "!!bool" || node.Value != "false" {
+		return false
+	}
+
+	switch strings.Join(path, ".") {
+	case "api-key-policies.claude-code-only",
+		"api-key-policies.allow-claude-opus-4-6",
+		"api-key-policies.model-routing.rules.enabled",
+		"claude-header-defaults.stabilize-device-profile":
+		return true
+	default:
+		return false
 	}
 }
 

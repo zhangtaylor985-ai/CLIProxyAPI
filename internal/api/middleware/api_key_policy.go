@@ -13,6 +13,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/apikeygroup"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/billing"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/clientidentity"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/policy"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/requesttrace"
@@ -95,6 +96,12 @@ func APIKeyPolicyMiddleware(getConfig func() *config.Config, limiter policy.Dail
 		}
 		if policyEntry != nil {
 			c.Set(apiKeyPolicyContextKey, policyEntry)
+		}
+		if policyEntry != nil && policyEntry.ClaudeCodeOnlyEnabled() && !clientidentity.IsClaudeCodeRequest(c.Request) {
+			body := handlers.BuildErrorResponseBody(http.StatusForbidden, "api key is restricted to Claude Code clients")
+			c.Abort()
+			c.Data(http.StatusForbidden, "application/json", body)
+			return
 		}
 
 		if !allowClaudeOpus1M {

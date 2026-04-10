@@ -841,6 +841,77 @@ func (s *PostgresStore) GetLatestUsageEventTime(ctx context.Context, apiKey stri
 	return time.Unix(unix, 0), true, nil
 }
 
+func (s *PostgresStore) GetLatestUsageEventTimesBatch(ctx context.Context, apiKeys []string) (map[string]time.Time, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("billing postgres: not initialized")
+	}
+	// Deduplicate and trim keys while preserving order so returned map keys
+	// match caller-provided identifiers exactly.
+	seen := make(map[string]struct{}, len(apiKeys))
+	clean := make([]string, 0, len(apiKeys))
+	for _, raw := range apiKeys {
+		trimmed := strings.TrimSpace(raw)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		clean = append(clean, trimmed)
+	}
+	result := make(map[string]time.Time, len(clean))
+	if len(clean) == 0 {
+		return result, nil
+	}
+
+	placeholders := make([]string, len(clean))
+	args := make([]interface{}, len(clean))
+	for i, key := range clean {
+		placeholders[i] = fmt.Sprintf("$%d", i+1)
+		args[i] = key
+	}
+	query := fmt.Sprintf(
+		`SELECT api_key, COALESCE(MAX(requested_at), 0) FROM %s WHERE api_key IN (%s) GROUP BY api_key`,
+		s.table("usage_events"),
+		strings.Join(placeholders, ","),
+	)
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("billing postgres: latest usage event times batch: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var apiKey string
+		var unix int64
+		if err := rows.Scan(&apiKey, &unix); err != nil {
+			return nil, fmt.Errorf("billing postgres: scan latest usage event time: %w", err)
+		}
+		if unix > 0 {
+			result[apiKey] = time.Unix(unix, 0)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("billing postgres: iterate latest usage event times: %w", err)
+	}
+
+	// Merge pending in-memory snapshots so last_used_at reflects usage that has
+	// not yet been flushed to Postgres.
+	if provider := s.getPendingUsageProvider(); provider != nil {
+		pending := provider.PendingLatestRequestedAtBatch(clean)
+		for key, unix := range pending {
+			if unix <= 0 {
+				continue
+			}
+			pendingTime := time.Unix(unix, 0)
+			if existing, ok := result[key]; !ok || pendingTime.After(existing) {
+				result[key] = pendingTime
+			}
+		}
+	}
+	return result, nil
+}
+
 func (s *PostgresStore) ListUsageEventAggregateRows(ctx context.Context) ([]UsageEventAggregateRow, error) {
 	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`
 		SELECT source, auth_index,

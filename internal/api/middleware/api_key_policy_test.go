@@ -141,6 +141,67 @@ func TestAPIKeyPolicyMiddleware_PreservesClaudeOpus1MSignalsForPerKeyOverride(t 
 	}
 }
 
+func TestAPIKeyPolicyMiddleware_ClaudeCodeOnlyRejectsGenericClient(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	cfg := &config.Config{
+		APIKeyPolicies: []config.APIKeyPolicy{
+			{APIKey: "k", ClaudeCodeOnly: boolPtr(true)},
+		},
+	}
+	cfg.SanitizeAPIKeyPolicies()
+
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set("apiKey", "k")
+		c.Next()
+	})
+	r.Use(APIKeyPolicyMiddleware(func() *config.Config { return cfg }, nil, nil, nil))
+	r.POST("/v1/messages", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewBufferString(`{"model":"claude-sonnet-4-5"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "curl/8.7.1")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "api key is restricted to Claude Code clients") {
+		t.Fatalf("body=%s", w.Body.String())
+	}
+}
+
+func TestAPIKeyPolicyMiddleware_ClaudeCodeOnlyAllowsClaudeCLI(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	cfg := &config.Config{
+		APIKeyPolicies: []config.APIKeyPolicy{
+			{APIKey: "k", ClaudeCodeOnly: boolPtr(true)},
+		},
+	}
+	cfg.SanitizeAPIKeyPolicies()
+
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set("apiKey", "k")
+		c.Next()
+	})
+	r.Use(APIKeyPolicyMiddleware(func() *config.Config { return cfg }, nil, nil, nil))
+	r.POST("/v1/messages", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewBufferString(`{"model":"claude-sonnet-4-5"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "claude-cli/2.1.77 (external, cli)")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
 func TestAPIKeyPolicyMiddleware_ExcludedModelDenied(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	cfg := &config.Config{

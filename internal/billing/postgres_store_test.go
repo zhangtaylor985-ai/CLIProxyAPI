@@ -113,6 +113,52 @@ func newPostgresBillingTestStore(t *testing.T) (*PostgresStore, func()) {
 	return store, cleanup
 }
 
+func TestPostgresStore_GetLatestUsageEventTimesBatch(t *testing.T) {
+	store, cleanup := newPostgresBillingTestStore(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	now := time.Date(2026, 4, 6, 10, 0, 0, 0, time.UTC).Unix()
+
+	events := []UsageEventRow{
+		{APIKey: "k1", Model: "m", Source: "test", RequestedAt: now - 60, TotalTokens: 1, CostMicroUSD: 1},
+		{APIKey: "k1", Model: "m", Source: "test", RequestedAt: now, TotalTokens: 1, CostMicroUSD: 1},
+		{APIKey: "k2", Model: "m", Source: "test", RequestedAt: now - 30, TotalTokens: 1, CostMicroUSD: 1},
+	}
+	for _, ev := range events {
+		if err := store.AddUsageEvent(ctx, ev); err != nil {
+			t.Fatalf("AddUsageEvent: %v", err)
+		}
+	}
+
+	// Include a duplicate and an unknown key to exercise dedup + missing handling.
+	result, err := store.GetLatestUsageEventTimesBatch(ctx, []string{"k1", "k1", "k2", "k3"})
+	if err != nil {
+		t.Fatalf("GetLatestUsageEventTimesBatch: %v", err)
+	}
+	if len(result) != 2 {
+		t.Fatalf("result len = %d, want 2", len(result))
+	}
+	if got := result["k1"].Unix(); got != now {
+		t.Fatalf("k1 latest = %d, want %d", got, now)
+	}
+	if got := result["k2"].Unix(); got != now-30 {
+		t.Fatalf("k2 latest = %d, want %d", got, now-30)
+	}
+	if _, ok := result["k3"]; ok {
+		t.Fatalf("expected k3 to be absent when no events recorded")
+	}
+
+	// Empty input must return an empty map, not nil, so callers can index.
+	empty, err := store.GetLatestUsageEventTimesBatch(ctx, nil)
+	if err != nil {
+		t.Fatalf("GetLatestUsageEventTimesBatch(nil): %v", err)
+	}
+	if empty == nil || len(empty) != 0 {
+		t.Fatalf("empty input should yield empty map, got %+v", empty)
+	}
+}
+
 func sanitizeBillingPostgresIdentifier(value string) string {
 	value = strings.ToLower(strings.TrimSpace(value))
 	if value == "" {

@@ -346,6 +346,44 @@ func (p *UsagePersistPlugin) PendingLatestRequestedAt(apiKey string) int64 {
 	return latest
 }
 
+// PendingLatestRequestedAtBatch returns the maximum pending requested_at
+// timestamp for every provided api key in a single pass over the pending
+// buffer, avoiding the O(N*M) cost of calling PendingLatestRequestedAt
+// repeatedly when rendering the paginated list view.
+func (p *UsagePersistPlugin) PendingLatestRequestedAtBatch(apiKeys []string) map[string]int64 {
+	if p == nil || len(apiKeys) == 0 {
+		return map[string]int64{}
+	}
+	target := make(map[string]struct{}, len(apiKeys))
+	for _, raw := range apiKeys {
+		trimmed := strings.TrimSpace(raw)
+		if trimmed == "" {
+			continue
+		}
+		target[trimmed] = struct{}{}
+	}
+	result := make(map[string]int64, len(target))
+	if len(target) == 0 {
+		return result
+	}
+
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	for _, item := range p.pending {
+		apiKey := strings.TrimSpace(item.event.APIKey)
+		if apiKey == "" {
+			continue
+		}
+		if _, ok := target[apiKey]; !ok {
+			continue
+		}
+		if existing, seen := result[apiKey]; !seen || item.event.RequestedAt > existing {
+			result[apiKey] = item.event.RequestedAt
+		}
+	}
+	return result
+}
+
 func (p *UsagePersistPlugin) MergePendingSnapshot(snapshot *internalusage.StatisticsSnapshot) {
 	if p == nil || snapshot == nil {
 		return

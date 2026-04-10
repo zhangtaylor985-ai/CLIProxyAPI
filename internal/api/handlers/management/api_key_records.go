@@ -32,6 +32,7 @@ type apiKeyPolicyView struct {
 	ClaudeUsageLimitUSD   float64                    `json:"claude_usage_limit_usd"`
 	ClaudeGPTTargetFamily string                     `json:"claude_gpt_target_family"`
 	EnableClaudeOpus1M    bool                       `json:"enable_claude_opus_1m"`
+	ClaudeCodeOnlyMode    string                     `json:"claude_code_only_mode"`
 	UpstreamBaseURL       string                     `json:"upstream_base_url"`
 	ExcludedModels        []string                   `json:"excluded_models"`
 	AllowClaudeOpus46     bool                       `json:"allow_claude_opus_46"`
@@ -177,32 +178,6 @@ func (h *Handler) billingStoreAvailable(c *gin.Context) bool {
 		return false
 	}
 	return true
-}
-
-func (h *Handler) ListAPIKeyRecords(c *gin.Context) {
-	if !h.billingStoreAvailable(c) {
-		return
-	}
-	rangeDays := parseRangeDays(c.DefaultQuery("range", "14d"))
-	search := strings.ToLower(strings.TrimSpace(c.Query("search")))
-
-	records, err := h.buildAPIKeyRecordSummaries(c.Request.Context(), time.Now().In(policy.ChinaLocation()), rangeDays)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	if search != "" {
-		filtered := make([]apiKeyRecordSummaryView, 0, len(records))
-		for _, record := range records {
-			if strings.Contains(strings.ToLower(record.APIKey), search) || strings.Contains(strings.ToLower(record.MaskedAPIKey), search) {
-				filtered = append(filtered, record)
-			}
-		}
-		records = filtered
-	}
-
-	c.JSON(http.StatusOK, gin.H{"items": records})
 }
 
 func (h *Handler) GetAPIKeyRecord(c *gin.Context) {
@@ -895,6 +870,14 @@ func policyToView(apiKey string, p *config.APIKeyPolicy, group *apikeygroup.Grou
 	view.ClaudeUsageLimitUSD = p.ClaudeUsageLimitUSD
 	view.ClaudeGPTTargetFamily = p.ClaudeGPTTargetFamily
 	view.EnableClaudeOpus1M = p.ClaudeOpus1MEnabled()
+	switch {
+	case p.ClaudeCodeOnly == nil:
+		view.ClaudeCodeOnlyMode = "inherit"
+	case p.ClaudeCodeOnlyEnabled():
+		view.ClaudeCodeOnlyMode = "enabled"
+	default:
+		view.ClaudeCodeOnlyMode = "disabled"
+	}
 	view.UpstreamBaseURL = p.UpstreamBaseURL
 	view.AllowClaudeOpus46 = p.AllowsClaudeOpus46()
 	view.DailyLimits = copyDailyLimits(p.DailyLimits)
@@ -914,6 +897,17 @@ func viewToPolicy(apiKey string, view apiKeyPolicyView) config.APIKeyPolicy {
 	enableClaudeModels := view.EnableClaudeModels
 	enableClaudeOpus1M := view.EnableClaudeOpus1M
 	allowClaudeOpus46 := view.AllowClaudeOpus46
+	var claudeCodeOnly *bool
+	switch strings.ToLower(strings.TrimSpace(view.ClaudeCodeOnlyMode)) {
+	case "", "inherit":
+		claudeCodeOnly = nil
+	case "enabled":
+		value := true
+		claudeCodeOnly = &value
+	case "disabled":
+		value := false
+		claudeCodeOnly = &value
+	}
 	return config.APIKeyPolicy{
 		APIKey:                apiKey,
 		CreatedAt:             strings.TrimSpace(view.CreatedAt),
@@ -925,6 +919,7 @@ func viewToPolicy(apiKey string, view apiKeyPolicyView) config.APIKeyPolicy {
 		ClaudeUsageLimitUSD:   view.ClaudeUsageLimitUSD,
 		ClaudeGPTTargetFamily: strings.TrimSpace(view.ClaudeGPTTargetFamily),
 		EnableClaudeOpus1M:    &enableClaudeOpus1M,
+		ClaudeCodeOnly:        claudeCodeOnly,
 		UpstreamBaseURL:       strings.TrimSpace(view.UpstreamBaseURL),
 		ExcludedModels:        config.BuildExcludedModelFamilies(view.AllowClaudeFamily, view.AllowGPTFamily, view.ExcludedModels),
 		AllowClaudeOpus46:     &allowClaudeOpus46,
@@ -1029,13 +1024,14 @@ func normalizeUniqueAPIKeys(keys []string) []string {
 func defaultAPIKeyPolicyView(apiKey string) apiKeyPolicyView {
 	now := time.Now().UTC()
 	return apiKeyPolicyView{
-		APIKey:            strings.TrimSpace(apiKey),
-		CreatedAt:         now.Format(time.RFC3339),
-		ExpiresAt:         now.AddDate(0, 1, 0).Format(time.RFC3339),
-		AllowClaudeFamily: true,
-		AllowGPTFamily:    false,
-		AllowClaudeOpus46: true,
-		DailyLimits:       map[string]int{},
+		APIKey:             strings.TrimSpace(apiKey),
+		CreatedAt:          now.Format(time.RFC3339),
+		ExpiresAt:          now.AddDate(0, 1, 0).Format(time.RFC3339),
+		AllowClaudeFamily:  true,
+		AllowGPTFamily:     false,
+		ClaudeCodeOnlyMode: "inherit",
+		AllowClaudeOpus46:  true,
+		DailyLimits:        map[string]int{},
 	}
 }
 
@@ -1060,6 +1056,7 @@ func isEmptyPolicyView(view apiKeyPolicyView) bool {
 		!view.AllowGPTFamily &&
 		!view.FastMode &&
 		!view.EnableClaudeModels &&
+		strings.TrimSpace(view.ClaudeCodeOnlyMode) == "" &&
 		view.ClaudeUsageLimitUSD == 0 &&
 		strings.TrimSpace(view.ClaudeGPTTargetFamily) == "" &&
 		!view.EnableClaudeOpus1M &&

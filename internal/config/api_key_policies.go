@@ -64,6 +64,10 @@ type APIKeyPolicy struct {
 	// the global disable-claude-opus-1m switch is enabled.
 	EnableClaudeOpus1M *bool `yaml:"enable-claude-opus-1m,omitempty" json:"enable-claude-opus-1m,omitempty"`
 
+	// ClaudeCodeOnly overrides the global Claude Code-only client restriction for this API key.
+	// nil means inherit the global setting.
+	ClaudeCodeOnly *bool `yaml:"claude-code-only,omitempty" json:"claude-code-only,omitempty"`
+
 	// UpstreamBaseURL overrides the upstream API base URL for this client API key.
 	// When set, /v1/* requests will be transparently proxied to this base URL instead of
 	// routing to the configured providers in this server. This is useful for chaining
@@ -348,6 +352,13 @@ func (p *APIKeyPolicy) ClaudeOpus1MEnabled() bool {
 	return *p.EnableClaudeOpus1M
 }
 
+func (p *APIKeyPolicy) ClaudeCodeOnlyEnabled() bool {
+	if p == nil || p.ClaudeCodeOnly == nil {
+		return false
+	}
+	return *p.ClaudeCodeOnly
+}
+
 func (p *APIKeyPolicy) FastModeEnabled() bool {
 	if p == nil {
 		return false
@@ -605,6 +616,9 @@ func (cfg *Config) EffectiveAPIKeyPolicyWithOptions(apiKey string, opts APIKeyPo
 	} else if strings.TrimSpace(entry.ClaudeGPTTargetFamily) == "" {
 		entry.ClaudeGPTTargetFamily = cfg.ClaudeGPTTargetFamilyOrDefault()
 	}
+	if entry.ClaudeCodeOnly == nil {
+		entry.ClaudeCodeOnly = boolValuePtr(cfg.ClaudeCodeOnlyEnabled)
+	}
 
 	if !cfg.ShouldRouteClaudeToGPT(key) {
 		if opts.ForceGlobalClaudeRouting && cfg.ClaudeToGPTRoutingEnabled {
@@ -761,4 +775,8 @@ func (cfg *Config) SanitizeAPIKeyPolicies() {
 	}
 
 	cfg.APIKeyPolicies = out
+}
+
+func boolValuePtr(v bool) *bool {
+	return &v
 }
