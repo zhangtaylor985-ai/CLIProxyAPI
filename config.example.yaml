@@ -147,10 +147,15 @@ usage-statistics-enabled: false
 # Proxy URL. Supports socks5/http/https protocols. Example: socks5://user:pass@192.168.1.1:1080/
 proxy-url: ""
 
-# When claude-to-gpt-routing-enabled is true, selects the default GPT family used for synthesized
-# Claude -> GPT routing/failover. Supported values: "gpt-5.2", "gpt-5.4", "gpt-5.3-codex".
-# Leave empty for default gpt-5.4.
+# Deprecated global target-family override. New global defaults are:
+#   claude-opus-*  -> gpt-5.4(<effort>)
+#   other claude-* -> gpt-5.3-codex(<effort>)
+# Per-API-key `claude-gpt-target-family` overrides still work when explicitly configured.
 claude-to-gpt-target-family: ""
+
+# Default reasoning effort for synthesized global Claude -> GPT routing/failover rules.
+# Supported values: low, medium, high
+claude-to-gpt-reasoning-effort: "high"
 
 # When true, unprefixed model requests only use credentials without a prefix (except when prefix == model name).
 force-model-prefix: false

@@ -398,6 +398,28 @@ func (h *Handler) PutClaudeToGPTTargetFamily(c *gin.Context) {
 	h.persist(c)
 }
 
+// ClaudeToGPTReasoningEffort
+func (h *Handler) GetClaudeToGPTReasoningEffort(c *gin.Context) {
+	c.JSON(200, gin.H{"claude-to-gpt-reasoning-effort": strings.TrimSpace(h.cfg.ClaudeToGPTReasoningEffort)})
+}
+func (h *Handler) PutClaudeToGPTReasoningEffort(c *gin.Context) {
+	var body struct {
+		Value *string `json:"value"`
+	}
+	if errBindJSON := c.ShouldBindJSON(&body); errBindJSON != nil || body.Value == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
+		return
+	}
+
+	normalized := policy.NormalizeClaudeGPTReasoningEffort(*body.Value)
+	if normalized == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid claude-to-gpt-reasoning-effort"})
+		return
+	}
+	h.cfg.ClaudeToGPTReasoningEffort = normalized
+	h.persist(c)
+}
+
 // DisableClaudeOpus1M
 func (h *Handler) GetDisableClaudeOpus1M(c *gin.Context) {
 	c.JSON(200, gin.H{"disable-claude-opus-1m": h.cfg.DisableClaudeOpus1M})

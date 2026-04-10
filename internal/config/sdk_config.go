@@ -40,6 +40,12 @@ type SDKConfig struct {
 	// When unset, the server defaults to gpt-5.4.
 	ClaudeToGPTTargetFamily string `yaml:"claude-to-gpt-target-family,omitempty" json:"claude-to-gpt-target-family,omitempty"`
 
+	// ClaudeToGPTReasoningEffort controls the default reasoning effort used by the
+	// synthesized global Claude -> GPT routing/failover rules.
+	// Supported values: "low", "medium", "high".
+	// When unset, the server defaults to "high".
+	ClaudeToGPTReasoningEffort string `yaml:"claude-to-gpt-reasoning-effort,omitempty" json:"claude-to-gpt-reasoning-effort,omitempty"`
+
 	// ClaudeStyleEnabled applies an additional Claude/Opus-compatible style prompt
 	// when Claude requests are internally routed to GPT models.
 	ClaudeStyleEnabled bool `yaml:"claude-style-enabled" json:"claude-style-enabled"`

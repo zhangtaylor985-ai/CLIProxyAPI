@@ -29,6 +29,70 @@
 5. `ccrClient.ts` / `HybridTransport.ts` 对 `stream_event` 本身就有缓冲和延迟
    - 这意味着“前台静默很久”不一定都是代理层 bug
    - 但也意味着服务端更不该用污染 transcript 的方式强行补体验
+6. 2026-04-10 补充核对 `effort`
+   - `main.tsx` / `utils/effort.ts` / `utils/thinking.ts` 可确认 CLI 对外支持 `low / medium / high / max`
+   - 无效 `--effort` 会被 CLI 参数校验直接拒绝
+   - 这意味着服务端可以放心把 Claude Code 的强度输入当成离散档位处理，而不是任意字符串
+
+## 2026-04-10 Claude CLI effort 黑盒补充
+
+### 源码结论
+
+本地源码目录：
+
+- `/Users/taylor/sdk/claude-code`
+
+本轮补充关注的文件：
+
+- `main.tsx`
+- `utils/effort.ts`
+- `utils/thinking.ts`
+- `cli/print.ts`
+
+可确认的结论：
+
+- Claude Code CLI 对外支持的 `--effort` 只有四档：
+  - `low`
+  - `medium`
+  - `high`
+  - `max`
+- 非法值不会被“尽量修正”，而是直接报错。
+- 因此代理层不需要为 Claude Code 路径设计额外的开放枚举或自由字符串兼容。
+
+### `cc1` 黑盒结论
+
+通过本地 `cc1` 做真实请求观察，可确认：
+
+- `claude-sonnet-4-6 --effort max`
+  - 最终请求中的 `output_config.effort` 观测为 `high`
+- `claude-opus-4-6 --effort max`
+  - 最终请求中的 `output_config.effort` 观测为 `max`
+
+这说明：
+
+- Claude Code CLI 的 `max` 在不同 Claude 家族上并不完全同义
+- 不能简单把“用户传了 max”理解成后端一定能拿到统一的 `max`
+
+### 对代理兼容层的落地结论
+
+针对我们当前 `claude cli -> gpt` 兼容链路，建议并已采用的策略是：
+
+- 请求里若带 `thinking.type=adaptive/auto + output_config.effort`
+  - 则优先用请求内的强度覆盖全局默认路由 suffix
+- 对背后 GPT / Codex 的映射只承诺三档：
+  - `low -> low`
+  - `medium -> medium`
+  - `high -> high`
+- `max` 在 GPT 路径统一保守降到 `high`
+- 若请求包含内建 `web_search`
+  - 最终再压到 `medium`
+  - 优先保证更快进入第一次搜索调用，而不是搜索前过度思考
+
+这套策略的原因：
+
+- 它与 Claude Code 实际暴露给用户的离散档位兼容
+- 它避免把 Opus 的 `max` 直接等价承诺给 GPT
+- 它与我们现有的搜索型请求降档策略一致，不会互相打架
 
 ## 真实同一 PTY 样本
 

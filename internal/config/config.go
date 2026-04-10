@@ -616,6 +616,7 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 	cfg.AmpCode.RestrictManagementToLocalhost = false // Default to false: API key auth is sufficient
 	cfg.RemoteManagement.PanelGitHubRepository = DefaultPanelGitHubRepository
 	cfg.ClaudeCodeOnlyEnabled = true
+	cfg.ClaudeToGPTReasoningEffort = policy.EffectiveClaudeGPTReasoningEffort("")
 	if err = yaml.Unmarshal(data, &cfg); err != nil {
 		if optional {
 			// In cloud deploy mode, if YAML parsing fails, return empty config instead of error.
@@ -659,6 +660,7 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 		cfg.RemoteManagement.PanelGitHubRepository = DefaultPanelGitHubRepository
 	}
 	cfg.ClaudeToGPTTargetFamily = policy.NormalizeClaudeGPTTargetFamily(cfg.ClaudeToGPTTargetFamily)
+	cfg.ClaudeToGPTReasoningEffort = policy.EffectiveClaudeGPTReasoningEffort(cfg.ClaudeToGPTReasoningEffort)
 	cfg.ClaudeHeaderDefaults.UserAgent = strings.TrimSpace(cfg.ClaudeHeaderDefaults.UserAgent)
 	cfg.ClaudeHeaderDefaults.PackageVersion = strings.TrimSpace(cfg.ClaudeHeaderDefaults.PackageVersion)
 	cfg.ClaudeHeaderDefaults.RuntimeVersion = strings.TrimSpace(cfg.ClaudeHeaderDefaults.RuntimeVersion)

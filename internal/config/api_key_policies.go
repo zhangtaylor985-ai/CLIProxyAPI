@@ -186,7 +186,29 @@ type APIKeyPolicyEffectiveOptions struct {
 	ForceGlobalClaudeRouting bool
 }
 
-func defaultGlobalClaudeRoutingRules(family string) []ModelRoutingRule {
+func defaultGlobalClaudeRoutingRules(reasoningEffort string) []ModelRoutingRule {
+	enabled := true
+	opusTarget, _ := policy.DefaultGlobalClaudeGPTTarget("claude-opus-default", reasoningEffort)
+	defaultTarget, _ := policy.DefaultGlobalClaudeGPTTarget("claude-default", reasoningEffort)
+	return []ModelRoutingRule{
+		{
+			Enabled:             &enabled,
+			FromModel:           "claude-opus-*",
+			TargetModel:         opusTarget,
+			TargetPercent:       100,
+			StickyWindowSeconds: 3600,
+		},
+		{
+			Enabled:             &enabled,
+			FromModel:           "claude-*",
+			TargetModel:         defaultTarget,
+			TargetPercent:       100,
+			StickyWindowSeconds: 3600,
+		},
+	}
+}
+
+func defaultGlobalClaudeRoutingRulesForFamily(family string) []ModelRoutingRule {
 	enabled := true
 	opusTarget, _ := policy.DefaultClaudeGPTTargetForFamily("claude-opus-default", family)
 	defaultTarget, _ := policy.DefaultClaudeGPTTargetForFamily("claude-default", family)
@@ -208,13 +230,36 @@ func defaultGlobalClaudeRoutingRules(family string) []ModelRoutingRule {
 	}
 }
 
-func defaultGlobalClaudeFailoverRules(family string) []ModelFailoverRule {
+func defaultGlobalClaudeFailoverRules(reasoningEffort string) []ModelFailoverRule {
+	opusTarget, _ := policy.DefaultGlobalClaudeGPTTarget("claude-opus-default", reasoningEffort)
+	defaultTarget, _ := policy.DefaultGlobalClaudeGPTTarget("claude-default", reasoningEffort)
+	return []ModelFailoverRule{
+		{FromModel: "claude-opus-*", TargetModel: opusTarget},
+		{FromModel: "claude-*", TargetModel: defaultTarget},
+	}
+}
+
+func defaultGlobalClaudeFailoverRulesForFamily(family string) []ModelFailoverRule {
 	opusTarget, _ := policy.DefaultClaudeGPTTargetForFamily("claude-opus-default", family)
 	defaultTarget, _ := policy.DefaultClaudeGPTTargetForFamily("claude-default", family)
 	return []ModelFailoverRule{
 		{FromModel: "claude-opus-*", TargetModel: opusTarget},
 		{FromModel: "claude-*", TargetModel: defaultTarget},
 	}
+}
+
+func synthesizedClaudeRoutingRules(targetFamily, reasoningEffort string) []ModelRoutingRule {
+	if strings.TrimSpace(targetFamily) != "" {
+		return defaultGlobalClaudeRoutingRulesForFamily(targetFamily)
+	}
+	return defaultGlobalClaudeRoutingRules(reasoningEffort)
+}
+
+func synthesizedClaudeFailoverRules(targetFamily, reasoningEffort string) []ModelFailoverRule {
+	if strings.TrimSpace(targetFamily) != "" {
+		return defaultGlobalClaudeFailoverRulesForFamily(targetFamily)
+	}
+	return defaultGlobalClaudeFailoverRules(reasoningEffort)
 }
 
 func hasExplicitClaudeFailoverConfig(p ProviderFailoverPolicy) bool {
@@ -573,6 +618,13 @@ func (cfg *Config) ClaudeGPTTargetFamilyOrDefault() string {
 	return policy.EffectiveClaudeGPTTargetFamily(cfg.ClaudeToGPTTargetFamily)
 }
 
+func (cfg *Config) ClaudeGPTReasoningEffortOrDefault() string {
+	if cfg == nil {
+		return policy.EffectiveClaudeGPTReasoningEffort("")
+	}
+	return policy.EffectiveClaudeGPTReasoningEffort(cfg.ClaudeToGPTReasoningEffort)
+}
+
 // AllowsClaudeOpus1M reports whether this client API key may keep Claude Opus 1M capability.
 // When the global switch is off, all keys are allowed. When the global switch is on, only
 // keys with enable-claude-opus-1m=true are allowed.
@@ -612,9 +664,6 @@ func (cfg *Config) EffectiveAPIKeyPolicyWithOptions(apiKey string, opts APIKeyPo
 	}
 	if opts.ForceGlobalClaudeRouting {
 		entry.EnableClaudeModels = nil
-		entry.ClaudeGPTTargetFamily = cfg.ClaudeGPTTargetFamilyOrDefault()
-	} else if strings.TrimSpace(entry.ClaudeGPTTargetFamily) == "" {
-		entry.ClaudeGPTTargetFamily = cfg.ClaudeGPTTargetFamilyOrDefault()
 	}
 	if entry.ClaudeCodeOnly == nil {
 		entry.ClaudeCodeOnly = boolValuePtr(cfg.ClaudeCodeOnlyEnabled)
@@ -622,20 +671,37 @@ func (cfg *Config) EffectiveAPIKeyPolicyWithOptions(apiKey string, opts APIKeyPo
 
 	if !cfg.ShouldRouteClaudeToGPT(key) {
 		if opts.ForceGlobalClaudeRouting && cfg.ClaudeToGPTRoutingEnabled {
-			entry.ModelRouting.Rules = append(defaultGlobalClaudeRoutingRules(entry.ClaudeGPTTargetFamilyOrDefault()), entry.ModelRouting.Rules...)
+			entry.ModelRouting.Rules = append(
+				defaultGlobalClaudeRoutingRules(cfg.ClaudeGPTReasoningEffortOrDefault()),
+				entry.ModelRouting.Rules...,
+			)
 			return &entry
 		}
 		if found != nil {
 			if cfg.ClaudeToGPTRoutingEnabled && entry.ClaudeModelsEnabled() && !hasExplicitClaudeFailoverConfig(entry.Failover.Claude) {
 				entry.Failover.Claude.Enabled = true
-				entry.Failover.Claude.Rules = append([]ModelFailoverRule(nil), defaultGlobalClaudeFailoverRules(entry.ClaudeGPTTargetFamilyOrDefault())...)
+				entry.Failover.Claude.Rules = append(
+					[]ModelFailoverRule(nil),
+					synthesizedClaudeFailoverRules(entry.ClaudeGPTTargetFamily, cfg.ClaudeGPTReasoningEffortOrDefault())...,
+				)
 			}
 			return &entry
 		}
 		return &entry
 	}
 
-	entry.ModelRouting.Rules = append(defaultGlobalClaudeRoutingRules(entry.ClaudeGPTTargetFamilyOrDefault()), entry.ModelRouting.Rules...)
+	if opts.ForceGlobalClaudeRouting {
+		entry.ModelRouting.Rules = append(
+			defaultGlobalClaudeRoutingRules(cfg.ClaudeGPTReasoningEffortOrDefault()),
+			entry.ModelRouting.Rules...,
+		)
+		return &entry
+	}
+
+	entry.ModelRouting.Rules = append(
+		synthesizedClaudeRoutingRules(entry.ClaudeGPTTargetFamily, cfg.ClaudeGPTReasoningEffortOrDefault()),
+		entry.ModelRouting.Rules...,
+	)
 
 	return &entry
 }

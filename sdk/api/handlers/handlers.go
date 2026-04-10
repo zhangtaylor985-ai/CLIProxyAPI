@@ -605,6 +605,52 @@ func applyClaudeGPTMasqueradePrompt(cfg *config.SDKConfig, payload []byte, handl
 	return prependAnthropicSystemBlock(payload, buildClaudeGPTMasqueradePrompt(cfg, requestedModel, compact))
 }
 
+func normalizeClaudeGPTRoutingEffort(effort string) string {
+	switch strings.ToLower(strings.TrimSpace(effort)) {
+	case "low":
+		return "low"
+	case "medium":
+		return "medium"
+	case "high":
+		return "high"
+	case "max", "xhigh":
+		return "high"
+	default:
+		return ""
+	}
+}
+
+func applyClaudeGPTEffortTargetModel(payload []byte, handlerType, requestedModel, effectiveModel string) (string, []byte) {
+	if !strings.EqualFold(strings.TrimSpace(handlerType), "claude") {
+		return effectiveModel, payload
+	}
+	if !seemsClaudeModel(requestedModel) || !seemsGPTModel(effectiveModel) {
+		return effectiveModel, payload
+	}
+
+	thinkingType := strings.ToLower(strings.TrimSpace(gjson.GetBytes(payload, "thinking.type").String()))
+	if thinkingType != "adaptive" && thinkingType != "auto" {
+		return effectiveModel, payload
+	}
+
+	effort := normalizeClaudeGPTRoutingEffort(gjson.GetBytes(payload, "output_config.effort").String())
+	if effort == "" {
+		return effectiveModel, payload
+	}
+
+	parsed := thinking.ParseSuffix(strings.TrimSpace(effectiveModel))
+	base := strings.TrimSpace(parsed.ModelName)
+	if base == "" {
+		return effectiveModel, payload
+	}
+
+	withEffort := fmt.Sprintf("%s(%s)", base, effort)
+	if withEffort == effectiveModel {
+		return effectiveModel, payload
+	}
+	return withEffort, rewriteModelField(payload, withEffort)
+}
+
 func clampClaudeGPTSearchTargetModel(payload []byte, handlerType, requestedModel, effectiveModel string) (string, []byte) {
 	if !strings.EqualFold(strings.TrimSpace(handlerType), "claude") {
 		return effectiveModel, payload
@@ -618,6 +664,11 @@ func clampClaudeGPTSearchTargetModel(payload []byte, handlerType, requestedModel
 		return effectiveModel, payload
 	}
 	return clamped, rewriteModelField(payload, clamped)
+}
+
+func finalizeClaudeGPTTargetModel(payload []byte, handlerType, requestedModel, effectiveModel string) (string, []byte) {
+	effectiveModel, payload = applyClaudeGPTEffortTargetModel(payload, handlerType, requestedModel, effectiveModel)
+	return clampClaudeGPTSearchTargetModel(payload, handlerType, requestedModel, effectiveModel)
 }
 
 // BaseAPIHandler contains the handlers for API endpoints.
@@ -861,7 +912,7 @@ func (h *BaseAPIHandler) ExecuteWithAuthManager(ctx context.Context, handlerType
 			}).Info("routing request model via api key policy")
 		}
 	}
-	routedModel, rawJSON = clampClaudeGPTSearchTargetModel(rawJSON, handlerType, originalRequestedModel, routedModel)
+	routedModel, rawJSON = finalizeClaudeGPTTargetModel(rawJSON, handlerType, originalRequestedModel, routedModel)
 
 	providers, normalizedModel, errMsg := h.getRequestDetails(routedModel)
 	if originalRequestedModel == "" {
@@ -872,7 +923,7 @@ func (h *BaseAPIHandler) ExecuteWithAuthManager(ctx context.Context, handlerType
 			targetModel, enabled := policy.ClaudeFailoverTargetModelFor(requestedModel)
 			if enabled && strings.TrimSpace(targetModel) != "" && targetModel != requestedModel && seemsClaudeModel(routedModel) && isClaudeFailoverEligible(errMsg.StatusCode, errMsg.Error) {
 				failoverPayload := rewriteModelField(rawJSON, targetModel)
-				targetModel, failoverPayload = clampClaudeGPTSearchTargetModel(failoverPayload, handlerType, originalRequestedModel, targetModel)
+				targetModel, failoverPayload = finalizeClaudeGPTTargetModel(failoverPayload, handlerType, originalRequestedModel, targetModel)
 				failoverProviders, failoverModel, detailErr := h.getRequestDetails(targetModel)
 				if detailErr != nil {
 					return nil, nil, detailErr
@@ -965,7 +1016,7 @@ func (h *BaseAPIHandler) ExecuteWithAuthManager(ctx context.Context, handlerType
 		}
 		if isClaudeFailoverEligible(status, execErr.Error) {
 			failoverPayload := rewriteModelField(rawJSON, targetModel)
-			targetModel, failoverPayload = clampClaudeGPTSearchTargetModel(failoverPayload, handlerType, originalRequestedModel, targetModel)
+			targetModel, failoverPayload = finalizeClaudeGPTTargetModel(failoverPayload, handlerType, originalRequestedModel, targetModel)
 			failoverProviders, failoverModel, detailErr := h.getRequestDetails(targetModel)
 			if detailErr == nil {
 				failoverPayload = applyClaudeGPTMasqueradePrompt(h.Cfg, failoverPayload, handlerType, originalRequestedModel, failoverModel)
@@ -1033,7 +1084,7 @@ func (h *BaseAPIHandler) ExecuteCountWithAuthManager(ctx context.Context, handle
 			}).Info("routing count request model via api key policy")
 		}
 	}
-	routedModel, rawJSON = clampClaudeGPTSearchTargetModel(rawJSON, handlerType, originalRequestedModel, routedModel)
+	routedModel, rawJSON = finalizeClaudeGPTTargetModel(rawJSON, handlerType, originalRequestedModel, routedModel)
 
 	providers, normalizedModel, errMsg := h.getRequestDetails(routedModel)
 	if originalRequestedModel == "" {
@@ -1044,7 +1095,7 @@ func (h *BaseAPIHandler) ExecuteCountWithAuthManager(ctx context.Context, handle
 			targetModel, enabled := policy.ClaudeFailoverTargetModelFor(requestedModel)
 			if enabled && strings.TrimSpace(targetModel) != "" && targetModel != requestedModel && seemsClaudeModel(routedModel) && isClaudeFailoverEligible(errMsg.StatusCode, errMsg.Error) {
 				failoverPayload := rewriteModelField(rawJSON, targetModel)
-				targetModel, failoverPayload = clampClaudeGPTSearchTargetModel(failoverPayload, handlerType, originalRequestedModel, targetModel)
+				targetModel, failoverPayload = finalizeClaudeGPTTargetModel(failoverPayload, handlerType, originalRequestedModel, targetModel)
 				failoverProviders, failoverModel, detailErr := h.getRequestDetails(targetModel)
 				if detailErr != nil {
 					return nil, nil, detailErr
@@ -1137,7 +1188,7 @@ func (h *BaseAPIHandler) ExecuteCountWithAuthManager(ctx context.Context, handle
 		}
 		if isClaudeFailoverEligible(status, execErr.Error) {
 			failoverPayload := rewriteModelField(rawJSON, targetModel)
-			targetModel, failoverPayload = clampClaudeGPTSearchTargetModel(failoverPayload, handlerType, originalRequestedModel, targetModel)
+			targetModel, failoverPayload = finalizeClaudeGPTTargetModel(failoverPayload, handlerType, originalRequestedModel, targetModel)
 			failoverProviders, failoverModel, detailErr := h.getRequestDetails(targetModel)
 			if detailErr == nil {
 				failoverPayload = applyClaudeGPTMasqueradePrompt(h.Cfg, failoverPayload, handlerType, originalRequestedModel, failoverModel)
@@ -1193,7 +1244,7 @@ func (h *BaseAPIHandler) ExecuteStreamWithAuthManager(ctx context.Context, handl
 			}).Info("routing streaming request model via api key policy")
 		}
 	}
-	routedModel, rawJSON = clampClaudeGPTSearchTargetModel(rawJSON, handlerType, originalRequestedModel, routedModel)
+	routedModel, rawJSON = finalizeClaudeGPTTargetModel(rawJSON, handlerType, originalRequestedModel, routedModel)
 
 	providers, normalizedModel, errMsg := h.getRequestDetails(routedModel)
 	if originalRequestedModel == "" {
@@ -1204,7 +1255,7 @@ func (h *BaseAPIHandler) ExecuteStreamWithAuthManager(ctx context.Context, handl
 			targetModel, enabled := policy.ClaudeFailoverTargetModelFor(requestedModel)
 			if enabled && strings.TrimSpace(targetModel) != "" && targetModel != requestedModel && seemsClaudeModel(routedModel) && isClaudeFailoverEligible(errMsg.StatusCode, errMsg.Error) {
 				failoverPayload := rewriteModelField(rawJSON, targetModel)
-				targetModel, failoverPayload = clampClaudeGPTSearchTargetModel(failoverPayload, handlerType, originalRequestedModel, targetModel)
+				targetModel, failoverPayload = finalizeClaudeGPTTargetModel(failoverPayload, handlerType, originalRequestedModel, targetModel)
 				failoverProviders, failoverModel, detailErr := h.getRequestDetails(targetModel)
 				if detailErr == nil {
 					clientKey := util.HideAPIKey(clientAPIKeyFromContext(ctx))
@@ -1299,7 +1350,7 @@ func (h *BaseAPIHandler) ExecuteStreamWithAuthManager(ctx context.Context, handl
 		if failoverEnabled && containsProvider(providers, "claude") && failoverTargetModel != "" && failoverTargetModel != normalizedModel && isClaudeFailoverEligible(status, execErr.Error) {
 			failoverAttempted = true
 			failoverPayload := rewriteModelField(rawJSON, failoverTargetModel)
-			failoverTargetModel, failoverPayload = clampClaudeGPTSearchTargetModel(failoverPayload, handlerType, originalRequestedModel, failoverTargetModel)
+			failoverTargetModel, failoverPayload = finalizeClaudeGPTTargetModel(failoverPayload, handlerType, originalRequestedModel, failoverTargetModel)
 			failoverProviders, failoverModel, detailErr := h.getRequestDetails(failoverTargetModel)
 			if detailErr == nil {
 				failoverPayload = applyClaudeGPTMasqueradePrompt(h.Cfg, failoverPayload, handlerType, originalRequestedModel, failoverModel)
@@ -1442,6 +1493,7 @@ func (h *BaseAPIHandler) ExecuteStreamWithAuthManager(ctx context.Context, handl
 						if isClaudeFailoverEligible(status, streamErr) {
 							failoverAttempted = true
 							failoverPayload := rewriteModelField(rawJSON, failoverTargetModel)
+							failoverTargetModel, failoverPayload = finalizeClaudeGPTTargetModel(failoverPayload, handlerType, originalRequestedModel, failoverTargetModel)
 							failoverProviders, failoverModel, detailErr := h.getRequestDetails(failoverTargetModel)
 							if detailErr == nil {
 								failoverPayload = applyClaudeGPTMasqueradePrompt(h.Cfg, failoverPayload, handlerType, originalRequestedModel, failoverModel)

@@ -16,6 +16,8 @@ const (
 	ClaudeGPTTargetFamilyGPT52     = "gpt-5.2"
 	ClaudeGPTTargetFamilyGPT54     = "gpt-5.4"
 	ClaudeGPTTargetModelGPT53Codex = "gpt-5.3-codex"
+	defaultClaudeGPTOpusTargetBase = "gpt-5.4"
+	defaultClaudeGPTSonnetTarget   = "gpt-5.3-codex"
 	defaultClaudeGPTHighTarget     = "gpt-5.4(high)"
 	defaultClaudeGPTMediumTarget   = "gpt-5.4(medium)"
 )
@@ -139,6 +141,31 @@ func EffectiveClaudeGPTTargetBase(value string) string {
 	return ClaudeGPTTargetFamilyGPT54
 }
 
+// NormalizeClaudeGPTReasoningEffort returns a canonical reasoning effort for global
+// Claude -> GPT routing. Unsupported values are normalized to "" so callers can
+// fall back to the default effort.
+func NormalizeClaudeGPTReasoningEffort(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "low":
+		return "low"
+	case "medium":
+		return "medium"
+	case "high":
+		return "high"
+	default:
+		return ""
+	}
+}
+
+// EffectiveClaudeGPTReasoningEffort resolves the configured global Claude -> GPT
+// reasoning effort, defaulting to "high" when unset or invalid.
+func EffectiveClaudeGPTReasoningEffort(value string) string {
+	if effort := NormalizeClaudeGPTReasoningEffort(value); effort != "" {
+		return effort
+	}
+	return string(thinking.LevelHigh)
+}
+
 // DefaultClaudeGPTTargetForFamily maps Claude requests to the default GPT target
 // used by Claude -> GPT routing for the selected target base model.
 func DefaultClaudeGPTTargetForFamily(model, family string) (string, bool) {
@@ -151,6 +178,24 @@ func DefaultClaudeGPTTargetForFamily(model, family string) (string, bool) {
 		return family + "(high)", true
 	}
 	return family + "(medium)", true
+}
+
+// DefaultGlobalClaudeGPTTarget maps Claude requests to the fixed global Claude -> GPT
+// strategy used by the system settings:
+//   - Claude Opus  -> gpt-5.4(<effort>)
+//   - Other Claude -> gpt-5.3-codex(<effort>)
+func DefaultGlobalClaudeGPTTarget(model, reasoningEffort string) (string, bool) {
+	key := NormaliseModelKey(model)
+	if !strings.HasPrefix(key, claudeModelPrefix) {
+		return "", false
+	}
+
+	targetBase := defaultClaudeGPTSonnetTarget
+	if strings.HasPrefix(key, claudeOpusPrefix) {
+		targetBase = defaultClaudeGPTOpusTargetBase
+	}
+
+	return targetBase + "(" + EffectiveClaudeGPTReasoningEffort(reasoningEffort) + ")", true
 }
 
 // MatchWildcard performs case-insensitive matching where '*' matches any substring.
