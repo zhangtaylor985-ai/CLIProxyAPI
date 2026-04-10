@@ -132,3 +132,18 @@ func TestManagementLoginAndRoleAuthorization(t *testing.T) {
 		t.Fatalf("events status = %d, want 403, body=%s", eventsRec.Code, eventsRec.Body.String())
 	}
 }
+
+func TestHasManagementUserStoreRequiresSessionManager(t *testing.T) {
+	t.Parallel()
+
+	handler := NewHandlerWithoutConfigFilePath(&config.Config{}, nil)
+	handler.SetManagementUserStore(&memoryManagementUserStore{})
+	if handler.HasManagementUserStore() {
+		t.Fatal("expected username/password login to stay unavailable without session manager")
+	}
+
+	handler.SetSessionManager(managementauth.NewSessionManager(30 * time.Minute))
+	if !handler.HasManagementUserStore() {
+		t.Fatal("expected username/password login to become available once session manager is configured")
+	}
+}

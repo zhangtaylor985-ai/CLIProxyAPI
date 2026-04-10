@@ -683,12 +683,16 @@ func (s *Service) Run(ctx context.Context) error {
 		return fmt.Errorf("cliproxy: failed to start watcher: %w", err)
 	}
 	log.Info("file watcher started for config and auth directory changes")
+	s.bootstrapCurrentAuthRegistrations()
 
 	// Prefer core auth manager auto refresh if available.
 	if s.coreManager != nil {
 		interval := 15 * time.Minute
 		s.coreManager.StartAutoRefresh(context.Background(), interval)
 		log.Infof("core auth auto-refresh started (interval=%s)", interval)
+		probeInterval := 2 * time.Minute
+		s.coreManager.StartProviderHealthProbing(context.Background(), probeInterval)
+		log.Infof("core auth provider health probing started (interval=%s)", probeInterval)
 	}
 
 	select {
@@ -726,6 +730,7 @@ func (s *Service) Shutdown(ctx context.Context) error {
 		}
 		if s.coreManager != nil {
 			s.coreManager.StopAutoRefresh()
+			s.coreManager.StopProviderHealthProbing()
 		}
 		if s.watcher != nil {
 			if err := s.watcher.Stop(); err != nil {
@@ -787,6 +792,20 @@ func (s *Service) ensureAuthDir() error {
 		return fmt.Errorf("cliproxy: auth path exists but is not a directory: %s", s.cfg.AuthDir)
 	}
 	return nil
+}
+
+func (s *Service) bootstrapCurrentAuthRegistrations() {
+	if s == nil || s.coreManager == nil {
+		return
+	}
+	for _, auth := range s.coreManager.List() {
+		if auth == nil || auth.ID == "" || auth.Disabled {
+			continue
+		}
+		s.ensureExecutorsForAuth(auth)
+		s.registerModelsForAuth(auth)
+		s.coreManager.RefreshSchedulerEntry(auth.ID)
+	}
 }
 
 // registerModelsForAuth (re)binds provider models in the global registry using the core auth ID as client identifier.

@@ -37,6 +37,23 @@ type VertexCompatKey struct {
 
 	// ExcludedModels lists model IDs that should be excluded for this provider.
 	ExcludedModels []string `yaml:"excluded-models,omitempty" json:"excluded-models,omitempty"`
+
+	// ProbeMode overrides the active health probe protocol for this provider.
+	// Supported values include: auto, claude_messages, openai_chat, openai_responses,
+	// codex_responses, gemini_generate_content.
+	ProbeMode string `yaml:"probe-mode,omitempty" json:"probe-mode,omitempty"`
+
+	// ProbePath optionally overrides the HTTP path used by active health checks.
+	ProbePath string `yaml:"probe-path,omitempty" json:"probe-path,omitempty"`
+
+	// CanaryEnabled toggles low-frequency fixed-prompt canary checks.
+	CanaryEnabled *bool `yaml:"canary-enabled,omitempty" json:"canary-enabled,omitempty"`
+
+	// CanaryPrompt overrides the default fixed prompt used by canary checks.
+	CanaryPrompt string `yaml:"canary-prompt,omitempty" json:"canary-prompt,omitempty"`
+
+	// CanaryIntervalSeconds overrides the default 5-minute canary interval.
+	CanaryIntervalSeconds int `yaml:"canary-interval-seconds,omitempty" json:"canary-interval-seconds,omitempty"`
 }
 
 func (k VertexCompatKey) GetAPIKey() string  { return k.APIKey }
@@ -74,6 +91,7 @@ func (cfg *Config) SanitizeVertexCompatKeys() {
 		entry.ProxyURL = strings.TrimSpace(entry.ProxyURL)
 		entry.Headers = NormalizeHeaders(entry.Headers)
 		entry.ExcludedModels = NormalizeExcludedModels(entry.ExcludedModels)
+		normalizeHealthCheckConfig(&entry.ProbeMode, &entry.ProbePath, entry.CanaryEnabled, &entry.CanaryPrompt, &entry.CanaryIntervalSeconds)
 
 		// Sanitize models: remove entries without valid alias
 		sanitizedModels := make([]VertexCompatModel, 0, len(entry.Models))

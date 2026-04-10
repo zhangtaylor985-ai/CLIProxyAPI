@@ -461,7 +461,166 @@ func (h *Handler) buildAuthFileEntry(auth *coreauth.Auth) gin.H {
 			}
 		}
 	}
+	if maskedAPIKey := authMaskedAPIKey(auth); maskedAPIKey != "" {
+		entry["masked_api_key"] = maskedAPIKey
+	}
+	if baseURL := authBaseURL(auth); baseURL != "" {
+		entry["base_url"] = baseURL
+	}
+	if summary := h.buildAuthHealthSummary(auth); summary != nil {
+		entry["health_summary"] = summary
+	}
 	return entry
+}
+
+func authMaskedAPIKey(auth *coreauth.Auth) string {
+	if auth == nil {
+		return ""
+	}
+	if auth.Attributes != nil {
+		if apiKey := strings.TrimSpace(auth.Attributes["api_key"]); apiKey != "" {
+			return util.HideAPIKey(apiKey)
+		}
+	}
+	if auth.Metadata != nil {
+		if apiKey, ok := auth.Metadata["api_key"].(string); ok {
+			if trimmed := strings.TrimSpace(apiKey); trimmed != "" {
+				return util.HideAPIKey(trimmed)
+			}
+		}
+	}
+	return ""
+}
+
+func authBaseURL(auth *coreauth.Auth) string {
+	if auth == nil {
+		return ""
+	}
+	if auth.Attributes != nil {
+		if baseURL := strings.TrimSpace(auth.Attributes["base_url"]); baseURL != "" {
+			return baseURL
+		}
+	}
+	switch strings.ToLower(strings.TrimSpace(auth.Provider)) {
+	case "claude":
+		return "https://api.anthropic.com"
+	case "gemini":
+		return "https://generativelanguage.googleapis.com"
+	case "codex":
+		return "https://chatgpt.com/backend-api/codex"
+	default:
+		return ""
+	}
+}
+
+func (h *Handler) buildAuthHealthSummary(auth *coreauth.Auth) gin.H {
+	if auth == nil {
+		return nil
+	}
+	type candidate struct {
+		model string
+		state *coreauth.ModelState
+		rank  int
+	}
+	stateUpdatedAt := func(state *coreauth.ModelState) time.Time {
+		if state == nil {
+			return time.Time{}
+		}
+		updatedAt := state.UpdatedAt
+		if state.Health.LastProbeAt.After(updatedAt) {
+			updatedAt = state.Health.LastProbeAt
+		}
+		if state.Health.LastCanaryAt.After(updatedAt) {
+			updatedAt = state.Health.LastCanaryAt
+		}
+		if state.Health.LastSwitchAt.After(updatedAt) {
+			updatedAt = state.Health.LastSwitchAt
+		}
+		return updatedAt
+	}
+	var best candidate
+	for model, state := range auth.ModelStates {
+		if state == nil {
+			continue
+		}
+		rank := 0
+		if state.Unavailable && strings.EqualFold(strings.TrimSpace(state.StatusMessage), "provider degraded") {
+			rank += 100
+		}
+		if !state.Health.LastProbeAt.IsZero() {
+			rank += 10
+		}
+		if !state.Health.LastSwitchAt.IsZero() {
+			rank += 5
+		}
+		if best.state == nil || rank > best.rank || (rank == best.rank && stateUpdatedAt(state).After(stateUpdatedAt(best.state))) {
+			best = candidate{model: model, state: state, rank: rank}
+		}
+	}
+	if best.state == nil {
+		return nil
+	}
+
+	state := best.state
+	summary := gin.H{
+		"model":              best.model,
+		"status":             state.Status,
+		"status_message":     strings.TrimSpace(state.StatusMessage),
+		"unavailable":        state.Unavailable,
+		"degraded":           state.Unavailable && strings.EqualFold(strings.TrimSpace(state.StatusMessage), "provider degraded"),
+		"last_probe_slow":    state.Health.LastProbeSlow,
+		"last_switch_target": strings.TrimSpace(state.Health.LastSwitchToAuthIndex),
+	}
+	if !state.NextRetryAfter.IsZero() {
+		summary["next_retry_after"] = state.NextRetryAfter
+	}
+	if state.Health.LastFirstActivityMs > 0 {
+		summary["last_first_activity_ms"] = state.Health.LastFirstActivityMs
+	}
+	if state.Health.LastCompletedMs > 0 {
+		summary["last_completed_ms"] = state.Health.LastCompletedMs
+	}
+	if !state.Health.LastProbeAt.IsZero() {
+		summary["last_probe_at"] = state.Health.LastProbeAt
+		summary["last_probe_latency_ms"] = state.Health.LastProbeLatencyMs
+	}
+	if state.Health.LastProbeError != "" {
+		summary["last_probe_error"] = state.Health.LastProbeError
+	}
+	if state.Health.ConsecutiveSlowProbes > 0 {
+		summary["consecutive_slow_probes"] = state.Health.ConsecutiveSlowProbes
+	}
+	if !state.Health.LastCanaryAt.IsZero() {
+		summary["last_canary_at"] = state.Health.LastCanaryAt
+		summary["last_canary_latency_ms"] = state.Health.LastCanaryLatencyMs
+		summary["last_canary_slow"] = state.Health.LastCanarySlow
+	}
+	if state.Health.LastCanaryError != "" {
+		summary["last_canary_error"] = state.Health.LastCanaryError
+	}
+	if state.Health.ConsecutiveSlowCanaries > 0 {
+		summary["consecutive_slow_canaries"] = state.Health.ConsecutiveSlowCanaries
+	}
+	if state.Health.BackoffLevel > 0 {
+		summary["backoff_level"] = state.Health.BackoffLevel
+	}
+	if !state.Health.LastSwitchAt.IsZero() {
+		summary["last_switch_at"] = state.Health.LastSwitchAt
+		summary["last_switch_to_provider"] = strings.TrimSpace(state.Health.LastSwitchToProvider)
+		summary["last_switch_to_auth_id"] = strings.TrimSpace(state.Health.LastSwitchToAuthID)
+		summary["last_switch_to_auth_index"] = strings.TrimSpace(state.Health.LastSwitchToAuthIndex)
+		if h != nil && h.authManager != nil && state.Health.LastSwitchToAuthID != "" {
+			if target, ok := h.authManager.GetByID(state.Health.LastSwitchToAuthID); ok && target != nil {
+				if maskedAPIKey := authMaskedAPIKey(target); maskedAPIKey != "" {
+					summary["last_switch_to_masked_api_key"] = maskedAPIKey
+				}
+				if baseURL := authBaseURL(target); baseURL != "" {
+					summary["last_switch_to_base_url"] = baseURL
+				}
+			}
+		}
+	}
+	return summary
 }
 
 func extractCodexIDTokenClaims(auth *coreauth.Auth) gin.H {

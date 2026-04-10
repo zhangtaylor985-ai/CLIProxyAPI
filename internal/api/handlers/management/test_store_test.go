@@ -2,8 +2,10 @@ package management
 
 import (
 	"context"
+	"strings"
 	"sync"
 
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/managementauth"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 )
 
@@ -47,3 +49,24 @@ func (s *memoryAuthStore) Delete(_ context.Context, id string) error {
 }
 
 func (s *memoryAuthStore) SetBaseDir(string) {}
+
+type memoryManagementUserStore struct {
+	mu    sync.Mutex
+	items map[string]managementauth.User
+}
+
+func (s *memoryManagementUserStore) Close() error { return nil }
+
+func (s *memoryManagementUserStore) EnsureSchema(context.Context) error { return nil }
+
+func (s *memoryManagementUserStore) SeedDefaults(context.Context) error { return nil }
+
+func (s *memoryManagementUserStore) GetByUsername(_ context.Context, username string) (managementauth.User, bool, error) {
+	if s == nil {
+		return managementauth.User{}, false, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	item, ok := s.items[strings.TrimSpace(username)]
+	return item, ok, nil
+}
