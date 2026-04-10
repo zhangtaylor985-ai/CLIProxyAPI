@@ -1578,6 +1578,46 @@ func pinnedAuthIDFromMetadata(meta map[string]any) string {
 	}
 }
 
+func codexChannelModeFromMetadata(meta map[string]any) string {
+	if len(meta) == 0 {
+		return "auto"
+	}
+	raw, ok := meta[cliproxyexecutor.CodexChannelModeMetadataKey]
+	if !ok || raw == nil {
+		return "auto"
+	}
+	switch val := raw.(type) {
+	case string:
+		return internalconfig.NormalizeCodexChannelMode(val)
+	case []byte:
+		return internalconfig.NormalizeCodexChannelMode(string(val))
+	default:
+		return "auto"
+	}
+}
+
+func authMatchesCodexChannelMode(auth *Auth, mode string) bool {
+	if auth == nil {
+		return false
+	}
+	mode = internalconfig.NormalizeCodexChannelMode(mode)
+	if mode == "auto" || !strings.EqualFold(strings.TrimSpace(auth.Provider), "codex") {
+		return true
+	}
+	authKind := ""
+	if auth.Attributes != nil {
+		authKind = strings.ToLower(strings.TrimSpace(auth.Attributes["auth_kind"]))
+	}
+	switch mode {
+	case "provider":
+		return authKind == "codex-api-key"
+	case "auth_file":
+		return authKind == "codex-auth-file"
+	default:
+		return true
+	}
+}
+
 func publishSelectedAuthMetadata(meta map[string]any, authID string) {
 	if len(meta) == 0 {
 		return
@@ -2759,6 +2799,7 @@ func shouldRetrySchedulerPick(err error) bool {
 
 func (m *Manager) pickNextLegacy(ctx context.Context, provider, model string, opts cliproxyexecutor.Options, tried map[string]struct{}) (*Auth, ProviderExecutor, error) {
 	pinnedAuthID := pinnedAuthIDFromMetadata(opts.Metadata)
+	codexChannelMode := codexChannelModeFromMetadata(opts.Metadata)
 
 	m.mu.RLock()
 	executor, okExecutor := m.executors[provider]
@@ -2787,6 +2828,9 @@ func (m *Manager) pickNextLegacy(ctx context.Context, provider, model string, op
 			continue
 		}
 		if modelKey != "" && registryRef != nil && !registryRef.ClientSupportsModel(candidate.ID, modelKey) {
+			continue
+		}
+		if !authMatchesCodexChannelMode(candidate, codexChannelMode) {
 			continue
 		}
 		candidates = append(candidates, candidate)
@@ -2850,6 +2894,7 @@ func (m *Manager) pickNext(ctx context.Context, provider, model string, opts cli
 
 func (m *Manager) pickNextMixedLegacy(ctx context.Context, providers []string, model string, opts cliproxyexecutor.Options, tried map[string]struct{}) (*Auth, ProviderExecutor, string, error) {
 	pinnedAuthID := pinnedAuthIDFromMetadata(opts.Metadata)
+	codexChannelMode := codexChannelModeFromMetadata(opts.Metadata)
 
 	providerSet := make(map[string]struct{}, len(providers))
 	for _, provider := range providers {
@@ -2895,6 +2940,9 @@ func (m *Manager) pickNextMixedLegacy(ctx context.Context, providers []string, m
 			continue
 		}
 		if modelKey != "" && registryRef != nil && !registryRef.ClientSupportsModel(candidate.ID, modelKey) {
+			continue
+		}
+		if !authMatchesCodexChannelMode(candidate, codexChannelMode) {
 			continue
 		}
 		candidates = append(candidates, candidate)

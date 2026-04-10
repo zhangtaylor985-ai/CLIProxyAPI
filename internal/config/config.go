@@ -425,6 +425,9 @@ type CodexKey struct {
 	// When true, transient Codex failures cool down using 1s, 2s, 4s, ... up to 2 minutes.
 	FastRecovery bool `yaml:"fast-recovery,omitempty" json:"fast-recovery,omitempty"`
 
+	// FastMode forces this provider to use Codex fast service tier for all requests.
+	FastMode bool `yaml:"fast-mode,omitempty" json:"fast-mode,omitempty"`
+
 	// Prefix optionally namespaces models for this credential (e.g., "teamA/gpt-5-codex").
 	Prefix string `yaml:"prefix,omitempty" json:"prefix,omitempty"`
 

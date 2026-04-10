@@ -235,6 +235,7 @@ func TestConfigSynthesizer_CodexKeys(t *testing.T) {
 					Prefix:     "dev",
 					BaseURL:    "https://api.openai.com",
 					ProxyURL:   "http://proxy.local",
+					FastMode:   true,
 					Websockets: true,
 				},
 			},
@@ -262,6 +263,9 @@ func TestConfigSynthesizer_CodexKeys(t *testing.T) {
 	}
 	if auths[0].Attributes["websockets"] != "true" {
 		t.Errorf("expected websockets=true, got %s", auths[0].Attributes["websockets"])
+	}
+	if auths[0].Attributes["fast_mode"] != "true" {
+		t.Errorf("expected fast_mode=true, got %s", auths[0].Attributes["fast_mode"])
 	}
 }
 

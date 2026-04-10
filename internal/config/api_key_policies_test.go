@@ -108,6 +108,32 @@ func TestConfig_SanitizeAPIKeyPolicies_DisablesClaudeUsageLimitWhenNonPositive(t
 	}
 }
 
+func TestConfig_SanitizeAPIKeyPolicies_NormalizesCodexChannelMode(t *testing.T) {
+	cfg := &Config{
+		APIKeyPolicies: []APIKeyPolicy{
+			{APIKey: "k1", CodexChannelMode: " Provider "},
+			{APIKey: "k2", CodexChannelMode: "AUTH_FILE"},
+			{APIKey: "k3", CodexChannelMode: "invalid"},
+			{APIKey: "k4"},
+		},
+	}
+
+	cfg.SanitizeAPIKeyPolicies()
+
+	if got := cfg.FindAPIKeyPolicy("k1"); got == nil || got.CodexChannelMode != "provider" {
+		t.Fatalf("k1 codex channel mode = %v", got)
+	}
+	if got := cfg.FindAPIKeyPolicy("k2"); got == nil || got.CodexChannelMode != "auth_file" {
+		t.Fatalf("k2 codex channel mode = %v", got)
+	}
+	if got := cfg.FindAPIKeyPolicy("k3"); got == nil || got.CodexChannelMode != "auto" {
+		t.Fatalf("k3 codex channel mode = %v", got)
+	}
+	if got := cfg.FindAPIKeyPolicy("k4"); got == nil || got.CodexChannelMode != "auto" {
+		t.Fatalf("k4 codex channel mode = %v", got)
+	}
+}
+
 func TestConfig_ShouldRouteClaudeToGPT_DefaultsToAllKeysWhenGlobalEnabled(t *testing.T) {
 	cfg := &Config{SDKConfig: SDKConfig{ClaudeToGPTRoutingEnabled: true}}
 

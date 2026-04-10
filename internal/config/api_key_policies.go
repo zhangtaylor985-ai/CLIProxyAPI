@@ -45,6 +45,10 @@ type APIKeyPolicy struct {
 	// to use the priority service tier when the target model supports it.
 	FastMode bool `yaml:"fast-mode,omitempty" json:"fast-mode,omitempty"`
 
+	// CodexChannelMode restricts which Codex credential channel this API key may use.
+	// Supported values are "auto", "provider", and "auth_file".
+	CodexChannelMode string `yaml:"codex-channel-mode,omitempty" json:"codex-channel-mode,omitempty"`
+
 	// EnableClaudeModels disables the global Claude -> GPT routing override for this API key.
 	// It only takes effect when claude-to-gpt-routing-enabled is true.
 	EnableClaudeModels *bool `yaml:"enable-claude-models,omitempty" json:"enable-claude-models,omitempty"`
@@ -411,6 +415,26 @@ func (p *APIKeyPolicy) FastModeEnabled() bool {
 	return p.FastMode
 }
 
+func NormalizeCodexChannelMode(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "auto":
+		return "auto"
+	case "provider":
+		return "provider"
+	case "auth_file":
+		return "auth_file"
+	default:
+		return "auto"
+	}
+}
+
+func (p *APIKeyPolicy) CodexChannelModeOrDefault() string {
+	if p == nil {
+		return "auto"
+	}
+	return NormalizeCodexChannelMode(p.CodexChannelMode)
+}
+
 func (p *APIKeyPolicy) UsesGroupBudget() bool {
 	if p == nil {
 		return false
@@ -728,6 +752,7 @@ func (cfg *Config) SanitizeAPIKeyPolicies() {
 
 		entry.UpstreamBaseURL = strings.TrimSpace(entry.UpstreamBaseURL)
 		entry.ClaudeGPTTargetFamily = policy.NormalizeClaudeGPTTargetBase(entry.ClaudeGPTTargetFamily)
+		entry.CodexChannelMode = NormalizeCodexChannelMode(entry.CodexChannelMode)
 
 		entry.ExcludedModels = NormalizeExcludedModels(entry.ExcludedModels)
 

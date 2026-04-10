@@ -6,6 +6,38 @@ import (
 	"github.com/tidwall/gjson"
 )
 
+func TestConvertOpenAIResponsesRequestToCodex_PreservesAllowedServiceTierValues(t *testing.T) {
+	tests := []struct {
+		name        string
+		serviceTier string
+	}{
+		{name: "priority", serviceTier: "priority"},
+		{name: "fast", serviceTier: "fast"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			inputJSON := []byte(`{"model":"gpt-5.2","input":"hello","service_tier":"` + tt.serviceTier + `"}`)
+
+			output := ConvertOpenAIResponsesRequestToCodex("gpt-5.2", inputJSON, false)
+
+			if got := gjson.GetBytes(output, "service_tier").String(); got != tt.serviceTier {
+				t.Fatalf("service_tier = %q, want %q", got, tt.serviceTier)
+			}
+		})
+	}
+}
+
+func TestConvertOpenAIResponsesRequestToCodex_StripsUnsupportedServiceTierValues(t *testing.T) {
+	inputJSON := []byte(`{"model":"gpt-5.2","input":"hello","service_tier":"auto"}`)
+
+	output := ConvertOpenAIResponsesRequestToCodex("gpt-5.2", inputJSON, false)
+
+	if gjson.GetBytes(output, "service_tier").Exists() {
+		t.Fatalf("expected unsupported service_tier to be removed, got %s", string(output))
+	}
+}
+
 // TestConvertSystemRoleToDeveloper_BasicConversion tests the basic system -> developer role conversion
 func TestConvertSystemRoleToDeveloper_BasicConversion(t *testing.T) {
 	inputJSON := []byte(`{

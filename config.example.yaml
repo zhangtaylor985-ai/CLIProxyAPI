@@ -65,6 +65,9 @@ api-key-policies:
     #   - "http://127.0.0.1:8001" (incoming /v1/models -> http://127.0.0.1:8001/v1/models)
     #   - "http://127.0.0.1:8001/v1" (incoming /v1/models -> http://127.0.0.1:8001/v1/models)
     upstream-base-url: ""
+    # Optional: restrict which Codex auth channel this client API key may use.
+    # Values: auto | provider | auth_file
+    codex-channel-mode: "auto"
     excluded-models:
       - "claude-haiku-4-5-20251001"
     model-routing:
@@ -215,6 +218,7 @@ nonstream-keepalive-interval: 0
 # codex-api-key:
 #   - api-key: "sk-atSM..."
 #     prefix: "test" # optional: require calls like "test/gpt-5-codex" to target this credential
+#     fast-mode: true # optional: force this provider's Codex requests to use service_tier: fast
 #     fast-recovery: true # optional: use short exponential cooldowns (1s..2m) for transient failures
 #     base-url: "https://www.example.com" # use the custom codex API endpoint
 #     headers:

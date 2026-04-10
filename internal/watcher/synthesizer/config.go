@@ -160,6 +160,9 @@ func (s *ConfigSynthesizer) synthesizeCodexKeys(ctx *SynthesisContext) []*coreau
 		if ck.FastRecovery {
 			attrs["fast_recovery"] = "true"
 		}
+		if ck.FastMode {
+			attrs["fast_mode"] = "true"
+		}
 		if ck.BaseURL != "" {
 			attrs["base_url"] = ck.BaseURL
 		}

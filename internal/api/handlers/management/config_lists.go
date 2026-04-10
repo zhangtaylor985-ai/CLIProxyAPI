@@ -836,6 +836,7 @@ func (h *Handler) PatchCodexKey(c *gin.Context) {
 	type codexKeyPatch struct {
 		APIKey         *string              `json:"api-key"`
 		FastRecovery   *bool                `json:"fast-recovery"`
+		FastMode       *bool                `json:"fast-mode"`
 		Prefix         *string              `json:"prefix"`
 		BaseURL        *string              `json:"base-url"`
 		ProxyURL       *string              `json:"proxy-url"`
@@ -876,6 +877,9 @@ func (h *Handler) PatchCodexKey(c *gin.Context) {
 	}
 	if body.Value.FastRecovery != nil {
 		entry.FastRecovery = *body.Value.FastRecovery
+	}
+	if body.Value.FastMode != nil {
+		entry.FastMode = *body.Value.FastMode
 	}
 	if body.Value.Prefix != nil {
 		entry.Prefix = strings.TrimSpace(*body.Value.Prefix)

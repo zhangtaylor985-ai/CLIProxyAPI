@@ -238,6 +238,11 @@ func requestExecutionMetadata(ctx context.Context) map[string]any {
 	if executionSessionID := executionSessionIDFromContext(ctx); executionSessionID != "" {
 		meta[coreexecutor.ExecutionSessionMetadataKey] = executionSessionID
 	}
+	if policy := apiKeyPolicyFromContext(ctx); policy != nil {
+		if mode := policy.CodexChannelModeOrDefault(); mode != "auto" {
+			meta[coreexecutor.CodexChannelModeMetadataKey] = mode
+		}
+	}
 	return meta
 }
 
