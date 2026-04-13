@@ -253,3 +253,18 @@ func TestResolveBillingPostgresConfigFallsBackToBillingThenPGStoreEnv(t *testing
 		t.Fatalf("schema = %q, want pgstore_schema", schema)
 	}
 }
+
+func TestResolveSessionTrajectoryPostgresConfigPrefersDedicatedEnv(t *testing.T) {
+	t.Setenv("SESSION_TRAJECTORY_PG_DSN", "postgres://session-user:pass@127.0.0.1:5432/session_db?sslmode=disable")
+	t.Setenv("SESSION_TRAJECTORY_PG_SCHEMA", "session_schema")
+	t.Setenv("APIKEY_POLICY_PG_DSN", "postgres://policy-user:pass@127.0.0.1:5432/policy_db?sslmode=disable")
+	t.Setenv("APIKEY_POLICY_PG_SCHEMA", "policy_schema")
+
+	dsn, schema := resolveSessionTrajectoryPostgresConfig()
+	if dsn != "postgres://session-user:pass@127.0.0.1:5432/session_db?sslmode=disable" {
+		t.Fatalf("dsn = %q, want dedicated session env", dsn)
+	}
+	if schema != "session_schema" {
+		t.Fatalf("schema = %q, want session_schema", schema)
+	}
+}

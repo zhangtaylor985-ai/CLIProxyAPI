@@ -438,7 +438,7 @@ func (s *Server) initGroupStore() apikeygroup.Store {
 }
 
 func (s *Server) initSessionTrajectoryStore() sessiontrajectory.Store {
-	dsn, schema := resolveBillingPostgresConfig()
+	dsn, schema := resolveSessionTrajectoryPostgresConfig()
 	if dsn == "" {
 		log.Warn("session trajectory recorder disabled: postgres DSN not configured")
 		return nil
@@ -467,6 +467,10 @@ func resolveBillingPostgresConfig() (dsn string, schema string) {
 
 func resolveAPIKeyPolicyPostgresConfig() (dsn string, schema string) {
 	return resolveSharedPostgresConfig()
+}
+
+func resolveSessionTrajectoryPostgresConfig() (dsn string, schema string) {
+	return sessiontrajectory.ResolvePostgresConfigFromEnv()
 }
 
 func initAPIKeyConfigStore(cfg *config.Config) apikeyconfig.Store {

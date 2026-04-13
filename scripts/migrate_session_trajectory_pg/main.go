@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/router-for-me/CLIProxyAPI/v6/internal/apikeyconfig"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/sessiontrajectory"
 )
 
@@ -26,7 +25,7 @@ func main() {
 }
 
 func parseFlags() migrateConfig {
-	defaultDSN, defaultSchema := apikeyconfig.ResolvePostgresConfigFromEnv()
+	defaultDSN, defaultSchema := sessiontrajectory.ResolvePostgresConfigFromEnv()
 
 	var cfg migrateConfig
 	flag.StringVar(&cfg.PostgresDSN, "pg-dsn", defaultDSN, "Postgres DSN for session trajectory tables")

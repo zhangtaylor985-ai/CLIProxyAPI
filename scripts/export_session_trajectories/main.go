@@ -14,7 +14,6 @@ import (
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/joho/godotenv"
-	"github.com/router-for-me/CLIProxyAPI/v6/internal/apikeyconfig"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/sessiontrajectory"
 )
 
@@ -93,7 +92,7 @@ func loadDotEnv() {
 }
 
 func parseFlags() exportConfig {
-	defaultDSN, defaultSchema := apikeyconfig.ResolvePostgresConfigFromEnv()
+	defaultDSN, defaultSchema := sessiontrajectory.ResolvePostgresConfigFromEnv()
 
 	var cfg exportConfig
 	flag.StringVar(&cfg.PostgresDSN, "pg-dsn", defaultDSN, "Postgres DSN for session trajectory tables")
