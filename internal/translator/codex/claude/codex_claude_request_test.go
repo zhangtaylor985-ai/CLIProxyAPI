@@ -134,7 +134,7 @@ func TestConvertClaudeRequestToCodex_ParallelToolCalls(t *testing.T) {
 	}
 }
 
-func TestConvertClaudeRequestToCodex_ClampBuiltinWebSearchReasoningEffort(t *testing.T) {
+func TestConvertClaudeRequestToCodex_PreservesBuiltinWebSearchReasoningEffort(t *testing.T) {
 	input := `{
 		"model": "claude-opus-4-6",
 		"system": [{"type":"text","text":"You are an assistant for performing a web search tool use"}],
@@ -145,8 +145,51 @@ func TestConvertClaudeRequestToCodex_ClampBuiltinWebSearchReasoningEffort(t *tes
 	}`
 
 	result := ConvertClaudeRequestToCodex("gpt-5.4", []byte(input), true)
-	if got := gjson.GetBytes(result, "reasoning.effort").String(); got != "medium" {
-		t.Fatalf("reasoning.effort = %q, want %q; output=%s", got, "medium", string(result))
+	if got := gjson.GetBytes(result, "reasoning.effort").String(); got != "high" {
+		t.Fatalf("reasoning.effort = %q, want %q; output=%s", got, "high", string(result))
+	}
+}
+
+func TestConvertClaudeRequestToCodex_DoesNotClampBuiltinWebSearchWithoutSearchIntent(t *testing.T) {
+	input := `{
+		"model": "claude-opus-4-6",
+		"tools": [{"name":"WebSearch","input_schema":{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}}],
+		"thinking": {"type":"adaptive"},
+		"output_config": {"effort":"high"},
+		"messages": [{"role":"user","content":"Reply with exactly HIGH_SEQ_20260413"}]
+	}`
+
+	result := ConvertClaudeRequestToCodex("gpt-5.4", []byte(input), true)
+	if got := gjson.GetBytes(result, "reasoning.effort").String(); got != "high" {
+		t.Fatalf("reasoning.effort = %q, want %q; output=%s", got, "high", string(result))
+	}
+}
+
+func TestConvertClaudeRequestToCodex_EnabledThinkingExplicitEffortWinsOverBudget(t *testing.T) {
+	input := `{
+		"model": "claude-opus-4-6",
+		"messages": [{"role":"user","content":"hi"}],
+		"thinking": {"type":"enabled","budget_tokens":1024},
+		"output_config": {"effort":"high"}
+	}`
+
+	result := ConvertClaudeRequestToCodex("gpt-5.4", []byte(input), false)
+	if got := gjson.GetBytes(result, "reasoning.effort").String(); got != "high" {
+		t.Fatalf("reasoning.effort = %q, want %q; output=%s", got, "high", string(result))
+	}
+}
+
+func TestConvertClaudeRequestToCodex_UnknownExplicitEffortFallsBackToBudget(t *testing.T) {
+	input := `{
+		"model": "claude-opus-4-6",
+		"messages": [{"role":"user","content":"hi"}],
+		"thinking": {"type":"enabled","budget_tokens":1024},
+		"output_config": {"effort":"weird"}
+	}`
+
+	result := ConvertClaudeRequestToCodex("gpt-5.4", []byte(input), false)
+	if got := gjson.GetBytes(result, "reasoning.effort").String(); got != "low" {
+		t.Fatalf("reasoning.effort = %q, want %q; output=%s", got, "low", string(result))
 	}
 }
 
@@ -174,7 +217,7 @@ func TestConvertClaudeRequestToCodex_MapsClaudeCodeWebSearchToolToBuiltinSearch(
 	if got := gjson.GetBytes(result, "tools.0.type").String(); got != "web_search" {
 		t.Fatalf("tools.0.type = %q, want %q; output=%s", got, "web_search", string(result))
 	}
-	if got := gjson.GetBytes(result, "reasoning.effort").String(); got != "medium" {
-		t.Fatalf("reasoning.effort = %q, want %q; output=%s", got, "medium", string(result))
+	if got := gjson.GetBytes(result, "reasoning.effort").String(); got != "high" {
+		t.Fatalf("reasoning.effort = %q, want %q; output=%s", got, "high", string(result))
 	}
 }

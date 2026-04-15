@@ -27,7 +27,6 @@ type ConvertCodexResponseToClaudeParams struct {
 	HasToolCall                        bool
 	BlockIndex                         int
 	HasReceivedArgumentsDelta          bool
-	SkipNextSyntheticWebSearchStart    bool
 	LastBuiltinWebSearchQuery          string
 	EmittedSyntheticWebSearchStarts    map[string]struct{}
 	EmittedSyntheticWebSearchCompletes map[string]struct{}
@@ -79,51 +78,6 @@ func ConvertCodexResponseToClaude(ctx context.Context, _ string, originalRequest
 		template, _ = sjson.SetBytes(template, "message.id", rootResult.Get("response.id").String())
 
 		output = translatorcommon.AppendSSEEventBytes(output, "message_start", template, 2)
-		if gptinclaude.ShouldEmitSyntheticWebSearchTag(clientKind) && gptinclaude.ShouldPreEmitBuiltinWebSearchProgress(originalRequestRawJSON) {
-			syntheticText := gptinclaude.BuildSyntheticWebSearchToolCallTextFromRequest(originalRequestRawJSON)
-			if syntheticText != "" {
-				blockIndex := (*param).(*ConvertCodexResponseToClaudeParams).BlockIndex
-
-				template = []byte(`{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`)
-				template, _ = sjson.SetBytes(template, "index", blockIndex)
-				output = translatorcommon.AppendSSEEventBytes(output, "content_block_start", template, 2)
-
-				template = []byte(`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":""}}`)
-				template, _ = sjson.SetBytes(template, "index", blockIndex)
-				template, _ = sjson.SetBytes(template, "delta.text", syntheticText)
-				output = translatorcommon.AppendSSEEventBytes(output, "content_block_delta", template, 2)
-
-				template = []byte(`{"type":"content_block_stop","index":0}`)
-				template, _ = sjson.SetBytes(template, "index", blockIndex)
-				output = translatorcommon.AppendSSEEventBytes(output, "content_block_stop", template, 2)
-
-				(*param).(*ConvertCodexResponseToClaudeParams).BlockIndex++
-				(*param).(*ConvertCodexResponseToClaudeParams).SkipNextSyntheticWebSearchStart = true
-			}
-		} else if gptinclaude.ShouldEmitVSCodeWebSearchProgress(clientKind) && gptinclaude.ShouldPreEmitBuiltinWebSearchProgress(originalRequestRawJSON) {
-			progressThinking := gptinclaude.BuildVSCodeWebSearchProgressThinking(
-				gjson.Result{},
-				(*param).(*ConvertCodexResponseToClaudeParams).LastBuiltinWebSearchQuery,
-			)
-			if progressThinking != "" {
-				blockIndex := (*param).(*ConvertCodexResponseToClaudeParams).BlockIndex
-
-				template = []byte(`{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}`)
-				template, _ = sjson.SetBytes(template, "index", blockIndex)
-				output = translatorcommon.AppendSSEEventBytes(output, "content_block_start", template, 2)
-
-				template = []byte(`{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":""}}`)
-				template, _ = sjson.SetBytes(template, "index", blockIndex)
-				template, _ = sjson.SetBytes(template, "delta.thinking", progressThinking)
-				output = translatorcommon.AppendSSEEventBytes(output, "content_block_delta", template, 2)
-
-				template = []byte(`{"type":"content_block_stop","index":0}`)
-				template, _ = sjson.SetBytes(template, "index", blockIndex)
-				output = translatorcommon.AppendSSEEventBytes(output, "content_block_stop", template, 2)
-
-				(*param).(*ConvertCodexResponseToClaudeParams).BlockIndex++
-			}
-		}
 	} else if typeStr == "response.reasoning_summary_part.added" {
 		if !gptinclaude.ShouldSurfaceReasoningSummaryAsThinking(clientKind) {
 			return [][]byte{output}
@@ -220,26 +174,33 @@ func ConvertCodexResponseToClaude(ctx context.Context, _ string, originalRequest
 					return [][]byte{output}
 				}
 			}
-			if (*param).(*ConvertCodexResponseToClaudeParams).SkipNextSyntheticWebSearchStart {
-				(*param).(*ConvertCodexResponseToClaudeParams).SkipNextSyntheticWebSearchStart = false
-				if itemID != "" {
-					(*param).(*ConvertCodexResponseToClaudeParams).EmittedSyntheticWebSearchStarts[itemID] = struct{}{}
-				}
-				return [][]byte{output}
+			if query := strings.TrimSpace(itemResult.Get("action.query").String()); query != "" {
+				(*param).(*ConvertCodexResponseToClaudeParams).LastBuiltinWebSearchQuery = query
 			}
 			if gptinclaude.ShouldEmitSyntheticWebSearchTag(clientKind) {
-				// For the real Claude CLI path, a response.created preamble already
-				// gives early feedback for explicit search prompts. Emitting another
-				// generic "Searching the web." for every added item makes the
-				// transcript much noisier than Codex CLI, especially when the model
-				// performs several search rounds. Keep only the concrete completion
-				// events ("Searched: ...") and suppress per-item start spam here.
+				syntheticText := gptinclaude.BuildSyntheticWebSearchToolCallText(gjson.Result{})
+				if syntheticText != "" {
+					blockIndex := (*param).(*ConvertCodexResponseToClaudeParams).BlockIndex
+
+					template = []byte(`{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`)
+					template, _ = sjson.SetBytes(template, "index", blockIndex)
+					output = translatorcommon.AppendSSEEventBytes(output, "content_block_start", template, 2)
+
+					template = []byte(`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":""}}`)
+					template, _ = sjson.SetBytes(template, "index", blockIndex)
+					template, _ = sjson.SetBytes(template, "delta.text", syntheticText)
+					output = translatorcommon.AppendSSEEventBytes(output, "content_block_delta", template, 2)
+
+					template = []byte(`{"type":"content_block_stop","index":0}`)
+					template, _ = sjson.SetBytes(template, "index", blockIndex)
+					output = translatorcommon.AppendSSEEventBytes(output, "content_block_stop", template, 2)
+
+					(*param).(*ConvertCodexResponseToClaudeParams).BlockIndex++
+				}
 				if itemID != "" {
 					(*param).(*ConvertCodexResponseToClaudeParams).EmittedSyntheticWebSearchStarts[itemID] = struct{}{}
 				}
-				return [][]byte{output}
-			}
-			if gptinclaude.ShouldEmitVSCodeWebSearchProgress(clientKind) {
+			} else if gptinclaude.ShouldEmitVSCodeWebSearchProgress(clientKind) {
 				blockIndex := (*param).(*ConvertCodexResponseToClaudeParams).BlockIndex
 				progressThinking := gptinclaude.BuildVSCodeWebSearchProgressThinking(
 					itemResult.Get("action"),
@@ -260,6 +221,9 @@ func ConvertCodexResponseToClaude(ctx context.Context, _ string, originalRequest
 					output = translatorcommon.AppendSSEEventBytes(output, "content_block_stop", template, 2)
 
 					(*param).(*ConvertCodexResponseToClaudeParams).BlockIndex++
+				}
+				if itemID != "" {
+					(*param).(*ConvertCodexResponseToClaudeParams).EmittedSyntheticWebSearchStarts[itemID] = struct{}{}
 				}
 			}
 		}

@@ -65,7 +65,7 @@ func TestConvertCodexResponseToClaude_WebSearchCallDoneEmitsSyntheticToolCallTex
 	}
 }
 
-func TestConvertCodexResponseToClaude_WebSearchCallAddedIsSuppressedForClaudeCLI(t *testing.T) {
+func TestConvertCodexResponseToClaude_WebSearchCallAddedEmitsSyntheticToolCallTextForClaudeCLI(t *testing.T) {
 	originalRequest := []byte(`{"model":"claude-opus-4-6","messages":[{"role":"user","content":[{"type":"text","text":"Perform a web search for the query: 2026 张雪峰 去世 怎么死的 辟谣"}]}],"tools":[{"type":"web_search_20250305","name":"web_search","max_uses":8}]}`)
 	raw := []byte(`data: {"type":"response.output_item.added","item":{"id":"ws_123","type":"web_search_call","status":"in_progress"},"output_index":1,"sequence_number":4}`)
 
@@ -76,86 +76,19 @@ func TestConvertCodexResponseToClaude_WebSearchCallAddedIsSuppressedForClaudeCLI
 	}
 
 	chunk := string(out[0])
-	if strings.TrimSpace(chunk) != "" {
-		t.Fatalf("expected claude cli added event to be suppressed, got %q", chunk)
-	}
-	if _, ok := param.(*ConvertCodexResponseToClaudeParams).EmittedSyntheticWebSearchStarts["ws_123"]; !ok {
-		t.Fatalf("expected suppressed web search start to be tracked")
-	}
-}
-
-func TestConvertCodexResponseToClaude_ResponseCreatedPreEmitsSyntheticWebSearchStart(t *testing.T) {
-	originalRequest := []byte(`{"model":"claude-opus-4-6","messages":[{"role":"user","content":[{"type":"text","text":"Perform a web search for the query: 2026 张雪峰 去世 怎么死的 辟谣"}]}],"tools":[{"type":"web_search_20250305","name":"web_search","max_uses":8}]}`)
-	raw := []byte(`data: {"type":"response.created","response":{"id":"resp_123","model":"gpt-5.4","status":"in_progress"}}`)
-
-	var param any
-	out := ConvertCodexResponseToClaude(claudeCLICtx(), "gpt-5.4", originalRequest, nil, raw, &param)
-	if len(out) != 1 {
-		t.Fatalf("expected 1 output chunk, got %d", len(out))
-	}
-
-	chunk := string(out[0])
-	if !strings.Contains(chunk, "event: message_start") {
-		t.Fatalf("expected message_start event, got %q", chunk)
-	}
 	if !strings.Contains(chunk, "Searching the web.") {
-		t.Fatalf("expected pre-emitted searching progress text, got %q", chunk)
+		t.Fatalf("expected claude cli added event to emit generic search progress, got %q", chunk)
 	}
 	if !strings.Contains(chunk, "\\u003ctool_call\\u003e") {
-		t.Fatalf("expected early synthetic <tool_call> marker, got %q", chunk)
-	}
-	if got := param.(*ConvertCodexResponseToClaudeParams).BlockIndex; got != 1 {
-		t.Fatalf("expected block index to advance to 1 after pre-emit, got %d", got)
-	}
-	if !param.(*ConvertCodexResponseToClaudeParams).SkipNextSyntheticWebSearchStart {
-		t.Fatalf("expected next synthetic web search start to be skipped")
-	}
-}
-
-func TestConvertCodexResponseToClaude_FirstAddedAfterPreEmitDoesNotDuplicate(t *testing.T) {
-	originalRequest := []byte(`{"model":"claude-opus-4-6","messages":[{"role":"user","content":[{"type":"text","text":"Perform a web search for the query: 2026 张雪峰 去世 怎么死的 辟谣"}]}],"tools":[{"type":"web_search_20250305","name":"web_search","max_uses":8}]}`)
-	created := []byte(`data: {"type":"response.created","response":{"id":"resp_123","model":"gpt-5.4","status":"in_progress"}}`)
-	added := []byte(`data: {"type":"response.output_item.added","item":{"id":"ws_123","type":"web_search_call","status":"in_progress"},"output_index":1,"sequence_number":4}`)
-
-	var param any
-	_ = ConvertCodexResponseToClaude(claudeCLICtx(), "gpt-5.4", originalRequest, nil, created, &param)
-	out := ConvertCodexResponseToClaude(claudeCLICtx(), "gpt-5.4", originalRequest, nil, added, &param)
-
-	if len(out) != 1 {
-		t.Fatalf("expected 1 output chunk, got %d", len(out))
-	}
-	if got := string(out[0]); strings.TrimSpace(got) != "" {
-		t.Fatalf("expected first added event after pre-emit to be suppressed, got %q", got)
+		t.Fatalf("expected claude cli added event to emit synthetic tool tag, got %q", chunk)
 	}
 	if _, ok := param.(*ConvertCodexResponseToClaudeParams).EmittedSyntheticWebSearchStarts["ws_123"]; !ok {
-		t.Fatalf("expected first real web search start to be tracked after suppression")
-	}
-	if param.(*ConvertCodexResponseToClaudeParams).SkipNextSyntheticWebSearchStart {
-		t.Fatalf("expected skip flag to be cleared after first real start")
+		t.Fatalf("expected web search start to be tracked")
 	}
 }
 
-func TestConvertCodexResponseToClaude_ResponseCreatedPreEmitsVSCodeSearchProgress(t *testing.T) {
-	originalRequest := []byte(`{"model":"claude-opus-4-6","messages":[{"role":"user","content":"用 websearch 搜索今天的新闻"}],"tools":[{"name":"WebSearch","input_schema":{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}}]}`)
-	raw := []byte(`data: {"type":"response.created","response":{"id":"resp_123","model":"gpt-5.4","status":"in_progress"}}`)
-
-	var param any
-	out := ConvertCodexResponseToClaude(claudeVSCodeCtx(), "gpt-5.4", originalRequest, nil, raw, &param)
-	if len(out) != 1 {
-		t.Fatalf("expected 1 output chunk, got %d", len(out))
-	}
-
-	chunk := string(out[0])
-	if !strings.Contains(chunk, "event: message_start") {
-		t.Fatalf("expected message_start event, got %q", chunk)
-	}
-	if !strings.Contains(chunk, "Searching the web for: 用 websearch 搜索今天的新闻") {
-		t.Fatalf("expected early VSCode search progress thinking, got %q", chunk)
-	}
-}
-
-func TestConvertCodexResponseToClaude_ResponseCreatedDoesNotPreEmitSearchForCodeAnalysis(t *testing.T) {
-	originalRequest := []byte(`{"model":"claude-opus-4-6","messages":[{"role":"user","content":"看一下当前的项目代码，帮我简单分析一下即可"}],"tools":[{"name":"WebSearch","input_schema":{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}}]}`)
+func TestConvertCodexResponseToClaude_ResponseCreatedDoesNotPreEmitSyntheticWebSearchStart(t *testing.T) {
+	originalRequest := []byte(`{"model":"claude-opus-4-6","messages":[{"role":"user","content":[{"type":"text","text":"Perform a web search for the query: 2026 张雪峰 去世 怎么死的 辟谣"}]}],"tools":[{"type":"web_search_20250305","name":"web_search","max_uses":8}]}`)
 	raw := []byte(`data: {"type":"response.created","response":{"id":"resp_123","model":"gpt-5.4","status":"in_progress"}}`)
 
 	var param any
@@ -169,11 +102,58 @@ func TestConvertCodexResponseToClaude_ResponseCreatedDoesNotPreEmitSearchForCode
 		t.Fatalf("expected message_start event, got %q", chunk)
 	}
 	if strings.Contains(chunk, "Searching the web.") {
-		t.Fatalf("expected non-search prompt to skip early websearch text, got %q", chunk)
+		t.Fatalf("expected response.created to avoid pre-emitting search progress, got %q", chunk)
+	}
+	if got := param.(*ConvertCodexResponseToClaudeParams).BlockIndex; got != 0 {
+		t.Fatalf("expected block index to stay at 0 without pre-emit, got %d", got)
 	}
 }
 
-func TestConvertCodexResponseToClaude_WebSearchCallAddedIsSuppressedForClaudeCodeTool(t *testing.T) {
+func TestConvertCodexResponseToClaude_DuplicateAddedDoesNotDuplicateSyntheticWebSearchStart(t *testing.T) {
+	originalRequest := []byte(`{"model":"claude-opus-4-6","messages":[{"role":"user","content":[{"type":"text","text":"Perform a web search for the query: 2026 张雪峰 去世 怎么死的 辟谣"}]}],"tools":[{"type":"web_search_20250305","name":"web_search","max_uses":8}]}`)
+	added := []byte(`data: {"type":"response.output_item.added","item":{"id":"ws_123","type":"web_search_call","status":"in_progress"},"output_index":1,"sequence_number":4}`)
+
+	var param any
+	first := ConvertCodexResponseToClaude(claudeCLICtx(), "gpt-5.4", originalRequest, nil, added, &param)
+	out := ConvertCodexResponseToClaude(claudeCLICtx(), "gpt-5.4", originalRequest, nil, added, &param)
+
+	if len(first) != 1 {
+		t.Fatalf("expected 1 first output chunk, got %d", len(first))
+	}
+	if !strings.Contains(string(first[0]), "Searching the web.") {
+		t.Fatalf("expected first added event to emit generic search progress, got %q", string(first[0]))
+	}
+	if len(out) != 1 {
+		t.Fatalf("expected 1 second output chunk, got %d", len(out))
+	}
+	if got := string(out[0]); strings.TrimSpace(got) != "" {
+		t.Fatalf("expected duplicate added event to be suppressed, got %q", got)
+	}
+	if _, ok := param.(*ConvertCodexResponseToClaudeParams).EmittedSyntheticWebSearchStarts["ws_123"]; !ok {
+		t.Fatalf("expected first real web search start to be tracked")
+	}
+}
+
+func TestConvertCodexResponseToClaude_ResponseCreatedDoesNotPreEmitVSCodeSearchProgress(t *testing.T) {
+	originalRequest := []byte(`{"model":"claude-opus-4-6","messages":[{"role":"user","content":"用 websearch 搜索今天的新闻"}],"tools":[{"name":"WebSearch","input_schema":{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}}]}`)
+	raw := []byte(`data: {"type":"response.created","response":{"id":"resp_123","model":"gpt-5.4","status":"in_progress"}}`)
+
+	var param any
+	out := ConvertCodexResponseToClaude(claudeVSCodeCtx(), "gpt-5.4", originalRequest, nil, raw, &param)
+	if len(out) != 1 {
+		t.Fatalf("expected 1 output chunk, got %d", len(out))
+	}
+
+	chunk := string(out[0])
+	if !strings.Contains(chunk, "event: message_start") {
+		t.Fatalf("expected message_start event, got %q", chunk)
+	}
+	if strings.Contains(chunk, "Searching the web") {
+		t.Fatalf("expected response.created to avoid pre-emitting VSCode search progress, got %q", chunk)
+	}
+}
+
+func TestConvertCodexResponseToClaude_WebSearchCallAddedEmitsGenericStartForClaudeCodeTool(t *testing.T) {
 	originalRequest := []byte(`{"model":"claude-opus-4-6","messages":[{"role":"user","content":"2026 张雪峰去世你知道吗，他是怎么死的，为什么？"}],"tools":[{"name":"WebSearch","input_schema":{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}}]}`)
 	raw := []byte(`data: {"type":"response.output_item.added","item":{"id":"ws_123","type":"web_search_call","status":"in_progress"},"output_index":1,"sequence_number":4}`)
 
@@ -184,8 +164,11 @@ func TestConvertCodexResponseToClaude_WebSearchCallAddedIsSuppressedForClaudeCod
 	}
 
 	chunk := string(out[0])
-	if strings.TrimSpace(chunk) != "" {
-		t.Fatalf("expected claude cli added event to be suppressed for generic WebSearch tool, got %q", chunk)
+	if !strings.Contains(chunk, "Searching the web.") {
+		t.Fatalf("expected claude cli added event to emit generic search progress for generic WebSearch tool, got %q", chunk)
+	}
+	if !strings.Contains(chunk, "\\u003ctool_call\\u003e") {
+		t.Fatalf("expected claude cli added event to emit synthetic tool tag for generic WebSearch tool, got %q", chunk)
 	}
 }
 
@@ -228,8 +211,8 @@ func TestConvertCodexResponseToClaude_ClaudeCLIMultiSearchKeepsSingleGenericStar
 	}
 
 	got := transcript.String()
-	if count := strings.Count(got, "Searching the web."); count != 1 {
-		t.Fatalf("expected single generic search start, got %d transcript=%q", count, got)
+	if count := strings.Count(got, "Searching the web."); count != 2 {
+		t.Fatalf("expected one generic search start per real added event, got %d transcript=%q", count, got)
 	}
 	if count := strings.Count(got, "Searched: "); count != 2 {
 		t.Fatalf("expected two concrete searched progress lines, got %d transcript=%q", count, got)

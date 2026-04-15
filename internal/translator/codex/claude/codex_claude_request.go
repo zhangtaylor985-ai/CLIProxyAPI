@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/policy"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/thinking"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/translator/gptinclaude"
 	"github.com/tidwall/gjson"
@@ -282,24 +283,25 @@ func ConvertClaudeRequestToCodex(modelName string, inputRawJSON []byte, _ bool) 
 
 	// Convert thinking.budget_tokens to reasoning.effort.
 	reasoningEffort := "medium"
+	explicitEffort := ""
+	if v := rootResult.Get("output_config.effort"); v.Exists() && v.Type == gjson.String {
+		explicitEffort = policy.NormalizeClaudeGPTReasoningEffort(v.String())
+	}
 	if thinkingConfig := rootResult.Get("thinking"); thinkingConfig.Exists() && thinkingConfig.IsObject() {
 		switch thinkingConfig.Get("type").String() {
 		case "enabled":
-			if budgetTokens := thinkingConfig.Get("budget_tokens"); budgetTokens.Exists() {
+			if explicitEffort != "" {
+				reasoningEffort = explicitEffort
+			} else if budgetTokens := thinkingConfig.Get("budget_tokens"); budgetTokens.Exists() {
 				budget := int(budgetTokens.Int())
 				if effort, ok := thinking.ConvertBudgetToLevel(budget); ok && effort != "" {
 					reasoningEffort = effort
 				}
 			}
 		case "adaptive", "auto":
-			// Adaptive thinking can carry an explicit effort in output_config.effort (Claude 4.6).
-			// Pass through directly; ApplyThinking handles clamping to target model's levels.
-			effort := ""
-			if v := rootResult.Get("output_config.effort"); v.Exists() && v.Type == gjson.String {
-				effort = strings.ToLower(strings.TrimSpace(v.String()))
-			}
-			if effort != "" {
-				reasoningEffort = effort
+			// Explicit Claude effort wins when present; otherwise adaptive defaults high.
+			if explicitEffort != "" {
+				reasoningEffort = explicitEffort
 			} else {
 				reasoningEffort = string(thinking.LevelXHigh)
 			}
@@ -309,7 +311,6 @@ func ConvertClaudeRequestToCodex(modelName string, inputRawJSON []byte, _ bool) 
 			}
 		}
 	}
-	reasoningEffort = gptinclaude.ClampReasoningEffort(reasoningEffort, gptinclaude.HasBuiltinWebSearch(rawJSON))
 	template, _ = sjson.SetBytes(template, "reasoning.effort", reasoningEffort)
 	template, _ = sjson.SetBytes(template, "reasoning.summary", "auto")
 	template, _ = sjson.SetBytes(template, "stream", true)

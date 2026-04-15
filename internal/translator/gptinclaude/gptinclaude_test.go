@@ -2,7 +2,7 @@ package gptinclaude
 
 import (
 	"context"
-	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/tidwall/gjson"
@@ -129,136 +129,16 @@ func TestInferBuiltinWebSearchQuery_ExtractsArgumentsFromSkillWrappedPrompt(t *t
 	}
 }
 
-func TestShouldPreEmitBuiltinWebSearchProgress_ExplicitSearchPrompt(t *testing.T) {
-	raw := []byte(`{
-		"messages": [
-			{"role": "user", "content": "用 websearch 搜索今天的新闻"}
-		],
-		"tools": [
-			{
-				"name": "WebSearch",
-				"input_schema": {
-					"type": "object",
-					"properties": {"query": {"type": "string"}},
-					"required": ["query"]
-				}
-			}
-		]
-	}`)
-
-	if !ShouldPreEmitBuiltinWebSearchProgress(raw) {
-		t.Fatalf("ShouldPreEmitBuiltinWebSearchProgress() = false, want true")
+func TestBuildSyntheticWebSearchToolCallText_GenericStart(t *testing.T) {
+	got := BuildSyntheticWebSearchToolCallText(gjson.Result{})
+	if got == "" {
+		t.Fatalf("BuildSyntheticWebSearchToolCallText() returned empty string")
 	}
-}
-
-func TestShouldPreEmitBuiltinWebSearchProgress_CodeAnalysisPrompt(t *testing.T) {
-	raw := []byte(`{
-		"messages": [
-			{"role": "user", "content": "看一下当前的项目代码，帮我简单分析一下即可"}
-		],
-		"tools": [
-			{
-				"name": "WebSearch",
-				"input_schema": {
-					"type": "object",
-					"properties": {"query": {"type": "string"}},
-					"required": ["query"]
-				}
-			}
-		]
-	}`)
-
-	if ShouldPreEmitBuiltinWebSearchProgress(raw) {
-		t.Fatalf("ShouldPreEmitBuiltinWebSearchProgress() = true, want false")
+	if want := "Searching the web."; !strings.Contains(got, want) {
+		t.Fatalf("BuildSyntheticWebSearchToolCallText() = %q, want substring %q", got, want)
 	}
-}
-
-func TestShouldPreEmitBuiltinWebSearchProgress_NegatedSearchPrompt(t *testing.T) {
-	tests := []struct {
-		name   string
-		prompt string
-	}{
-		{
-			name:   "chinese negation",
-			prompt: "看一下当前的项目代码，帮我简单分析一下即可。不要用 web search。",
-		},
-		{
-			name:   "english negation",
-			prompt: "Read AGENTS.md and inspect the repository. Keep it concise and do not use web search.",
-		},
-	}
-
-	for _, tc := range tests {
-		raw := []byte(fmt.Sprintf(`{
-			"messages": [
-				{"role": "user", "content": %q}
-			],
-			"tools": [
-				{
-					"name": "WebSearch",
-					"input_schema": {
-						"type": "object",
-						"properties": {"query": {"type": "string"}},
-						"required": ["query"]
-					}
-				}
-			]
-		}`, tc.prompt))
-
-		if ShouldPreEmitBuiltinWebSearchProgress(raw) {
-			t.Fatalf("%s: ShouldPreEmitBuiltinWebSearchProgress() = true, want false", tc.name)
-		}
-	}
-}
-
-func TestShouldPreEmitBuiltinWebSearchProgress_HandlesFlexibleSearchIntentWording(t *testing.T) {
-	tests := []struct {
-		name   string
-		prompt string
-		want   bool
-	}{
-		{
-			name:   "english search verb",
-			prompt: "Please search the web for today's OpenAI news.",
-			want:   true,
-		},
-		{
-			name:   "english negated web search",
-			prompt: "Please search the repository structure, but do not search the web.",
-			want:   false,
-		},
-		{
-			name:   "chinese positive",
-			prompt: "请帮我搜索一下今天的 AI 新闻。",
-			want:   true,
-		},
-		{
-			name:   "chinese negated nearby",
-			prompt: "你分析一下项目，但别搜索一下网页资料。",
-			want:   false,
-		},
-	}
-
-	for _, tc := range tests {
-		raw := []byte(fmt.Sprintf(`{
-			"messages": [
-				{"role": "user", "content": %q}
-			],
-			"tools": [
-				{
-					"name": "WebSearch",
-					"input_schema": {
-						"type": "object",
-						"properties": {"query": {"type": "string"}},
-						"required": ["query"]
-					}
-				}
-			]
-		}`, tc.prompt))
-
-		if got := ShouldPreEmitBuiltinWebSearchProgress(raw); got != tc.want {
-			t.Fatalf("%s: ShouldPreEmitBuiltinWebSearchProgress() = %v, want %v", tc.name, got, tc.want)
-		}
+	if want := `"name":"web_search"`; !strings.Contains(got, want) {
+		t.Fatalf("BuildSyntheticWebSearchToolCallText() = %q, want substring %q", got, want)
 	}
 }
 

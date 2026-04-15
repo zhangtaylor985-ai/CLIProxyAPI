@@ -152,6 +152,8 @@ func NormalizeClaudeGPTReasoningEffort(value string) string {
 		return "medium"
 	case "high":
 		return "high"
+	case "max", "xhigh":
+		return "high"
 	default:
 		return ""
 	}

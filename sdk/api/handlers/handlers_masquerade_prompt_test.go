@@ -73,26 +73,26 @@ func TestApplyClaudeGPTMasqueradePrompt_AppendsClaudeStylePromptWhenEnabled(t *t
 	}
 }
 
-func TestClampClaudeGPTSearchTargetModel_DowngradesHighSearchRequests(t *testing.T) {
-	payload := []byte(`{"model":"claude-opus-4-6","messages":[{"role":"user","content":[{"type":"text","text":"Perform a web search for the query: 张雪峰 去世 辟谣"}]}],"tools":[{"type":"web_search_20250305","name":"web_search","max_uses":8}]}`)
+func TestFinalizeClaudeGPTTargetModel_LeavesSearchRequestsAtRequestedEffort(t *testing.T) {
+	payload := []byte(`{"model":"claude-opus-4-6","thinking":{"type":"adaptive"},"output_config":{"effort":"high"},"messages":[{"role":"user","content":[{"type":"text","text":"Perform a web search for the query: 张雪峰 去世 辟谣"}]}],"tools":[{"type":"web_search_20250305","name":"web_search","max_uses":8}]}`)
 
-	model, out := clampClaudeGPTSearchTargetModel(payload, "claude", "claude-opus-4-6", "gpt-5.4(high)")
+	model, out := finalizeClaudeGPTTargetModel(payload, "claude", "claude-opus-4-6", "gpt-5.4(high)")
 
-	if model != "gpt-5.4(medium)" {
-		t.Fatalf("expected downgraded model, got %q", model)
+	if model != "gpt-5.4(high)" {
+		t.Fatalf("expected search request to preserve high effort, got %q", model)
 	}
-	if got := gjson.GetBytes(out, "model").String(); got != "gpt-5.4(medium)" {
-		t.Fatalf("expected payload model to be rewritten, got %q", got)
+	if string(out) != string(payload) {
+		t.Fatalf("expected payload to stay unchanged when target model already matches: %s", string(out))
 	}
 }
 
-func TestClampClaudeGPTSearchTargetModel_IgnoresNonSearchOrNonClaudeRouting(t *testing.T) {
+func TestFinalizeClaudeGPTTargetModel_IgnoresNonSearchOrNonClaudeRouting(t *testing.T) {
 	payload := []byte(`{"model":"claude-opus-4-6","messages":[{"role":"user","content":"hi"}]}`)
 
-	if model, out := clampClaudeGPTSearchTargetModel(payload, "claude", "claude-opus-4-6", "gpt-5.4(high)"); model != "gpt-5.4(high)" || string(out) != string(payload) {
+	if model, out := finalizeClaudeGPTTargetModel(payload, "claude", "claude-opus-4-6", "gpt-5.4(high)"); model != "gpt-5.4(high)" || string(out) != string(payload) {
 		t.Fatalf("expected non-search request to stay unchanged: model=%q payload=%s", model, string(out))
 	}
-	if model, out := clampClaudeGPTSearchTargetModel(payload, "openai", "claude-opus-4-6", "gpt-5.4(high)"); model != "gpt-5.4(high)" || string(out) != string(payload) {
+	if model, out := finalizeClaudeGPTTargetModel(payload, "openai", "claude-opus-4-6", "gpt-5.4(high)"); model != "gpt-5.4(high)" || string(out) != string(payload) {
 		t.Fatalf("expected non-claude handler request to stay unchanged: model=%q payload=%s", model, string(out))
 	}
 }
@@ -123,26 +123,39 @@ func TestApplyClaudeGPTEffortTargetModel_NormalizesMaxToHigh(t *testing.T) {
 	}
 }
 
-func TestApplyClaudeGPTEffortTargetModel_IgnoresNonAdaptiveRequests(t *testing.T) {
+func TestApplyClaudeGPTEffortTargetModel_UsesExplicitEffortForEnabledThinking(t *testing.T) {
 	payload := []byte(`{"model":"claude-opus-4-6","thinking":{"type":"enabled","budget_tokens":16000},"output_config":{"effort":"low"},"messages":[{"role":"user","content":"hi"}]}`)
 
 	model, out := applyClaudeGPTEffortTargetModel(payload, "claude", "claude-opus-4-6", "gpt-5.4(high)")
 
-	if model != "gpt-5.4(high)" || string(out) != string(payload) {
-		t.Fatalf("expected non-adaptive request to stay unchanged: model=%q payload=%s", model, string(out))
+	if model != "gpt-5.4(low)" {
+		t.Fatalf("expected explicit effort to override enabled thinking route, got %q", model)
+	}
+	if got := gjson.GetBytes(out, "model").String(); got != "gpt-5.4(low)" {
+		t.Fatalf("expected payload model to be rewritten, got %q", got)
 	}
 }
 
-func TestFinalizeClaudeGPTTargetModel_SearchClampWinsOverHighEffort(t *testing.T) {
-	payload := []byte(`{"model":"claude-opus-4-6","thinking":{"type":"adaptive"},"output_config":{"effort":"high"},"messages":[{"role":"user","content":[{"type":"text","text":"Perform a web search for the query: 张雪峰 去世 辟谣"}]}],"tools":[{"type":"web_search_20250305","name":"web_search","max_uses":8}]}`)
+func TestApplyClaudeGPTEffortTargetModel_IgnoresUnknownEffort(t *testing.T) {
+	payload := []byte(`{"model":"claude-opus-4-6","thinking":{"type":"adaptive"},"output_config":{"effort":"weird"},"messages":[{"role":"user","content":"hi"}]}`)
 
-	model, out := finalizeClaudeGPTTargetModel(payload, "claude", "claude-opus-4-6", "gpt-5.4(high)")
+	model, out := applyClaudeGPTEffortTargetModel(payload, "claude", "claude-opus-4-6", "gpt-5.4(high)")
 
-	if model != "gpt-5.4(medium)" {
-		t.Fatalf("expected search clamp to downgrade final model, got %q", model)
+	if model != "gpt-5.4(high)" || string(out) != string(payload) {
+		t.Fatalf("expected unknown effort to keep system routing unchanged: model=%q payload=%s", model, string(out))
 	}
-	if got := gjson.GetBytes(out, "model").String(); got != "gpt-5.4(medium)" {
-		t.Fatalf("expected payload model to be rewritten, got %q", got)
+}
+
+func TestFinalizeClaudeGPTTargetModel_DoesNotClampToolAvailabilityWithoutSearchIntent(t *testing.T) {
+	payload := []byte(`{"model":"claude-opus-4-6","thinking":{"type":"adaptive"},"output_config":{"effort":"high"},"messages":[{"role":"user","content":"Reply with exactly HIGH_SEQ_20260413"}],"tools":[{"name":"WebSearch","input_schema":{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}}]}`)
+
+	model, out := finalizeClaudeGPTTargetModel(payload, "claude", "claude-opus-4-6", "gpt-5.2(high)")
+
+	if model != "gpt-5.2(high)" {
+		t.Fatalf("expected non-search prompt to keep high effort, got %q", model)
+	}
+	if string(out) != string(payload) {
+		t.Fatalf("expected payload to stay unchanged when no clamp applies: %s", string(out))
 	}
 }
 

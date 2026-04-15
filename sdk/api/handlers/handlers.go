@@ -17,6 +17,7 @@ import (
 	internalconfig "github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/interfaces"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/logging"
+	internalpolicy "github.com/router-for-me/CLIProxyAPI/v6/internal/policy"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/thinking"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/translator/gptinclaude"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
@@ -611,18 +612,7 @@ func applyClaudeGPTMasqueradePrompt(cfg *config.SDKConfig, payload []byte, handl
 }
 
 func normalizeClaudeGPTRoutingEffort(effort string) string {
-	switch strings.ToLower(strings.TrimSpace(effort)) {
-	case "low":
-		return "low"
-	case "medium":
-		return "medium"
-	case "high":
-		return "high"
-	case "max", "xhigh":
-		return "high"
-	default:
-		return ""
-	}
+	return internalpolicy.NormalizeClaudeGPTReasoningEffort(effort)
 }
 
 func applyClaudeGPTEffortTargetModel(payload []byte, handlerType, requestedModel, effectiveModel string) (string, []byte) {
@@ -633,10 +623,6 @@ func applyClaudeGPTEffortTargetModel(payload []byte, handlerType, requestedModel
 		return effectiveModel, payload
 	}
 
-	thinkingType := strings.ToLower(strings.TrimSpace(gjson.GetBytes(payload, "thinking.type").String()))
-	if thinkingType != "adaptive" && thinkingType != "auto" {
-		return effectiveModel, payload
-	}
 
 	effort := normalizeClaudeGPTRoutingEffort(gjson.GetBytes(payload, "output_config.effort").String())
 	if effort == "" {
@@ -656,24 +642,8 @@ func applyClaudeGPTEffortTargetModel(payload []byte, handlerType, requestedModel
 	return withEffort, rewriteModelField(payload, withEffort)
 }
 
-func clampClaudeGPTSearchTargetModel(payload []byte, handlerType, requestedModel, effectiveModel string) (string, []byte) {
-	if !strings.EqualFold(strings.TrimSpace(handlerType), "claude") {
-		return effectiveModel, payload
-	}
-	if !seemsClaudeModel(requestedModel) || !seemsGPTModel(effectiveModel) {
-		return effectiveModel, payload
-	}
-
-	clamped := gptinclaude.ClampTargetModelForBuiltinWebSearch(effectiveModel, gptinclaude.HasBuiltinWebSearch(payload))
-	if clamped == "" || clamped == effectiveModel {
-		return effectiveModel, payload
-	}
-	return clamped, rewriteModelField(payload, clamped)
-}
-
 func finalizeClaudeGPTTargetModel(payload []byte, handlerType, requestedModel, effectiveModel string) (string, []byte) {
-	effectiveModel, payload = applyClaudeGPTEffortTargetModel(payload, handlerType, requestedModel, effectiveModel)
-	return clampClaudeGPTSearchTargetModel(payload, handlerType, requestedModel, effectiveModel)
+	return applyClaudeGPTEffortTargetModel(payload, handlerType, requestedModel, effectiveModel)
 }
 
 // BaseAPIHandler contains the handlers for API endpoints.
