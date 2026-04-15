@@ -108,6 +108,9 @@ func (s *ConfigSynthesizer) synthesizeClaudeKeys(ctx *SynthesisContext) []*corea
 			"source":  fmt.Sprintf("config:claude[%s]", token),
 			"api_key": key,
 		}
+		if ck.ProbeTarget {
+			attrs["probe_target"] = "true"
+		}
 		if ck.Priority != 0 {
 			attrs["priority"] = strconv.Itoa(ck.Priority)
 		}

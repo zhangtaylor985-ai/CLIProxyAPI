@@ -237,6 +237,7 @@ nonstream-keepalive-interval: 0
 # claude-api-key:
 #   - api-key: "sk-atSM..." # use the official claude API key, no need to set the base url
 #   - api-key: "sk-atSM..."
+#     probe-target: true # optional: prefer this upstream when relay probe traffic is detected
 #     prefix: "test" # optional: require calls like "test/claude-sonnet-latest" to target this credential
 #     base-url: "https://www.example.com" # use the custom Claude API endpoint (or set ANTHROPIC_BASE_URL to override globally)
 #     headers:
