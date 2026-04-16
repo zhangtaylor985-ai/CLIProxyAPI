@@ -70,6 +70,8 @@ const (
 	relayProbeDetectorPrompt    = "你是谁,你的知识库截止时间是什么时候? 请一定要诚实回答"
 	relayProbeMetadataLabelKey  = "relay_probe_kind"
 	relayProbePinnedMetadataKey = "relay_probe_pinned_auth_id"
+	relayProbeKindCacheKey      = "relayProbeKindCache"
+	relayProbeKindCachedKey     = "relayProbeKindCached"
 )
 
 type pinnedAuthContextKey struct{}
@@ -370,36 +372,152 @@ func anthropicMessageTextBlocks(message gjson.Result) []string {
 	return blocks
 }
 
-func detectRelayProbeKind(ctx context.Context, handlerType string, rawJSON []byte) string {
-	if !strings.EqualFold(strings.TrimSpace(handlerType), "claude") {
+func anthropicMessageStrictTextBlocks(message gjson.Result) ([]string, bool) {
+	content := message.Get("content")
+	if !content.IsArray() {
+		return nil, false
+	}
+	items := content.Array()
+	blocks := make([]string, 0, len(items))
+	for _, item := range items {
+		if item.Get("type").String() != "text" {
+			return nil, false
+		}
+		text := strings.TrimSpace(item.Get("text").String())
+		if text == "" {
+			continue
+		}
+		blocks = append(blocks, text)
+	}
+	return blocks, true
+}
+
+func relayProbeKindFromContextCache(ctx context.Context) (string, bool) {
+	if ctx == nil {
+		return "", false
+	}
+	ginCtx, ok := ctx.Value("gin").(*gin.Context)
+	if !ok || ginCtx == nil {
+		return "", false
+	}
+	cached, exists := ginCtx.Get(relayProbeKindCachedKey)
+	if !exists {
+		return "", false
+	}
+	if done, ok := cached.(bool); !ok || !done {
+		return "", false
+	}
+	return strings.TrimSpace(ginCtx.GetString(relayProbeKindCacheKey)), true
+}
+
+func setRelayProbeKindContextCache(ctx context.Context, kind string) {
+	if ctx == nil {
+		return
+	}
+	ginCtx, ok := ctx.Value("gin").(*gin.Context)
+	if !ok || ginCtx == nil {
+		return
+	}
+	ginCtx.Set(relayProbeKindCacheKey, strings.TrimSpace(kind))
+	ginCtx.Set(relayProbeKindCachedKey, true)
+}
+
+func relayProbeUserIDLooksLikeRealClaudeCLI(userID string) bool {
+	userID = strings.TrimSpace(userID)
+	if userID == "" || !gjson.Valid(userID) {
+		return false
+	}
+	parsed := gjson.Parse(userID)
+	if !parsed.IsObject() {
+		return false
+	}
+	return strings.TrimSpace(parsed.Get("device_id").String()) != "" &&
+		strings.TrimSpace(parsed.Get("session_id").String()) != ""
+}
+
+func isLowerHexString(value string) bool {
+	if strings.TrimSpace(value) == "" {
+		return false
+	}
+	for _, r := range value {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+func looksLikeUUID(value string) bool {
+	if len(value) != 36 {
+		return false
+	}
+	for i, r := range value {
+		switch i {
+		case 8, 13, 18, 23:
+			if r != '-' {
+				return false
+			}
+		default:
+			if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func relayProbeUserIDLooksLikeRelayFamily(userID string) bool {
+	userID = strings.TrimSpace(userID)
+	if userID == "" || relayProbeUserIDLooksLikeRealClaudeCLI(userID) {
+		return false
+	}
+	if !strings.HasPrefix(userID, "user_") {
+		return false
+	}
+	parts := strings.SplitN(strings.TrimPrefix(userID, "user_"), "_account__session_", 2)
+	if len(parts) != 2 {
+		return false
+	}
+	return len(parts[0]) >= 32 && isLowerHexString(parts[0]) && looksLikeUUID(parts[1])
+}
+
+func relayProbeLooksLikeRealClaudeCLI(ctx context.Context, rawJSON []byte) bool {
+	if strings.TrimSpace(requestHeaderFromContext(ctx, "X-Claude-Code-Session-Id")) != "" {
+		return true
+	}
+	if relayProbeUserIDLooksLikeRealClaudeCLI(gjson.GetBytes(rawJSON, "metadata.user_id").String()) {
+		return true
+	}
+	system := gjson.GetBytes(rawJSON, "system")
+	if system.IsArray() {
+		for _, block := range system.Array() {
+			text := block.Get("text").String()
+			if strings.Contains(text, "x-anthropic-billing-header:") ||
+				strings.Contains(text, "Claude Agent SDK") ||
+				strings.Contains(text, "\nCWD: ") ||
+				strings.Contains(text, "\nDate: ") {
+				return true
+			}
+		}
+	}
+	messages := gjson.GetBytes(rawJSON, "messages")
+	if messages.IsArray() && len(messages.Array()) > 0 {
+		firstBlocks := anthropicMessageTextBlocks(messages.Array()[0])
+		for _, block := range firstBlocks {
+			if strings.Contains(block, "<system-reminder>") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func matchRelayWebProbeKind(rawJSON []byte) string {
+	system := gjson.GetBytes(rawJSON, "system")
+	if !system.IsArray() || len(system.Array()) != 1 {
 		return ""
 	}
-	if !strings.EqualFold(requestPathFromContext(ctx), "/v1/messages") {
-		return ""
-	}
-	userAgent := strings.ToLower(requestHeaderFromContext(ctx, "User-Agent"))
-	if !strings.HasPrefix(userAgent, "claude-cli/") {
-		return ""
-	}
-	if !strings.Contains(strings.ToLower(requestHeaderFromContext(ctx, "Anthropic-Beta")), "interleaved-thinking-2025-05-14") {
-		return ""
-	}
-	if strings.TrimSpace(gjson.GetBytes(rawJSON, "metadata.user_id").String()) != relayProbeFixedUserID {
-		return ""
-	}
-	if strings.TrimSpace(gjson.GetBytes(rawJSON, "system.0.text").String()) != relayProbeSystemPrompt {
-		return ""
-	}
-	if !gjson.GetBytes(rawJSON, "stream").Bool() {
-		return ""
-	}
-	if strings.ToLower(strings.TrimSpace(gjson.GetBytes(rawJSON, "thinking.type").String())) != "enabled" {
-		return ""
-	}
-	if budget := gjson.GetBytes(rawJSON, "thinking.budget_tokens"); budget.Exists() && budget.Int() != 31999 {
-		return ""
-	}
-	if tools := gjson.GetBytes(rawJSON, "tools"); tools.Exists() && tools.IsArray() && len(tools.Array()) != 0 {
+	if strings.TrimSpace(system.Array()[0].Get("text").String()) != relayProbeSystemPrompt {
 		return ""
 	}
 
@@ -413,7 +531,10 @@ func detectRelayProbeKind(ctx context.Context, handlerType string, rawJSON []byt
 		if !strings.EqualFold(strings.TrimSpace(items[0].Get("role").String()), "user") {
 			return ""
 		}
-		blocks := anthropicMessageTextBlocks(items[0])
+		blocks, ok := anthropicMessageStrictTextBlocks(items[0])
+		if !ok || len(blocks) == 0 {
+			return ""
+		}
 		if len(blocks) == 1 && blocks[0] == relayProbeStage1Prompt {
 			return "relayapi_stage1"
 		}
@@ -422,19 +543,112 @@ func detectRelayProbeKind(ctx context.Context, handlerType string, rawJSON []byt
 				return "relayapi_detector"
 			}
 		}
+		return "relayapi_web_like"
 	case 3:
 		if !strings.EqualFold(strings.TrimSpace(items[0].Get("role").String()), "user") ||
 			!strings.EqualFold(strings.TrimSpace(items[1].Get("role").String()), "assistant") ||
 			!strings.EqualFold(strings.TrimSpace(items[2].Get("role").String()), "user") {
 			return ""
 		}
-		first := anthropicMessageTextBlocks(items[0])
-		last := anthropicMessageTextBlocks(items[2])
+		first, okFirst := anthropicMessageStrictTextBlocks(items[0])
+		_, okAssistant := anthropicMessageStrictTextBlocks(items[1])
+		last, okLast := anthropicMessageStrictTextBlocks(items[2])
+		if !okFirst || !okAssistant || !okLast || len(first) == 0 || len(last) == 0 {
+			return ""
+		}
 		if len(first) == 1 && first[0] == relayProbeStage1Prompt && len(last) == 1 && last[0] == relayProbeStage2Prompt {
 			return "relayapi_stage2"
 		}
+		return "relayapi_web_like"
+	default:
+		return ""
 	}
-	return ""
+}
+
+func matchRelayDetectorProbeKind(rawJSON []byte) string {
+	system := gjson.GetBytes(rawJSON, "system")
+	if !system.IsArray() || len(system.Array()) != 1 {
+		return ""
+	}
+	if strings.TrimSpace(system.Array()[0].Get("text").String()) != "null" {
+		return ""
+	}
+	messages := gjson.GetBytes(rawJSON, "messages")
+	if !messages.IsArray() || len(messages.Array()) != 1 {
+		return ""
+	}
+	message := messages.Array()[0]
+	if !strings.EqualFold(strings.TrimSpace(message.Get("role").String()), "user") {
+		return ""
+	}
+	blocks, ok := anthropicMessageStrictTextBlocks(message)
+	if !ok || len(blocks) < 3 {
+		return ""
+	}
+	if blocks[0] != "null" || blocks[1] != "null" {
+		return ""
+	}
+	for _, block := range blocks[2:] {
+		if block == relayProbeDetectorPrompt {
+			return "relayapi_detector"
+		}
+	}
+	return "relayapi_detector_py_like"
+}
+
+func detectRelayProbeKind(ctx context.Context, handlerType string, rawJSON []byte) string {
+	if kind, ok := relayProbeKindFromContextCache(ctx); ok {
+		return kind
+	}
+	kind := ""
+	if !strings.EqualFold(strings.TrimSpace(handlerType), "claude") {
+		setRelayProbeKindContextCache(ctx, kind)
+		return kind
+	}
+	if !strings.EqualFold(requestPathFromContext(ctx), "/v1/messages") {
+		setRelayProbeKindContextCache(ctx, kind)
+		return kind
+	}
+	userAgent := strings.ToLower(requestHeaderFromContext(ctx, "User-Agent"))
+	if !strings.HasPrefix(userAgent, "claude-cli/") {
+		setRelayProbeKindContextCache(ctx, kind)
+		return kind
+	}
+	if !strings.Contains(strings.ToLower(requestHeaderFromContext(ctx, "Anthropic-Beta")), "interleaved-thinking-2025-05-14") {
+		setRelayProbeKindContextCache(ctx, kind)
+		return kind
+	}
+	if relayProbeLooksLikeRealClaudeCLI(ctx, rawJSON) {
+		setRelayProbeKindContextCache(ctx, kind)
+		return kind
+	}
+	userID := gjson.GetBytes(rawJSON, "metadata.user_id").String()
+	if !relayProbeUserIDLooksLikeRelayFamily(userID) {
+		setRelayProbeKindContextCache(ctx, kind)
+		return kind
+	}
+	if !gjson.GetBytes(rawJSON, "stream").Bool() {
+		setRelayProbeKindContextCache(ctx, kind)
+		return kind
+	}
+	if strings.ToLower(strings.TrimSpace(gjson.GetBytes(rawJSON, "thinking.type").String())) != "enabled" {
+		setRelayProbeKindContextCache(ctx, kind)
+		return kind
+	}
+	if budget := gjson.GetBytes(rawJSON, "thinking.budget_tokens"); budget.Exists() && budget.Int() != 31999 {
+		setRelayProbeKindContextCache(ctx, kind)
+		return kind
+	}
+	if tools := gjson.GetBytes(rawJSON, "tools"); tools.Exists() && tools.IsArray() && len(tools.Array()) != 0 {
+		setRelayProbeKindContextCache(ctx, kind)
+		return kind
+	}
+	kind = matchRelayWebProbeKind(rawJSON)
+	if kind == "" {
+		kind = matchRelayDetectorProbeKind(rawJSON)
+	}
+	setRelayProbeKindContextCache(ctx, kind)
+	return kind
 }
 
 func (h *BaseAPIHandler) resolveClaudeProbeTargetAuthID(model string) string {

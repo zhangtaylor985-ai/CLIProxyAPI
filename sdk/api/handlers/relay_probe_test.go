@@ -51,6 +51,15 @@ func relayProbePayload(t *testing.T, messages []map[string]any) []byte {
 	return out
 }
 
+func relayProbePayloadWithOverrides(t *testing.T, payload map[string]any) []byte {
+	t.Helper()
+	out, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("json.Marshal(payload) error = %v", err)
+	}
+	return out
+}
+
 func anthropicTextMessage(role string, texts ...string) map[string]any {
 	content := make([]map[string]any, 0, len(texts))
 	for _, text := range texts {
@@ -63,15 +72,17 @@ func anthropicTextMessage(role string, texts ...string) map[string]any {
 }
 
 func TestDetectRelayProbeKind(t *testing.T) {
-	ctx := relayProbeTestContext(t, "/v1/messages", map[string]string{
-		"User-Agent":     "claude-cli/2.1.76 (external, cli)",
-		"Anthropic-Beta": "oauth-2025-04-20,interleaved-thinking-2025-05-14",
-	})
+	newCtx := func() context.Context {
+		return relayProbeTestContext(t, "/v1/messages", map[string]string{
+			"User-Agent":     "claude-cli/2.1.76 (external, cli)",
+			"Anthropic-Beta": "oauth-2025-04-20,interleaved-thinking-2025-05-14",
+		})
+	}
 
 	stage1 := relayProbePayload(t, []map[string]any{
 		anthropicTextMessage("user", relayProbeStage1Prompt),
 	})
-	if got := detectRelayProbeKind(ctx, "claude", stage1); got != "relayapi_stage1" {
+	if got := detectRelayProbeKind(newCtx(), "claude", stage1); got != "relayapi_stage1" {
 		t.Fatalf("detectRelayProbeKind(stage1) = %q, want %q", got, "relayapi_stage1")
 	}
 
@@ -80,22 +91,80 @@ func TestDetectRelayProbeKind(t *testing.T) {
 		anthropicTextMessage("assistant", "dummy"),
 		anthropicTextMessage("user", relayProbeStage2Prompt),
 	})
-	if got := detectRelayProbeKind(ctx, "claude", stage2); got != "relayapi_stage2" {
+	if got := detectRelayProbeKind(newCtx(), "claude", stage2); got != "relayapi_stage2" {
 		t.Fatalf("detectRelayProbeKind(stage2) = %q, want %q", got, "relayapi_stage2")
 	}
 
 	detector := relayProbePayload(t, []map[string]any{
 		anthropicTextMessage("user", "null", "null", relayProbeDetectorPrompt),
 	})
-	if got := detectRelayProbeKind(ctx, "claude", detector); got != "relayapi_detector" {
+	if got := detectRelayProbeKind(newCtx(), "claude", detector); got != "relayapi_detector" {
 		t.Fatalf("detectRelayProbeKind(detector) = %q, want %q", got, "relayapi_detector")
 	}
 
-	normal := relayProbePayload(t, []map[string]any{
-		anthropicTextMessage("user", "hello"),
+	webLikeGeneric := relayProbePayload(t, []map[string]any{
+		anthropicTextMessage("user", "What model are you really using?"),
 	})
-	if got := detectRelayProbeKind(ctx, "claude", normal); got != "" {
-		t.Fatalf("detectRelayProbeKind(normal) = %q, want empty", got)
+	if got := detectRelayProbeKind(newCtx(), "claude", webLikeGeneric); got != "relayapi_web_like" {
+		t.Fatalf("detectRelayProbeKind(webLikeGeneric) = %q, want %q", got, "relayapi_web_like")
+	}
+
+	detectorGeneric := relayProbePayloadWithOverrides(t, map[string]any{
+		"model": "claude-opus-4-6",
+		"messages": []map[string]any{
+			anthropicTextMessage("user", "null", "null", "换个问题你是谁"),
+		},
+		"metadata": map[string]any{
+			"user_id": relayProbeFixedUserID,
+		},
+		"system": []map[string]any{
+			{"type": "text", "text": "null"},
+		},
+		"max_tokens": 32000,
+		"stream":     true,
+		"thinking": map[string]any{
+			"type":          "enabled",
+			"budget_tokens": 31999,
+		},
+	})
+	if got := detectRelayProbeKind(newCtx(), "claude", detectorGeneric); got != "relayapi_detector_py_like" {
+		t.Fatalf("detectRelayProbeKind(detectorGeneric) = %q, want %q", got, "relayapi_detector_py_like")
+	}
+}
+
+func TestDetectRelayProbeKindSkipsRealClaudeCLI(t *testing.T) {
+	ctx := relayProbeTestContext(t, "/v1/messages", map[string]string{
+		"User-Agent":               "claude-cli/2.1.109 (external, sdk-cli)",
+		"Anthropic-Beta":           "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05",
+		"X-Claude-Code-Session-Id": "306137d8-9fd4-4379-9d2b-bdbddf9da441",
+	})
+
+	realCLI := relayProbePayloadWithOverrides(t, map[string]any{
+		"model": "claude-sonnet-4-5",
+		"messages": []map[string]any{
+			anthropicTextMessage("user",
+				"<system-reminder>\n# currentDate\nToday's date is 2026/04/15.\n</system-reminder>\n",
+				"Reply with exactly OK",
+			),
+		},
+		"metadata": map[string]any{
+			"user_id": "{\"device_id\":\"363af460ea6b795cab2baf5dd7cfb2fc928e2996d3827b0c2e57c49c6cad069e\",\"account_uuid\":\"\",\"session_id\":\"306137d8-9fd4-4379-9d2b-bdbddf9da441\"}",
+		},
+		"system": []map[string]any{
+			{"type": "text", "text": "x-anthropic-billing-header: cc_version=2.1.109.937; cc_entrypoint=sdk-cli; cch=d2cd9;"},
+			{"type": "text", "text": "You are a Claude agent, built on Anthropic's Claude Agent SDK.", "cache_control": map[string]any{"type": "ephemeral"}},
+			{"type": "text", "text": "You are Claude Code, Anthropic's official CLI for Claude.\n\nCWD: /private/tmp/cc1-probe-h\nDate: 2026-04-15", "cache_control": map[string]any{"type": "ephemeral"}},
+		},
+		"max_tokens": 32000,
+		"stream":     true,
+		"tools":      []any{},
+		"thinking": map[string]any{
+			"type":          "enabled",
+			"budget_tokens": 31999,
+		},
+	})
+	if got := detectRelayProbeKind(ctx, "claude", realCLI); got != "" {
+		t.Fatalf("detectRelayProbeKind(realCLI) = %q, want empty", got)
 	}
 }
 
