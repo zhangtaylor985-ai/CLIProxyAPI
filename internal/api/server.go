@@ -279,6 +279,9 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 	s.trajectoryStore = s.initSessionTrajectoryStore()
 	if s.trajectoryStore != nil {
 		s.trajectoryRecorder = sessiontrajectory.NewAsyncRecorder(s.trajectoryStore, 0, 1)
+		if toggler, ok := s.trajectoryRecorder.(interface{ SetEnabled(bool) }); ok {
+			toggler.SetEnabled(cfg.SessionTrajectoryEnabled)
+		}
 	}
 	if requestLogger != nil || s.trajectoryRecorder != nil {
 		engine.Use(middleware.RequestLoggingMiddleware(requestLogger, s.trajectoryRecorder))
@@ -807,6 +810,9 @@ func (s *Server) registerManagementRoutes() {
 		adminMgmt.GET("/request-log", s.mgmt.GetRequestLog)
 		adminMgmt.PUT("/request-log", s.mgmt.PutRequestLog)
 		adminMgmt.PATCH("/request-log", s.mgmt.PutRequestLog)
+		adminMgmt.GET("/session-trajectory-enabled", s.mgmt.GetSessionTrajectoryEnabled)
+		adminMgmt.PUT("/session-trajectory-enabled", s.mgmt.PutSessionTrajectoryEnabled)
+		adminMgmt.PATCH("/session-trajectory-enabled", s.mgmt.PutSessionTrajectoryEnabled)
 		adminMgmt.GET("/ws-auth", s.mgmt.GetWebsocketAuth)
 		adminMgmt.PUT("/ws-auth", s.mgmt.PutWebsocketAuth)
 		adminMgmt.PATCH("/ws-auth", s.mgmt.PutWebsocketAuth)
@@ -1392,6 +1398,16 @@ func (s *Server) UpdateClients(cfg *config.Config) {
 			s.loggerToggle(cfg.RequestLog)
 		} else if toggler, ok := s.requestLogger.(interface{ SetEnabled(bool) }); ok {
 			toggler.SetEnabled(cfg.RequestLog)
+		}
+	}
+
+	previousSessionTrajectoryEnabled := true
+	if oldCfg != nil {
+		previousSessionTrajectoryEnabled = oldCfg.SessionTrajectoryEnabled
+	}
+	if s.trajectoryRecorder != nil && (oldCfg == nil || previousSessionTrajectoryEnabled != cfg.SessionTrajectoryEnabled) {
+		if toggler, ok := s.trajectoryRecorder.(interface{ SetEnabled(bool) }); ok {
+			toggler.SetEnabled(cfg.SessionTrajectoryEnabled)
 		}
 	}
 

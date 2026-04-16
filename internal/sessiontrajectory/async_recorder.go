@@ -3,6 +3,7 @@ package sessiontrajectory
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/interfaces"
 	log "github.com/sirupsen/logrus"
@@ -11,10 +12,11 @@ import (
 // AsyncRecorder decouples HTTP response completion from PG persistence by using
 // a bounded in-process queue.
 type AsyncRecorder struct {
-	store Recorder
-	queue chan *CompletedRequest
-	wg    sync.WaitGroup
-	once  sync.Once
+	store   Recorder
+	queue   chan *CompletedRequest
+	wg      sync.WaitGroup
+	once    sync.Once
+	enabled atomic.Bool
 }
 
 func NewAsyncRecorder(store Recorder, queueSize int, workers int) *AsyncRecorder {
@@ -31,6 +33,7 @@ func NewAsyncRecorder(store Recorder, queueSize int, workers int) *AsyncRecorder
 		store: store,
 		queue: make(chan *CompletedRequest, queueSize),
 	}
+	recorder.enabled.Store(true)
 	for worker := 0; worker < workers; worker++ {
 		recorder.wg.Add(1)
 		go recorder.runWorker()
@@ -39,7 +42,7 @@ func NewAsyncRecorder(store Recorder, queueSize int, workers int) *AsyncRecorder
 }
 
 func (r *AsyncRecorder) Record(_ context.Context, record *CompletedRequest) error {
-	if r == nil || record == nil {
+	if r == nil || record == nil || !r.IsEnabled() {
 		return nil
 	}
 	cloned := cloneCompletedRequest(record)
@@ -52,6 +55,20 @@ func (r *AsyncRecorder) Record(_ context.Context, record *CompletedRequest) erro
 		}).Warn("session trajectory queue full, dropping capture")
 	}
 	return nil
+}
+
+func (r *AsyncRecorder) SetEnabled(enabled bool) {
+	if r == nil {
+		return
+	}
+	r.enabled.Store(enabled)
+}
+
+func (r *AsyncRecorder) IsEnabled() bool {
+	if r == nil {
+		return false
+	}
+	return r.enabled.Load()
 }
 
 func (r *AsyncRecorder) Close() error {

@@ -64,6 +64,9 @@ func TestManagementLoginAndRoleAuthorization(t *testing.T) {
 	authenticated.GET("/api-key-records/item/events", handler.RequireRoles(managementauth.RoleAdmin), func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
+	authenticated.PUT("/session-trajectory-enabled", handler.RequireRoles(managementauth.RoleAdmin), func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	})
 
 	body, _ := json.Marshal(gin.H{
 		"username": "user_01",
@@ -130,6 +133,16 @@ func TestManagementLoginAndRoleAuthorization(t *testing.T) {
 	router.ServeHTTP(eventsRec, eventsReq)
 	if eventsRec.Code != http.StatusForbidden {
 		t.Fatalf("events status = %d, want 403, body=%s", eventsRec.Code, eventsRec.Body.String())
+	}
+
+	sessionTrajectoryReq := httptest.NewRequest(http.MethodPut, "/v0/management/session-trajectory-enabled", bytes.NewReader([]byte(`{"value":false}`)))
+	sessionTrajectoryReq.RemoteAddr = "127.0.0.1:12345"
+	sessionTrajectoryReq.Header.Set("Authorization", "Bearer "+loginResp.Token)
+	sessionTrajectoryReq.Header.Set("Content-Type", "application/json")
+	sessionTrajectoryRec := httptest.NewRecorder()
+	router.ServeHTTP(sessionTrajectoryRec, sessionTrajectoryReq)
+	if sessionTrajectoryRec.Code != http.StatusForbidden {
+		t.Fatalf("session-trajectory-enabled status = %d, want 403, body=%s", sessionTrajectoryRec.Code, sessionTrajectoryRec.Body.String())
 	}
 }
 

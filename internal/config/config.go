@@ -688,6 +688,7 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 	cfg.RemoteManagement.PanelGitHubRepository = DefaultPanelGitHubRepository
 	cfg.ClaudeCodeOnlyEnabled = true
 	cfg.ClaudeToGPTReasoningEffort = policy.EffectiveClaudeGPTReasoningEffort("")
+	cfg.SessionTrajectoryEnabled = true
 	if err = yaml.Unmarshal(data, &cfg); err != nil {
 		if optional {
 			// In cloud deploy mode, if YAML parsing fails, return empty config instead of error.

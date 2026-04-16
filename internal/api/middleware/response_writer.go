@@ -86,7 +86,7 @@ func (w *ResponseWriterWrapper) Write(data []byte) (int, error) {
 		if w.firstChunkTimestamp.IsZero() {
 			w.firstChunkTimestamp = time.Now()
 		}
-		if w.recorder != nil {
+		if w.isRecorderEnabled() {
 			w.appendBufferedResponseBody(data)
 		}
 		// For streaming responses: Send to async logging channel (non-blocking)
@@ -105,7 +105,7 @@ func (w *ResponseWriterWrapper) Write(data []byte) (int, error) {
 }
 
 func (w *ResponseWriterWrapper) shouldBufferResponseBody() bool {
-	if w.recorder != nil {
+	if w.isRecorderEnabled() {
 		return true
 	}
 	if w.logger != nil && w.logger.IsEnabled() {
@@ -125,6 +125,16 @@ func (w *ResponseWriterWrapper) shouldBufferResponseBody() bool {
 	return status >= http.StatusBadRequest
 }
 
+func (w *ResponseWriterWrapper) isRecorderEnabled() bool {
+	if w == nil || w.recorder == nil {
+		return false
+	}
+	if checker, ok := w.recorder.(interface{ IsEnabled() bool }); ok {
+		return checker.IsEnabled()
+	}
+	return true
+}
+
 // WriteString wraps the underlying ResponseWriter's WriteString method to capture response data.
 // Some handlers (and fmt/io helpers) write via io.StringWriter; without this override, those writes
 // bypass Write() and would be missing from request logs.
@@ -140,7 +150,7 @@ func (w *ResponseWriterWrapper) WriteString(data string) (int, error) {
 		if w.firstChunkTimestamp.IsZero() {
 			w.firstChunkTimestamp = time.Now()
 		}
-		if w.recorder != nil {
+		if w.isRecorderEnabled() {
 			w.appendBufferedResponseBody([]byte(data))
 		}
 		select {
@@ -340,7 +350,7 @@ func (w *ResponseWriterWrapper) Finalize(c *gin.Context) error {
 		w.streamWriter = nil
 	}
 
-	if w.recorder != nil && w.requestInfo != nil {
+	if w.isRecorderEnabled() && w.requestInfo != nil {
 		responseBody := w.body.Bytes()
 		if len(responseBody) == 0 && len(apiResponse) > 0 {
 			responseBody = apiResponse

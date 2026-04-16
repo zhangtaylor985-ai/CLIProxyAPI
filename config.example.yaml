@@ -56,6 +56,8 @@ api-keys:
 # - Storage:
 #   - api-key policies / top-level api-keys can be persisted in Postgres via
 #     APIKEY_POLICY_PG_DSN / APIKEY_POLICY_PG_SCHEMA.
+#   - session trajectory tables can be moved to a dedicated Postgres via
+#     SESSION_TRAJECTORY_PG_DSN / SESSION_TRAJECTORY_PG_SCHEMA.
 #   - daily counters and billing data require Postgres-backed persistence.
 api-key-policies:
   - api-key: "your-api-key-1"
@@ -146,6 +148,9 @@ notifications:
 
 # When false, disable in-memory usage statistics aggregation
 usage-statistics-enabled: false
+
+# When false, stop persisting new session request/response trajectories to PostgreSQL.
+session-trajectory-enabled: true
 
 # Proxy URL. Supports socks5/http/https protocols. Example: socks5://user:pass@192.168.1.1:1080/
 proxy-url: ""

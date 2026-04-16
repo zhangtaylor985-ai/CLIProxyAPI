@@ -71,6 +71,11 @@ type SDKConfig struct {
 	// RequestLog enables or disables detailed request logging functionality.
 	RequestLog bool `yaml:"request-log" json:"request-log"`
 
+	// SessionTrajectoryEnabled toggles PostgreSQL-backed session trajectory capture.
+	// When false, new requests and responses are no longer persisted to the
+	// session trajectory store.
+	SessionTrajectoryEnabled bool `yaml:"session-trajectory-enabled" json:"session-trajectory-enabled"`
+
 	// PassthroughHeaders forwards selected upstream response headers to clients.
 	// Default is false.
 	PassthroughHeaders bool `yaml:"passthrough-headers" json:"passthrough-headers"`

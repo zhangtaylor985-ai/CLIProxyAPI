@@ -24,7 +24,9 @@ const maxErrorOnlyCapturedRequestBodyBytes int64 = 1 << 20 // 1 MiB
 // body capture is limited to small known-size payloads to avoid large per-request memory spikes.
 func RequestLoggingMiddleware(logger logging.RequestLogger, recorder sessiontrajectory.Recorder) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if logger == nil && recorder == nil {
+		loggerEnabled := logger != nil && logger.IsEnabled()
+		recorderEnabled := isSessionTrajectoryRecorderEnabled(recorder)
+		if logger == nil && !recorderEnabled {
 			c.Next()
 			return
 		}
@@ -40,10 +42,8 @@ func RequestLoggingMiddleware(logger logging.RequestLogger, recorder sessiontraj
 			return
 		}
 
-		loggerEnabled := logger != nil && logger.IsEnabled()
-
 		// Capture request information
-		requestInfo, err := captureRequestInfo(c, shouldCaptureRequestBody(loggerEnabled || recorder != nil, c.Request))
+		requestInfo, err := captureRequestInfo(c, shouldCaptureRequestBody(loggerEnabled || recorderEnabled, c.Request))
 		if err != nil {
 			// Log error but continue processing
 			// In a real implementation, you might want to use a proper logger here
@@ -67,6 +67,16 @@ func RequestLoggingMiddleware(logger logging.RequestLogger, recorder sessiontraj
 			// In a real implementation, you might want to use a proper logger here
 		}
 	}
+}
+
+func isSessionTrajectoryRecorderEnabled(recorder sessiontrajectory.Recorder) bool {
+	if recorder == nil {
+		return false
+	}
+	if checker, ok := recorder.(interface{ IsEnabled() bool }); ok {
+		return checker.IsEnabled()
+	}
+	return true
 }
 
 func shouldSkipMethodForRequestLogging(req *http.Request) bool {
