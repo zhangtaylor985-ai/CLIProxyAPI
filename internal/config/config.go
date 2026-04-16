@@ -364,6 +364,10 @@ type ClaudeKey struct {
 	// APIKey is the authentication key for accessing Claude API services.
 	APIKey string `yaml:"api-key" json:"api-key"`
 
+	// ProbeTarget marks this credential as the preferred upstream when a known
+	// external probe should be verified against a real Claude provider.
+	ProbeTarget bool `yaml:"probe-target,omitempty" json:"probe-target,omitempty"`
+
 	// Priority controls selection preference when multiple credentials match.
 	// Higher values are preferred; defaults to 0.
 	Priority int `yaml:"priority,omitempty" json:"priority,omitempty"`

@@ -272,6 +272,42 @@ func TestSchedulerPick_MixedProvidersPrefersHighestPriorityTier(t *testing.T) {
 	}
 }
 
+func TestSchedulerPick_MixedProvidersPinnedAuthFallsBackWithoutModelShardSupport(t *testing.T) {
+	t.Parallel()
+
+	scheduler := newAuthScheduler(&RoundRobinSelector{})
+	pinned := &Auth{ID: "claude-probe", Provider: "claude"}
+	scheduler.providers["claude"] = &providerScheduler{
+		providerKey: "claude",
+		auths: map[string]*scheduledAuthMeta{
+			pinned.ID: {
+				auth:        pinned,
+				providerKey: "claude",
+			},
+		},
+		modelShards: map[string]*modelScheduler{},
+	}
+	scheduler.authProviders[pinned.ID] = "claude"
+
+	got, provider, errPick := scheduler.pickMixed(context.Background(), []string{"claude"}, "claude-sonnet-4-5", cliproxyexecutor.Options{
+		Metadata: map[string]any{
+			cliproxyexecutor.PinnedAuthMetadataKey: pinned.ID,
+		},
+	}, nil)
+	if errPick != nil {
+		t.Fatalf("pickMixed() error = %v", errPick)
+	}
+	if got == nil {
+		t.Fatalf("pickMixed() auth = nil")
+	}
+	if got.ID != pinned.ID {
+		t.Fatalf("pickMixed() auth.ID = %q, want %q", got.ID, pinned.ID)
+	}
+	if provider != "claude" {
+		t.Fatalf("pickMixed() provider = %q, want %q", provider, "claude")
+	}
+}
+
 func TestManager_PickNextMixed_UsesProviderRotationBeforeCredentialRotation(t *testing.T) {
 	t.Parallel()
 

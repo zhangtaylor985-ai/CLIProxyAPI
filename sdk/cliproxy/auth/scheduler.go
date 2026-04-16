@@ -211,6 +211,21 @@ func (s *authScheduler) pickSingle(ctx context.Context, provider, model string, 
 	if picked := shard.pickReadyLocked(preferWebsocket, s.strategy, predicate); picked != nil {
 		return picked, nil
 	}
+	if pinnedAuthID != "" {
+		if fallback := providerState.auths[pinnedAuthID]; fallback != nil && fallback.auth != nil {
+			if predicate(&scheduledAuth{auth: fallback.auth}) {
+				if blocked, reason, next := isAuthBlockedForModel(fallback.auth, model, time.Now()); !blocked {
+					return fallback.auth, nil
+				} else if reason == blockReasonCooldown && !next.IsZero() {
+					resetIn := next.Sub(time.Now())
+					if resetIn < 0 {
+						resetIn = 0
+					}
+					return nil, newModelCooldownError(model, provider, resetIn)
+				}
+			}
+		}
+	}
 	return nil, shard.unavailableErrorLocked(provider, model, predicate)
 }
 
@@ -254,6 +269,19 @@ func (s *authScheduler) pickMixed(ctx context.Context, providers []string, model
 		}
 		if picked := shard.pickReadyLocked(false, s.strategy, predicate); picked != nil {
 			return picked, providerKey, nil
+		}
+		if fallback := providerState.auths[pinnedAuthID]; fallback != nil && fallback.auth != nil {
+			if predicate(&scheduledAuth{auth: fallback.auth}) {
+				if blocked, reason, next := isAuthBlockedForModel(fallback.auth, model, time.Now()); !blocked {
+					return fallback.auth, providerKey, nil
+				} else if reason == blockReasonCooldown && !next.IsZero() {
+					resetIn := next.Sub(time.Now())
+					if resetIn < 0 {
+						resetIn = 0
+					}
+					return nil, "", newModelCooldownError(model, "", resetIn)
+				}
+			}
 		}
 		return nil, "", shard.unavailableErrorLocked("mixed", model, predicate)
 	}

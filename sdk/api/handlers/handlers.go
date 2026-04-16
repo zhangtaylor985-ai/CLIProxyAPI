@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -59,6 +60,18 @@ const (
 	effectiveModelHeaderKey          = "cpa_effective_model"
 	failoverProviderContextKey       = "cpa_failover_provider"
 	masqueradePromptMarker           = "Identity policy for Claude compatibility:"
+)
+
+const (
+	relayProbeFixedUserID       = "user_82a10c807646e5141d2ffcbf5c6d439ee4cfd99d1903617b7b69e3a5c03b1dbf_account__session_74673a26-ea49-47f4-a8ed-27f9248f231f"
+	relayProbeSystemPrompt      = "You are Claude Code, Anthropic's official CLI for Claude."
+	relayProbeStage1Prompt      = "输出中文的这个符号”\""
+	relayProbeStage2Prompt      = "不允许上网查, 2025年3月4日特朗普把关税提到多少. 不知道就回答不知道."
+	relayProbeDetectorPrompt    = "你是谁,你的知识库截止时间是什么时候? 请一定要诚实回答"
+	relayProbeMetadataLabelKey  = "relay_probe_kind"
+	relayProbePinnedMetadataKey = "relay_probe_pinned_auth_id"
+	relayProbeKindCacheKey      = "relayProbeKindCache"
+	relayProbeKindCachedKey     = "relayProbeKindCached"
 )
 
 type pinnedAuthContextKey struct{}
@@ -316,6 +329,401 @@ func clientAPIKeyFromContext(ctx context.Context) string {
 		return ""
 	}
 	return strings.TrimSpace(ginCtx.GetString("apiKey"))
+}
+
+func requestPathFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	ginCtx, ok := ctx.Value("gin").(*gin.Context)
+	if !ok || ginCtx == nil || ginCtx.Request == nil || ginCtx.Request.URL == nil {
+		return ""
+	}
+	return strings.TrimSpace(ginCtx.Request.URL.Path)
+}
+
+func requestHeaderFromContext(ctx context.Context, name string) string {
+	if ctx == nil {
+		return ""
+	}
+	ginCtx, ok := ctx.Value("gin").(*gin.Context)
+	if !ok || ginCtx == nil {
+		return ""
+	}
+	return strings.TrimSpace(ginCtx.GetHeader(name))
+}
+
+func anthropicMessageTextBlocks(message gjson.Result) []string {
+	content := message.Get("content")
+	if !content.IsArray() {
+		return nil
+	}
+	blocks := make([]string, 0, len(content.Array()))
+	for _, item := range content.Array() {
+		if item.Get("type").String() != "text" {
+			continue
+		}
+		text := strings.TrimSpace(item.Get("text").String())
+		if text == "" {
+			continue
+		}
+		blocks = append(blocks, text)
+	}
+	return blocks
+}
+
+func anthropicMessageStrictTextBlocks(message gjson.Result) ([]string, bool) {
+	content := message.Get("content")
+	if !content.IsArray() {
+		return nil, false
+	}
+	items := content.Array()
+	blocks := make([]string, 0, len(items))
+	for _, item := range items {
+		if item.Get("type").String() != "text" {
+			return nil, false
+		}
+		text := strings.TrimSpace(item.Get("text").String())
+		if text == "" {
+			continue
+		}
+		blocks = append(blocks, text)
+	}
+	return blocks, true
+}
+
+func relayProbeKindFromContextCache(ctx context.Context) (string, bool) {
+	if ctx == nil {
+		return "", false
+	}
+	ginCtx, ok := ctx.Value("gin").(*gin.Context)
+	if !ok || ginCtx == nil {
+		return "", false
+	}
+	cached, exists := ginCtx.Get(relayProbeKindCachedKey)
+	if !exists {
+		return "", false
+	}
+	if done, ok := cached.(bool); !ok || !done {
+		return "", false
+	}
+	return strings.TrimSpace(ginCtx.GetString(relayProbeKindCacheKey)), true
+}
+
+func setRelayProbeKindContextCache(ctx context.Context, kind string) {
+	if ctx == nil {
+		return
+	}
+	ginCtx, ok := ctx.Value("gin").(*gin.Context)
+	if !ok || ginCtx == nil {
+		return
+	}
+	ginCtx.Set(relayProbeKindCacheKey, strings.TrimSpace(kind))
+	ginCtx.Set(relayProbeKindCachedKey, true)
+}
+
+func relayProbeUserIDLooksLikeRealClaudeCLI(userID string) bool {
+	userID = strings.TrimSpace(userID)
+	if userID == "" || !gjson.Valid(userID) {
+		return false
+	}
+	parsed := gjson.Parse(userID)
+	if !parsed.IsObject() {
+		return false
+	}
+	return strings.TrimSpace(parsed.Get("device_id").String()) != "" &&
+		strings.TrimSpace(parsed.Get("session_id").String()) != ""
+}
+
+func isLowerHexString(value string) bool {
+	if strings.TrimSpace(value) == "" {
+		return false
+	}
+	for _, r := range value {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+func looksLikeUUID(value string) bool {
+	if len(value) != 36 {
+		return false
+	}
+	for i, r := range value {
+		switch i {
+		case 8, 13, 18, 23:
+			if r != '-' {
+				return false
+			}
+		default:
+			if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func relayProbeUserIDLooksLikeRelayFamily(userID string) bool {
+	userID = strings.TrimSpace(userID)
+	if userID == "" || relayProbeUserIDLooksLikeRealClaudeCLI(userID) {
+		return false
+	}
+	if !strings.HasPrefix(userID, "user_") {
+		return false
+	}
+	parts := strings.SplitN(strings.TrimPrefix(userID, "user_"), "_account__session_", 2)
+	if len(parts) != 2 {
+		return false
+	}
+	return len(parts[0]) >= 32 && isLowerHexString(parts[0]) && looksLikeUUID(parts[1])
+}
+
+func relayProbeLooksLikeRealClaudeCLI(ctx context.Context, rawJSON []byte) bool {
+	if strings.TrimSpace(requestHeaderFromContext(ctx, "X-Claude-Code-Session-Id")) != "" {
+		return true
+	}
+	if relayProbeUserIDLooksLikeRealClaudeCLI(gjson.GetBytes(rawJSON, "metadata.user_id").String()) {
+		return true
+	}
+	system := gjson.GetBytes(rawJSON, "system")
+	if system.IsArray() {
+		for _, block := range system.Array() {
+			text := block.Get("text").String()
+			if strings.Contains(text, "x-anthropic-billing-header:") ||
+				strings.Contains(text, "Claude Agent SDK") ||
+				strings.Contains(text, "\nCWD: ") ||
+				strings.Contains(text, "\nDate: ") {
+				return true
+			}
+		}
+	}
+	messages := gjson.GetBytes(rawJSON, "messages")
+	if messages.IsArray() && len(messages.Array()) > 0 {
+		firstBlocks := anthropicMessageTextBlocks(messages.Array()[0])
+		for _, block := range firstBlocks {
+			if strings.Contains(block, "<system-reminder>") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func matchRelayWebProbeKind(rawJSON []byte) string {
+	system := gjson.GetBytes(rawJSON, "system")
+	if !system.IsArray() || len(system.Array()) != 1 {
+		return ""
+	}
+	if strings.TrimSpace(system.Array()[0].Get("text").String()) != relayProbeSystemPrompt {
+		return ""
+	}
+
+	messages := gjson.GetBytes(rawJSON, "messages")
+	if !messages.IsArray() {
+		return ""
+	}
+	items := messages.Array()
+	switch len(items) {
+	case 1:
+		if !strings.EqualFold(strings.TrimSpace(items[0].Get("role").String()), "user") {
+			return ""
+		}
+		blocks, ok := anthropicMessageStrictTextBlocks(items[0])
+		if !ok || len(blocks) == 0 {
+			return ""
+		}
+		if len(blocks) == 1 && blocks[0] == relayProbeStage1Prompt {
+			return "relayapi_stage1"
+		}
+		for _, block := range blocks {
+			if block == relayProbeDetectorPrompt {
+				return "relayapi_detector"
+			}
+		}
+		return "relayapi_web_like"
+	case 3:
+		if !strings.EqualFold(strings.TrimSpace(items[0].Get("role").String()), "user") ||
+			!strings.EqualFold(strings.TrimSpace(items[1].Get("role").String()), "assistant") ||
+			!strings.EqualFold(strings.TrimSpace(items[2].Get("role").String()), "user") {
+			return ""
+		}
+		first, okFirst := anthropicMessageStrictTextBlocks(items[0])
+		_, okAssistant := anthropicMessageStrictTextBlocks(items[1])
+		last, okLast := anthropicMessageStrictTextBlocks(items[2])
+		if !okFirst || !okAssistant || !okLast || len(first) == 0 || len(last) == 0 {
+			return ""
+		}
+		if len(first) == 1 && first[0] == relayProbeStage1Prompt && len(last) == 1 && last[0] == relayProbeStage2Prompt {
+			return "relayapi_stage2"
+		}
+		return "relayapi_web_like"
+	default:
+		return ""
+	}
+}
+
+func matchRelayDetectorProbeKind(rawJSON []byte) string {
+	system := gjson.GetBytes(rawJSON, "system")
+	if !system.IsArray() || len(system.Array()) != 1 {
+		return ""
+	}
+	if strings.TrimSpace(system.Array()[0].Get("text").String()) != "null" {
+		return ""
+	}
+	messages := gjson.GetBytes(rawJSON, "messages")
+	if !messages.IsArray() || len(messages.Array()) != 1 {
+		return ""
+	}
+	message := messages.Array()[0]
+	if !strings.EqualFold(strings.TrimSpace(message.Get("role").String()), "user") {
+		return ""
+	}
+	blocks, ok := anthropicMessageStrictTextBlocks(message)
+	if !ok || len(blocks) < 3 {
+		return ""
+	}
+	if blocks[0] != "null" || blocks[1] != "null" {
+		return ""
+	}
+	for _, block := range blocks[2:] {
+		if block == relayProbeDetectorPrompt {
+			return "relayapi_detector"
+		}
+	}
+	return "relayapi_detector_py_like"
+}
+
+func detectRelayProbeKind(ctx context.Context, handlerType string, rawJSON []byte) string {
+	if kind, ok := relayProbeKindFromContextCache(ctx); ok {
+		return kind
+	}
+	kind := ""
+	if !strings.EqualFold(strings.TrimSpace(handlerType), "claude") {
+		setRelayProbeKindContextCache(ctx, kind)
+		return kind
+	}
+	if !strings.EqualFold(requestPathFromContext(ctx), "/v1/messages") {
+		setRelayProbeKindContextCache(ctx, kind)
+		return kind
+	}
+	userAgent := strings.ToLower(requestHeaderFromContext(ctx, "User-Agent"))
+	if !strings.HasPrefix(userAgent, "claude-cli/") {
+		setRelayProbeKindContextCache(ctx, kind)
+		return kind
+	}
+	if !strings.Contains(strings.ToLower(requestHeaderFromContext(ctx, "Anthropic-Beta")), "interleaved-thinking-2025-05-14") {
+		setRelayProbeKindContextCache(ctx, kind)
+		return kind
+	}
+	if relayProbeLooksLikeRealClaudeCLI(ctx, rawJSON) {
+		setRelayProbeKindContextCache(ctx, kind)
+		return kind
+	}
+	userID := gjson.GetBytes(rawJSON, "metadata.user_id").String()
+	if !relayProbeUserIDLooksLikeRelayFamily(userID) {
+		setRelayProbeKindContextCache(ctx, kind)
+		return kind
+	}
+	if !gjson.GetBytes(rawJSON, "stream").Bool() {
+		setRelayProbeKindContextCache(ctx, kind)
+		return kind
+	}
+	if strings.ToLower(strings.TrimSpace(gjson.GetBytes(rawJSON, "thinking.type").String())) != "enabled" {
+		setRelayProbeKindContextCache(ctx, kind)
+		return kind
+	}
+	if budget := gjson.GetBytes(rawJSON, "thinking.budget_tokens"); budget.Exists() && budget.Int() != 31999 {
+		setRelayProbeKindContextCache(ctx, kind)
+		return kind
+	}
+	if tools := gjson.GetBytes(rawJSON, "tools"); tools.Exists() && tools.IsArray() && len(tools.Array()) != 0 {
+		setRelayProbeKindContextCache(ctx, kind)
+		return kind
+	}
+	kind = matchRelayWebProbeKind(rawJSON)
+	if kind == "" {
+		kind = matchRelayDetectorProbeKind(rawJSON)
+	}
+	setRelayProbeKindContextCache(ctx, kind)
+	return kind
+}
+
+func (h *BaseAPIHandler) resolveClaudeProbeTargetAuthID(model string) string {
+	if h == nil || h.AuthManager == nil {
+		return ""
+	}
+
+	type candidate struct {
+		authID   string
+		priority int
+	}
+
+	_ = model
+	var (
+		best  candidate
+		found bool
+	)
+	for _, auth := range h.AuthManager.List() {
+		if auth == nil || auth.Disabled || !strings.EqualFold(strings.TrimSpace(auth.Provider), "claude") {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(auth.Attributes["probe_target"]), "true") {
+			continue
+		}
+		authID := strings.TrimSpace(auth.ID)
+		if authID == "" {
+			continue
+		}
+		priority, _ := strconv.Atoi(strings.TrimSpace(auth.Attributes["priority"]))
+		current := candidate{authID: authID, priority: priority}
+		if !found || current.priority > best.priority || (current.priority == best.priority && current.authID < best.authID) {
+			best = current
+			found = true
+		}
+	}
+	if !found {
+		return ""
+	}
+	return best.authID
+}
+
+func (h *BaseAPIHandler) applyRelayProbePin(ctx context.Context, handlerType string, rawJSON []byte, providers []string, model string, metadata map[string]any) string {
+	if h == nil || metadata == nil || !containsProvider(providers, "claude") {
+		return ""
+	}
+	if existing := strings.TrimSpace(fmt.Sprint(metadata[coreexecutor.PinnedAuthMetadataKey])); existing != "" && existing != "<nil>" {
+		return ""
+	}
+	probeKind := detectRelayProbeKind(ctx, handlerType, rawJSON)
+	if probeKind == "" {
+		return ""
+	}
+	authID := h.resolveClaudeProbeTargetAuthID(model)
+	if authID == "" {
+		clientKey := util.HideAPIKey(clientAPIKeyFromContext(ctx))
+		log.WithFields(log.Fields{
+			"component":      "relay_probe",
+			"client_api_key": clientKey,
+			"probe_kind":     probeKind,
+			"handler_format": handlerType,
+		}).Warn("relay probe detected but no Claude probe-target auth is configured")
+		return ""
+	}
+	metadata[coreexecutor.PinnedAuthMetadataKey] = authID
+	metadata[relayProbeMetadataLabelKey] = probeKind
+	metadata[relayProbePinnedMetadataKey] = authID
+	clientKey := util.HideAPIKey(clientAPIKeyFromContext(ctx))
+	log.WithFields(log.Fields{
+		"component":       "relay_probe",
+		"client_api_key":  clientKey,
+		"probe_kind":      probeKind,
+		"handler_format":  handlerType,
+		"requested_model": strings.TrimSpace(model),
+	}).Info("relay probe detected; pinning request to configured Claude probe target")
+	return authID
 }
 
 type errorEnvelope struct {
@@ -623,7 +1031,6 @@ func applyClaudeGPTEffortTargetModel(payload []byte, handlerType, requestedModel
 		return effectiveModel, payload
 	}
 
-
 	effort := normalizeClaudeGPTRoutingEffort(gjson.GetBytes(payload, "output_config.effort").String())
 	if effort == "" {
 		return effectiveModel, payload
@@ -867,7 +1274,21 @@ func (h *BaseAPIHandler) ExecuteWithAuthManager(ctx context.Context, handlerType
 	requestedModel := strings.TrimSpace(modelName)
 	originalRequestedModel := resolveAutoModelForMasking(requestedModel)
 	routedModel := requestedModel
-	if policy := apiKeyPolicyFromContext(ctx); policy != nil {
+	probeTargetAuthID := ""
+	if probeKind := detectRelayProbeKind(ctx, handlerType, rawJSON); probeKind != "" && seemsClaudeModel(requestedModel) {
+		probeTargetAuthID = h.resolveClaudeProbeTargetAuthID(requestedModel)
+		if probeTargetAuthID == "" {
+			clientKey := util.HideAPIKey(clientAPIKeyFromContext(ctx))
+			log.WithFields(log.Fields{
+				"component":      "relay_probe",
+				"client_api_key": clientKey,
+				"probe_kind":     probeKind,
+				"handler_format": handlerType,
+			}).Warn("relay probe detected before execution but no Claude probe-target auth is configured")
+		}
+	}
+	probeRoutingBypass := probeTargetAuthID != ""
+	if policy := apiKeyPolicyFromContext(ctx); policy != nil && !probeRoutingBypass {
 		target, decision := policy.RoutedModelFor(clientAPIKeyFromContext(ctx), requestedModel, time.Now())
 		if decision != nil && strings.TrimSpace(target) != "" && target != requestedModel {
 			routedModel = target
@@ -887,13 +1308,18 @@ func (h *BaseAPIHandler) ExecuteWithAuthManager(ctx context.Context, handlerType
 			}).Info("routing request model via api key policy")
 		}
 	}
-	routedModel, rawJSON = finalizeClaudeGPTTargetModel(rawJSON, handlerType, originalRequestedModel, routedModel)
+	if !probeRoutingBypass {
+		routedModel, rawJSON = finalizeClaudeGPTTargetModel(rawJSON, handlerType, originalRequestedModel, routedModel)
+	}
 
 	providers, normalizedModel, errMsg := h.getRequestDetails(routedModel)
 	if originalRequestedModel == "" {
 		originalRequestedModel = normalizedModel
 	}
 	if errMsg != nil {
+		if probeRoutingBypass {
+			return nil, nil, errMsg
+		}
 		if policy := apiKeyPolicyFromContext(ctx); policy != nil {
 			targetModel, enabled := policy.ClaudeFailoverTargetModelFor(requestedModel)
 			if enabled && strings.TrimSpace(targetModel) != "" && targetModel != requestedModel && seemsClaudeModel(routedModel) && isClaudeFailoverEligible(errMsg.StatusCode, errMsg.Error) {
@@ -931,7 +1357,14 @@ func (h *BaseAPIHandler) ExecuteWithAuthManager(ctx context.Context, handlerType
 		}
 	}
 
-	rawJSON = applyClaudeGPTMasqueradePrompt(h.Cfg, rawJSON, handlerType, originalRequestedModel, normalizedModel)
+	if !probeRoutingBypass {
+		rawJSON = applyClaudeGPTMasqueradePrompt(h.Cfg, rawJSON, handlerType, originalRequestedModel, normalizedModel)
+	}
+	if probeRoutingBypass {
+		if authID := h.applyRelayProbePin(ctx, handlerType, rawJSON, providers, normalizedModel, reqMeta); authID != "" {
+			probeTargetAuthID = authID
+		}
+	}
 	reqMeta[coreexecutor.RequestedModelMetadataKey] = normalizedModel
 	payload := rawJSON
 	if len(payload) == 0 {
@@ -981,10 +1414,10 @@ func (h *BaseAPIHandler) ExecuteWithAuthManager(ctx context.Context, handlerType
 	policy := apiKeyPolicyFromContext(ctx)
 	targetModel := ""
 	enabled := false
-	if policy != nil {
+	if policy != nil && !probeRoutingBypass {
 		targetModel, enabled = policy.ClaudeFailoverTargetModelFor(requestedModel)
 	}
-	if enabled && containsProvider(providers, "claude") && strings.TrimSpace(targetModel) != "" && targetModel != normalizedModel {
+	if !probeRoutingBypass && enabled && containsProvider(providers, "claude") && strings.TrimSpace(targetModel) != "" && targetModel != normalizedModel {
 		status := execErr.StatusCode
 		if status <= 0 {
 			status = statusFromError(execErr.Error)
@@ -1039,7 +1472,21 @@ func (h *BaseAPIHandler) ExecuteCountWithAuthManager(ctx context.Context, handle
 	requestedModel := strings.TrimSpace(modelName)
 	originalRequestedModel := resolveAutoModelForMasking(requestedModel)
 	routedModel := requestedModel
-	if policy := apiKeyPolicyFromContext(ctx); policy != nil {
+	probeTargetAuthID := ""
+	if probeKind := detectRelayProbeKind(ctx, handlerType, rawJSON); probeKind != "" && seemsClaudeModel(requestedModel) {
+		probeTargetAuthID = h.resolveClaudeProbeTargetAuthID(requestedModel)
+		if probeTargetAuthID == "" {
+			clientKey := util.HideAPIKey(clientAPIKeyFromContext(ctx))
+			log.WithFields(log.Fields{
+				"component":      "relay_probe",
+				"client_api_key": clientKey,
+				"probe_kind":     probeKind,
+				"handler_format": handlerType,
+			}).Warn("relay probe detected before count execution but no Claude probe-target auth is configured")
+		}
+	}
+	probeRoutingBypass := probeTargetAuthID != ""
+	if policy := apiKeyPolicyFromContext(ctx); policy != nil && !probeRoutingBypass {
 		target, decision := policy.RoutedModelFor(clientAPIKeyFromContext(ctx), requestedModel, time.Now())
 		if decision != nil && strings.TrimSpace(target) != "" && target != requestedModel {
 			routedModel = target
@@ -1059,13 +1506,18 @@ func (h *BaseAPIHandler) ExecuteCountWithAuthManager(ctx context.Context, handle
 			}).Info("routing count request model via api key policy")
 		}
 	}
-	routedModel, rawJSON = finalizeClaudeGPTTargetModel(rawJSON, handlerType, originalRequestedModel, routedModel)
+	if !probeRoutingBypass {
+		routedModel, rawJSON = finalizeClaudeGPTTargetModel(rawJSON, handlerType, originalRequestedModel, routedModel)
+	}
 
 	providers, normalizedModel, errMsg := h.getRequestDetails(routedModel)
 	if originalRequestedModel == "" {
 		originalRequestedModel = normalizedModel
 	}
 	if errMsg != nil {
+		if probeRoutingBypass {
+			return nil, nil, errMsg
+		}
 		if policy := apiKeyPolicyFromContext(ctx); policy != nil {
 			targetModel, enabled := policy.ClaudeFailoverTargetModelFor(requestedModel)
 			if enabled && strings.TrimSpace(targetModel) != "" && targetModel != requestedModel && seemsClaudeModel(routedModel) && isClaudeFailoverEligible(errMsg.StatusCode, errMsg.Error) {
@@ -1103,7 +1555,14 @@ func (h *BaseAPIHandler) ExecuteCountWithAuthManager(ctx context.Context, handle
 		}
 	}
 
-	rawJSON = applyClaudeGPTMasqueradePrompt(h.Cfg, rawJSON, handlerType, originalRequestedModel, normalizedModel)
+	if !probeRoutingBypass {
+		rawJSON = applyClaudeGPTMasqueradePrompt(h.Cfg, rawJSON, handlerType, originalRequestedModel, normalizedModel)
+	}
+	if probeRoutingBypass {
+		if authID := h.applyRelayProbePin(ctx, handlerType, rawJSON, providers, normalizedModel, reqMeta); authID != "" {
+			probeTargetAuthID = authID
+		}
+	}
 	reqMeta[coreexecutor.RequestedModelMetadataKey] = normalizedModel
 	payload := rawJSON
 	if len(payload) == 0 {
@@ -1153,10 +1612,10 @@ func (h *BaseAPIHandler) ExecuteCountWithAuthManager(ctx context.Context, handle
 	policy := apiKeyPolicyFromContext(ctx)
 	targetModel := ""
 	enabled := false
-	if policy != nil {
+	if policy != nil && !probeRoutingBypass {
 		targetModel, enabled = policy.ClaudeFailoverTargetModelFor(requestedModel)
 	}
-	if enabled && containsProvider(providers, "claude") && strings.TrimSpace(targetModel) != "" && targetModel != normalizedModel {
+	if !probeRoutingBypass && enabled && containsProvider(providers, "claude") && strings.TrimSpace(targetModel) != "" && targetModel != normalizedModel {
 		status := execErr.StatusCode
 		if status <= 0 {
 			status = statusFromError(execErr.Error)
@@ -1199,7 +1658,21 @@ func (h *BaseAPIHandler) ExecuteStreamWithAuthManager(ctx context.Context, handl
 	requestedModel := strings.TrimSpace(modelName)
 	originalRequestedModel := resolveAutoModelForMasking(requestedModel)
 	routedModel := requestedModel
-	if policy := apiKeyPolicyFromContext(ctx); policy != nil {
+	probeTargetAuthID := ""
+	if probeKind := detectRelayProbeKind(ctx, handlerType, rawJSON); probeKind != "" && seemsClaudeModel(requestedModel) {
+		probeTargetAuthID = h.resolveClaudeProbeTargetAuthID(requestedModel)
+		if probeTargetAuthID == "" {
+			clientKey := util.HideAPIKey(clientAPIKeyFromContext(ctx))
+			log.WithFields(log.Fields{
+				"component":      "relay_probe",
+				"client_api_key": clientKey,
+				"probe_kind":     probeKind,
+				"handler_format": handlerType,
+			}).Warn("relay probe detected before streaming execution but no Claude probe-target auth is configured")
+		}
+	}
+	probeRoutingBypass := probeTargetAuthID != ""
+	if policy := apiKeyPolicyFromContext(ctx); policy != nil && !probeRoutingBypass {
 		target, decision := policy.RoutedModelFor(clientAPIKeyFromContext(ctx), requestedModel, time.Now())
 		if decision != nil && strings.TrimSpace(target) != "" && target != requestedModel {
 			routedModel = target
@@ -1219,13 +1692,21 @@ func (h *BaseAPIHandler) ExecuteStreamWithAuthManager(ctx context.Context, handl
 			}).Info("routing streaming request model via api key policy")
 		}
 	}
-	routedModel, rawJSON = finalizeClaudeGPTTargetModel(rawJSON, handlerType, originalRequestedModel, routedModel)
+	if !probeRoutingBypass {
+		routedModel, rawJSON = finalizeClaudeGPTTargetModel(rawJSON, handlerType, originalRequestedModel, routedModel)
+	}
 
 	providers, normalizedModel, errMsg := h.getRequestDetails(routedModel)
 	if originalRequestedModel == "" {
 		originalRequestedModel = normalizedModel
 	}
 	if errMsg != nil {
+		if probeRoutingBypass {
+			errChan := make(chan *interfaces.ErrorMessage, 1)
+			errChan <- errMsg
+			close(errChan)
+			return nil, nil, errChan
+		}
 		if policy := apiKeyPolicyFromContext(ctx); policy != nil {
 			targetModel, enabled := policy.ClaudeFailoverTargetModelFor(requestedModel)
 			if enabled && strings.TrimSpace(targetModel) != "" && targetModel != requestedModel && seemsClaudeModel(routedModel) && isClaudeFailoverEligible(errMsg.StatusCode, errMsg.Error) {
@@ -1272,7 +1753,14 @@ func (h *BaseAPIHandler) ExecuteStreamWithAuthManager(ctx context.Context, handl
 		}
 	}
 
-	rawJSON = applyClaudeGPTMasqueradePrompt(h.Cfg, rawJSON, handlerType, originalRequestedModel, normalizedModel)
+	if !probeRoutingBypass {
+		rawJSON = applyClaudeGPTMasqueradePrompt(h.Cfg, rawJSON, handlerType, originalRequestedModel, normalizedModel)
+	}
+	if probeRoutingBypass {
+		if authID := h.applyRelayProbePin(ctx, handlerType, rawJSON, providers, normalizedModel, reqMeta); authID != "" {
+			probeTargetAuthID = authID
+		}
+	}
 	reqMeta[coreexecutor.RequestedModelMetadataKey] = normalizedModel
 	payload := rawJSON
 	if len(payload) == 0 {
@@ -1292,7 +1780,7 @@ func (h *BaseAPIHandler) ExecuteStreamWithAuthManager(ctx context.Context, handl
 		failoverEnabled     bool
 		failoverAttempted   bool
 	)
-	if policy := apiKeyPolicyFromContext(ctx); policy != nil {
+	if policy := apiKeyPolicyFromContext(ctx); policy != nil && !probeRoutingBypass {
 		failoverTargetModel, failoverEnabled = policy.ClaudeFailoverTargetModelFor(modelName)
 	}
 
@@ -1322,7 +1810,7 @@ func (h *BaseAPIHandler) ExecuteStreamWithAuthManager(ctx context.Context, handl
 		if status <= 0 {
 			status = statusFromError(execErr.Error)
 		}
-		if failoverEnabled && containsProvider(providers, "claude") && failoverTargetModel != "" && failoverTargetModel != normalizedModel && isClaudeFailoverEligible(status, execErr.Error) {
+		if !probeRoutingBypass && failoverEnabled && containsProvider(providers, "claude") && failoverTargetModel != "" && failoverTargetModel != normalizedModel && isClaudeFailoverEligible(status, execErr.Error) {
 			failoverAttempted = true
 			failoverPayload := rewriteModelField(rawJSON, failoverTargetModel)
 			failoverTargetModel, failoverPayload = finalizeClaudeGPTTargetModel(failoverPayload, handlerType, originalRequestedModel, failoverTargetModel)
