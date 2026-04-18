@@ -119,10 +119,24 @@ func NewHandlerWithoutConfigFilePath(cfg *config.Config, manager *coreauth.Manag
 }
 
 // SetConfig updates the in-memory config reference when the server hot-reloads.
-func (h *Handler) SetConfig(cfg *config.Config) { h.cfg = cfg }
+func (h *Handler) SetConfig(cfg *config.Config) {
+	if h == nil {
+		return
+	}
+	h.mu.Lock()
+	h.cfg = cfg
+	h.mu.Unlock()
+}
 
 // SetAuthManager updates the auth manager reference used by management endpoints.
-func (h *Handler) SetAuthManager(manager *coreauth.Manager) { h.authManager = manager }
+func (h *Handler) SetAuthManager(manager *coreauth.Manager) {
+	if h == nil {
+		return
+	}
+	h.mu.Lock()
+	h.authManager = manager
+	h.mu.Unlock()
+}
 
 // SetUsageStatistics allows replacing the usage statistics reference.
 func (h *Handler) SetUsageStatistics(stats *usage.RequestStatistics) { h.usageStats = stats }
@@ -137,7 +151,9 @@ func (h *Handler) SetAPIKeyConfigStore(store apikeyconfig.Store) { h.apiKeyConfi
 
 func (h *Handler) SetManagementUserStore(store managementauth.Store) { h.managementUserStore = store }
 
-func (h *Handler) SetSessionManager(manager *managementauth.SessionManager) { h.sessionManager = manager }
+func (h *Handler) SetSessionManager(manager *managementauth.SessionManager) {
+	h.sessionManager = manager
+}
 
 func (h *Handler) HasManagementUserStore() bool {
 	return h != nil && h.managementUserStore != nil && h.sessionManager != nil
@@ -186,18 +202,23 @@ func (h *Handler) Middleware() gin.HandlerFunc {
 // persist saves the current in-memory config to disk.
 func (h *Handler) persist(c *gin.Context) bool {
 	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.persistLocked(c)
+}
+
+// persistLocked saves the current in-memory config to disk.
+// It expects the caller to hold h.mu.
+func (h *Handler) persistLocked(c *gin.Context) bool {
 	persistCfg := h.cfg
 	if h.apiKeyConfigStore != nil {
 		persistCfg = apikeyconfig.ConfigWithoutAPIKeyState(h.cfg)
 	}
 	// Preserve comments when writing
 	if err := config.SaveConfigPreserveComments(h.configFilePath, persistCfg); err != nil {
-		h.mu.Unlock()
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to save config: %v", err)})
 		return false
 	}
 	currentCfg := h.cfg
-	h.mu.Unlock()
 	h.notifyConfigUpdated(currentCfg)
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	return true
