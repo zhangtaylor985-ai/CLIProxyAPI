@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/textproto"
 	"strings"
 	"time"
 
@@ -44,10 +43,7 @@ type ClaudeExecutor struct {
 // Previously "proxy_" was used but this is a detectable fingerprint difference.
 const claudeToolPrefix = ""
 
-const (
-	claudeOpus1MHeaderName = "X-CPA-CLAUDE-1M"
-	claudeOpus1MBetaName   = "context-1m-2025-08-07"
-)
+const claudeOpus1MBetaName = "context-1m-2025-08-07"
 
 func NewClaudeExecutor(cfg *config.Config) *ClaudeExecutor { return &ClaudeExecutor{cfg: cfg} }
 
@@ -1015,15 +1011,8 @@ func applyClaudeHeaders(r *http.Request, auth *cliproxyauth.Auth, apiKey string,
 		}
 	}
 
-	hasClaude1MHeader := false
-	if !stripClaudeOpus1M && ginHeaders != nil {
-		if _, ok := ginHeaders[textproto.CanonicalMIMEHeaderKey(claudeOpus1MHeaderName)]; ok {
-			hasClaude1MHeader = true
-		}
-	}
-
 	// Merge extra betas from request body and request flags.
-	if len(extraBetas) > 0 || hasClaude1MHeader {
+	if len(extraBetas) > 0 {
 		existingSet := make(map[string]bool)
 		for _, b := range strings.Split(baseBetas, ",") {
 			betaName := strings.TrimSpace(b)
@@ -1040,12 +1029,6 @@ func applyClaudeHeaders(r *http.Request, auth *cliproxyauth.Auth, apiKey string,
 				baseBetas += beta
 				existingSet[beta] = true
 			}
-		}
-		if hasClaude1MHeader && !existingSet[claudeOpus1MBetaName] {
-			if baseBetas != "" {
-				baseBetas += ","
-			}
-			baseBetas += claudeOpus1MBetaName
 		}
 	}
 	r.Header.Set("Anthropic-Beta", baseBetas)
