@@ -669,26 +669,22 @@ func (h *Handler) buildAPIKeyPolicyOnlySummary(apiKey string, now time.Time, eff
 }
 
 func (h *Handler) loadCurrentPeriodRows(ctx context.Context, apiKey string, now time.Time) ([]billing.DailyUsageRow, error) {
-	start, end := policy.WeekBoundsChina(now)
 	effectivePolicy, _, err := h.resolvePolicyWithGroup(ctx, h.cfg.EffectiveAPIKeyPolicy(apiKey))
 	if err != nil {
 		return nil, err
 	}
-	if effectivePolicy != nil {
-		start, end = effectivePolicy.WeeklyBudgetBounds(now)
+	if effectivePolicy == nil {
+		return nil, config.ErrWeeklyBudgetAnchorUnavailable
 	}
-	if effectivePolicy != nil && strings.TrimSpace(effectivePolicy.WeeklyBudgetAnchorAt) != "" {
-		events, err := h.billingStore.ListUsageEventsByAPIKey(ctx, apiKey, start, end, 0, false)
-		if err != nil {
-			return nil, err
-		}
-		return aggregateUsageEventsByModel(events), nil
-	}
-	rows, err := h.billingStore.ListDailyUsageRowsByAPIKey(ctx, apiKey, policy.DayKeyChina(start), policy.DayKeyChina(end))
+	start, end, err := effectivePolicy.WeeklyBudgetBounds(now)
 	if err != nil {
 		return nil, err
 	}
-	return rows, nil
+	events, err := h.billingStore.ListUsageEventsByAPIKey(ctx, apiKey, start, end, 0, false)
+	if err != nil {
+		return nil, err
+	}
+	return aggregateUsageEventsByModel(events), nil
 }
 
 func (h *Handler) loadDayTotals(ctx context.Context, apiKey, dayKey string) (apiKeyUsageTotals, error) {
@@ -734,10 +730,14 @@ func (h *Handler) buildDailyBudgetWindow(ctx context.Context, apiKey string, now
 }
 
 func (h *Handler) buildWeeklyBudgetWindow(ctx context.Context, apiKey string, now time.Time, p *config.APIKeyPolicy) (apiKeyBudgetWindowView, error) {
-	start, end := policy.WeekBoundsChina(now)
+	start, end := now, now
 	limitUSD := 0.0
 	if p != nil {
-		start, end = p.WeeklyBudgetBounds(now)
+		var err error
+		start, end, err = p.WeeklyBudgetBounds(now)
+		if err != nil {
+			return apiKeyBudgetWindowView{}, err
+		}
 		limitUSD = p.WeeklyBudgetUSD
 	}
 
@@ -749,10 +749,10 @@ func (h *Handler) buildWeeklyBudgetWindow(ctx context.Context, apiKey string, no
 			return apiKeyBudgetWindowView{}, errState
 		}
 		usedMicro = state.WeeklyUsedMicro
-	} else if p != nil && strings.TrimSpace(p.WeeklyBudgetAnchorAt) != "" {
+	} else if p != nil {
 		usedMicro, err = h.billingStore.GetCostMicroUSDByTimeRange(ctx, apiKey, start, end)
 	} else {
-		usedMicro, err = h.billingStore.GetCostMicroUSDByDayRange(ctx, apiKey, policy.DayKeyChina(start), policy.DayKeyChina(end))
+		usedMicro = 0
 	}
 	if err != nil {
 		return apiKeyBudgetWindowView{}, err

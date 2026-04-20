@@ -49,7 +49,8 @@ api-keys:
 #   until cumulative Claude spend reaches this limit. Once reached, it falls back to the global
 #   Claude -> GPT default strategy (only when claude-to-gpt-routing-enabled is true).
 # - daily-budget-usd / weekly-budget-usd: spend quotas are tracked from persisted billing data.
-#   Weekly quota windows use China Standard Time (UTC+8), Monday 00:00 -> next Monday 00:00.
+#   Weekly quota windows are 7-day cycles anchored to weekly-budget-anchor-at when set,
+#   otherwise to the API key created_at timestamp from the API key config store.
 # - token-package-usd / token-package-started-at: one-time prepaid spend allowance for the API key.
 #   While package balance remains, daily/weekly spend budgets are bypassed. Once exhausted,
 #   daily/weekly spend budgets resume counting only from the depletion point forward.

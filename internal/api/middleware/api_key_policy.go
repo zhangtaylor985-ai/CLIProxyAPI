@@ -303,19 +303,14 @@ func APIKeyPolicyMiddleware(getConfig func() *config.Config, limiter policy.Dail
 			}
 		}
 		if hasBaseBudgets && !hasTokenPackage && policyEntry.WeeklyBudgetUSD > 0 {
-			start, end := policyEntry.WeeklyBudgetBounds(requestNow)
-			var spentMicro int64
-			var errSpent error
-			if strings.TrimSpace(policyEntry.WeeklyBudgetAnchorAt) != "" {
-				spentMicro, errSpent = costReader.GetCostMicroUSDByTimeRange(c.Request.Context(), apiKey, start, end)
-			} else {
-				spentMicro, errSpent = costReader.GetCostMicroUSDByDayRange(
-					c.Request.Context(),
-					apiKey,
-					policy.DayKeyChina(start),
-					policy.DayKeyChina(end),
-				)
+			start, end, errBounds := policyEntry.WeeklyBudgetBounds(requestNow)
+			if errBounds != nil {
+				body := handlers.BuildErrorResponseBody(http.StatusInternalServerError, errBounds.Error())
+				c.Abort()
+				c.Data(http.StatusInternalServerError, "application/json", body)
+				return
 			}
+			spentMicro, errSpent := costReader.GetCostMicroUSDByTimeRange(c.Request.Context(), apiKey, start, end)
 			if errSpent != nil {
 				body := handlers.BuildErrorResponseBody(http.StatusInternalServerError, errSpent.Error())
 				c.Abort()

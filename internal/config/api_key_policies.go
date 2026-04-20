@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"hash/fnv"
 	"strings"
 	"time"
@@ -19,6 +20,8 @@ var defaultClientHiddenGPTModelPatterns = []string{
 var defaultClientHiddenClaudeModelPatterns = []string{
 	"claude-*",
 }
+
+var ErrWeeklyBudgetAnchorUnavailable = errors.New("weekly budget anchor unavailable: api key created_at is required")
 
 // APIKeyPolicy defines restrictions and quotas applied to an authenticated client API key.
 // The APIKey value must match the authenticated principal as provided by the access manager.
@@ -115,14 +118,14 @@ type APIKeyPolicy struct {
 	// Values <= 0 are treated as disabled.
 	DailyBudgetUSD float64 `yaml:"daily-budget-usd,omitempty" json:"daily-budget-usd,omitempty"`
 
-	// WeeklyBudgetUSD defines the maximum weekly spend (USD) allowed for this API key.
-	// Weeks are tracked in China Standard Time (UTC+8) starting Monday 00:00.
+	// WeeklyBudgetUSD defines the maximum spend (USD) allowed for each 7-day cycle.
+	// Cycles are anchored to WeeklyBudgetAnchorAt when present, otherwise to CreatedAt.
 	// Values <= 0 are treated as disabled.
 	WeeklyBudgetUSD float64 `yaml:"weekly-budget-usd,omitempty" json:"weekly-budget-usd,omitempty"`
 
 	// WeeklyBudgetAnchorAt optionally switches weekly budgeting to anchored 168-hour windows.
 	// The value is stored as RFC3339 and normalized to hour precision during sanitization.
-	// When empty, the legacy Monday 00:00 (UTC+8) calendar-week window is used.
+	// When empty, the API key CreatedAt timestamp is used as the cycle anchor.
 	WeeklyBudgetAnchorAt string `yaml:"weekly-budget-anchor-at,omitempty" json:"weekly-budget-anchor-at,omitempty"`
 
 	// TokenPackageUSD defines a one-time prepaid spend allowance (USD) for this API key.
@@ -549,17 +552,29 @@ func BuildExcludedModelFamilies(allowClaude bool, allowGPT bool, extra []string)
 	return NormalizeExcludedModels(models)
 }
 
-// WeeklyBudgetBounds resolves the active weekly budget window for the policy.
-// When WeeklyBudgetAnchorAt is unset or invalid, it falls back to the legacy
-// Monday 00:00 -> next Monday 00:00 China-time window.
-func (p *APIKeyPolicy) WeeklyBudgetBounds(now time.Time) (time.Time, time.Time) {
+// WeeklyBudgetAnchorTime resolves the anchor used for 7-day budget cycles.
+func (p *APIKeyPolicy) WeeklyBudgetAnchorTime() (time.Time, error) {
 	if p == nil {
-		return policy.WeekBoundsChina(now)
+		return time.Time{}, ErrWeeklyBudgetAnchorUnavailable
 	}
 	if anchor, ok := policy.ParseHourlyAnchorRFC3339(p.WeeklyBudgetAnchorAt); ok {
-		return policy.AnchoredWindowBounds(anchor, now, 7*24*time.Hour)
+		return anchor, nil
 	}
-	return policy.WeekBoundsChina(now)
+	if createdAt, ok := p.CreatedTime(); ok {
+		return createdAt, nil
+	}
+	return time.Time{}, ErrWeeklyBudgetAnchorUnavailable
+}
+
+// WeeklyBudgetBounds resolves the active 7-day budget cycle for the policy.
+// It never falls back to a calendar week; missing anchors are configuration errors.
+func (p *APIKeyPolicy) WeeklyBudgetBounds(now time.Time) (time.Time, time.Time, error) {
+	anchor, err := p.WeeklyBudgetAnchorTime()
+	if err != nil {
+		return time.Time{}, time.Time{}, err
+	}
+	start, end := policy.AnchoredWindowBounds(anchor, now, 7*24*time.Hour)
+	return start, end, nil
 }
 
 // ClaudeFailoverTargetModel resolves the configured Claude failover target model.

@@ -665,14 +665,15 @@ func TestAPIKeyPolicyMiddleware_ClaudeUsageLimitFallsBackToGlobalRouting(t *test
 
 func TestAPIKeyPolicyMiddleware_WeeklyBudget(t *testing.T) {
 	gin.SetMode(gin.TestMode)
+	createdAt := time.Now().UTC().Add(-10 * 24 * time.Hour).Format(time.RFC3339)
 	cfg := &config.Config{
 		APIKeyPolicies: []config.APIKeyPolicy{
-			{APIKey: "k", WeeklyBudgetUSD: 400},
+			{APIKey: "k", WeeklyBudgetUSD: 400, CreatedAt: createdAt},
 		},
 	}
 	cfg.SanitizeAPIKeyPolicies()
 
-	reader := stubCostReader{weeklyCost: 400_000_000, priceSource: "saved"}
+	reader := stubCostReader{timeCost: 400_000_000, priceSource: "saved"}
 	var _ billing.DailyCostReader = reader
 
 	r := gin.New()
@@ -733,6 +734,40 @@ func TestAPIKeyPolicyMiddleware_WeeklyBudgetAnchoredWindow(t *testing.T) {
 	}
 }
 
+func TestAPIKeyPolicyMiddleware_WeeklyBudgetRequiresCreatedAtWhenAnchorUnset(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	cfg := &config.Config{
+		APIKeyPolicies: []config.APIKeyPolicy{
+			{APIKey: "k", WeeklyBudgetUSD: 400},
+		},
+	}
+	cfg.SanitizeAPIKeyPolicies()
+
+	reader := stubCostReader{priceSource: "saved"}
+	var _ billing.DailyCostReader = reader
+
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set("apiKey", "k")
+		c.Next()
+	})
+	r.Use(APIKeyPolicyMiddleware(func() *config.Config { return cfg }, nil, reader, nil))
+	r.POST("/v1/chat/completions", func(c *gin.Context) {
+		c.JSON(200, gin.H{"ok": true})
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{"model":"claude-opus-4-5-20251101"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "created_at is required") {
+		t.Fatalf("body=%s, want created_at error", w.Body.String())
+	}
+}
+
 func TestAPIKeyPolicyMiddleware_BudgetedModelRequiresPrice(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	cfg := &config.Config{
@@ -772,6 +807,7 @@ func TestAPIKeyPolicyMiddleware_TokenPackageBypassesDailyAndWeeklyBudgets(t *tes
 		APIKeyPolicies: []config.APIKeyPolicy{
 			{
 				APIKey:                "k",
+				CreatedAt:             startedAt.Add(-24 * time.Hour).Format(time.RFC3339),
 				DailyBudgetUSD:        10,
 				WeeklyBudgetUSD:       20,
 				TokenPackageUSD:       1000,

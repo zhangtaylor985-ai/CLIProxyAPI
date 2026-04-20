@@ -27,6 +27,7 @@ func TestListAPIKeyRecordsIncludesUsageAndBudgets(t *testing.T) {
 		APIKeyPolicies: []config.APIKeyPolicy{
 			{
 				APIKey:                "k1",
+				CreatedAt:             "2026-03-24T00:00:00+08:00",
 				DailyBudgetUSD:        10,
 				WeeklyBudgetUSD:       20,
 				TokenPackageUSD:       30,
@@ -84,6 +85,9 @@ func TestQueryAPIKeyInsightsFiltersInvalidKeys(t *testing.T) {
 
 	handler, cleanup := newAPIKeyRecordsTestHandler(t, &config.Config{
 		SDKConfig: sdkconfig.SDKConfig{APIKeys: []string{"k-valid"}},
+		APIKeyPolicies: []config.APIKeyPolicy{
+			{APIKey: "k-valid", CreatedAt: "2026-03-24T00:00:00+08:00"},
+		},
 	})
 	defer cleanup()
 

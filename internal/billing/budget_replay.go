@@ -26,16 +26,29 @@ func ComputeBudgetReplayState(ctx context.Context, store UsageEventReader, apiKe
 	}
 
 	dayStart, dayEnd := dayBoundsAt(asOf)
-	weekStart, weekEnd := p.WeeklyBudgetBounds(asOf)
 	packageStart, packageEnabled := p.TokenPackageStartTime()
-	weeklyAnchor, anchoredWeeklyBudget := policy.ParseHourlyAnchorRFC3339(p.WeeklyBudgetAnchorAt)
 	packageBudgetMicro := int64(p.TokenPackageUSD*1_000_000 + 0.5)
 	dailyBudgetMicro := int64(p.DailyBudgetUSD*1_000_000 + 0.5)
 	weeklyBudgetMicro := int64(p.WeeklyBudgetUSD*1_000_000 + 0.5)
 
-	startAt := weekStart
-	if dayStart.Before(startAt) {
-		startAt = dayStart
+	weekStart := time.Time{}
+	weekEnd := time.Time{}
+	weeklyAnchor := time.Time{}
+	if weeklyBudgetMicro > 0 {
+		var err error
+		weekStart, weekEnd, err = p.WeeklyBudgetBounds(asOf)
+		if err != nil {
+			return state, err
+		}
+		weeklyAnchor, err = p.WeeklyBudgetAnchorTime()
+		if err != nil {
+			return state, err
+		}
+	}
+
+	startAt := dayStart
+	if !weekStart.IsZero() && weekStart.Before(startAt) {
+		startAt = weekStart
 	}
 	if packageEnabled && packageStart.Before(startAt) {
 		startAt = packageStart
@@ -51,11 +64,11 @@ func ComputeBudgetReplayState(ctx context.Context, store UsageEventReader, apiKe
 	for _, event := range events {
 		ts := time.Unix(event.RequestedAt, 0)
 		dayKey := policy.DayKeyChina(ts)
-		evtWeekStart, _ := p.WeeklyBudgetBounds(ts)
-		if anchoredWeeklyBudget {
-			evtWeekStart, _ = policy.AnchoredWindowBoundsFloor(weeklyAnchor, ts, 7*24*time.Hour)
+		weekKey := int64(0)
+		if weeklyBudgetMicro > 0 {
+			evtWeekStart, _ := policy.AnchoredWindowBoundsFloor(weeklyAnchor, ts, 7*24*time.Hour)
+			weekKey = evtWeekStart.Unix()
 		}
-		weekKey := evtWeekStart.Unix()
 
 		baseCovered := event.CostMicroUSD
 		if packageEnabled && !ts.Before(packageStart) {
@@ -98,7 +111,9 @@ func ComputeBudgetReplayState(ctx context.Context, store UsageEventReader, apiKe
 	}
 
 	state.DailyUsedMicro = dayUsed[policy.DayKeyChina(asOf)]
-	state.WeeklyUsedMicro = weekUsed[weekStart.Unix()]
+	if weeklyBudgetMicro > 0 {
+		state.WeeklyUsedMicro = weekUsed[weekStart.Unix()]
+	}
 	if dailyBudgetMicro > 0 {
 		state.DailyRemainingMicro = dailyBudgetMicro - state.DailyUsedMicro
 		if state.DailyRemainingMicro < 0 {

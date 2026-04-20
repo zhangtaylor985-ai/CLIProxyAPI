@@ -43,6 +43,36 @@ func TestConfig_SanitizeAPIKeyPolicies_NormalizesWeeklyBudgetAnchor(t *testing.T
 	}
 }
 
+func TestAPIKeyPolicy_WeeklyBudgetBoundsUsesCreatedAtWhenAnchorUnset(t *testing.T) {
+	p := &APIKeyPolicy{
+		APIKey:          "k1",
+		WeeklyBudgetUSD: 400,
+		CreatedAt:       "2026-04-09T14:14:57Z",
+	}
+	now := time.Date(2026, 4, 20, 12, 0, 0, 0, time.UTC)
+
+	start, end, err := p.WeeklyBudgetBounds(now)
+	if err != nil {
+		t.Fatalf("WeeklyBudgetBounds: %v", err)
+	}
+	wantStart := time.Date(2026, 4, 16, 14, 14, 57, 0, time.UTC)
+	if !start.Equal(wantStart) {
+		t.Fatalf("start = %s, want %s", start.Format(time.RFC3339), wantStart.Format(time.RFC3339))
+	}
+	if !end.Equal(wantStart.Add(7 * 24 * time.Hour)) {
+		t.Fatalf("end = %s, want %s", end.Format(time.RFC3339), wantStart.Add(7*24*time.Hour).Format(time.RFC3339))
+	}
+}
+
+func TestAPIKeyPolicy_WeeklyBudgetBoundsErrorsWithoutAnchorOrCreatedAt(t *testing.T) {
+	p := &APIKeyPolicy{APIKey: "k1", WeeklyBudgetUSD: 400}
+
+	_, _, err := p.WeeklyBudgetBounds(time.Date(2026, 4, 20, 12, 0, 0, 0, time.UTC))
+	if err == nil {
+		t.Fatal("expected missing created_at error")
+	}
+}
+
 func TestConfig_SanitizeAPIKeyPolicies_ClearsBaseBudgetsWhenGroupBound(t *testing.T) {
 	cfg := &Config{
 		APIKeyPolicies: []APIKeyPolicy{

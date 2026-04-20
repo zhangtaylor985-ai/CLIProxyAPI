@@ -203,10 +203,11 @@ func TestStatsAPIKeyRecords_BatchReturnsBudgets(t *testing.T) {
 		APIKeyPolicies: []config.APIKeyPolicy{
 			{
 				APIKey:          "s-budget",
+				CreatedAt:       "2026-04-01T10:00:00+08:00",
 				DailyBudgetUSD:  10,
 				WeeklyBudgetUSD: 20,
 			},
-			{APIKey: "s-empty"},
+			{APIKey: "s-empty", CreatedAt: "2026-04-01T10:00:00+08:00"},
 		},
 	})
 	defer cleanup()
