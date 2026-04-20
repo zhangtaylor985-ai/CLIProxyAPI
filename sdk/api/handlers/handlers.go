@@ -72,6 +72,7 @@ const (
 	relayProbePinnedMetadataKey = "relay_probe_pinned_auth_id"
 	relayProbeKindCacheKey      = "relayProbeKindCache"
 	relayProbeKindCachedKey     = "relayProbeKindCached"
+	claudeOpus47RewriteLabelKey = "claude_opus_4_7_to_4_6"
 )
 
 type pinnedAuthContextKey struct{}
@@ -440,7 +441,7 @@ func isLowerHexString(value string) bool {
 		return false
 	}
 	for _, r := range value {
-		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') && (r < 'A' || r > 'F') {
 			return false
 		}
 	}
@@ -458,7 +459,7 @@ func looksLikeUUID(value string) bool {
 				return false
 			}
 		default:
-			if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			if (r < '0' || r > '9') && (r < 'a' || r > 'f') && (r < 'A' || r > 'F') {
 				return false
 			}
 		}
@@ -492,8 +493,7 @@ func relayProbeLooksLikeRealClaudeCLI(ctx context.Context, rawJSON []byte) bool 
 	if system.IsArray() {
 		for _, block := range system.Array() {
 			text := block.Get("text").String()
-			if strings.Contains(text, "x-anthropic-billing-header:") ||
-				strings.Contains(text, "Claude Agent SDK") ||
+			if strings.Contains(text, "Claude Agent SDK") ||
 				strings.Contains(text, "\nCWD: ") ||
 				strings.Contains(text, "\nDate: ") {
 				return true
@@ -512,12 +512,34 @@ func relayProbeLooksLikeRealClaudeCLI(ctx context.Context, rawJSON []byte) bool 
 	return false
 }
 
-func matchRelayWebProbeKind(rawJSON []byte) string {
+func relayProbeSystemLooksLikeWebShell(rawJSON []byte) bool {
 	system := gjson.GetBytes(rawJSON, "system")
-	if !system.IsArray() || len(system.Array()) != 1 {
-		return ""
+	if !system.IsArray() {
+		return false
 	}
-	if strings.TrimSpace(system.Array()[0].Get("text").String()) != relayProbeSystemPrompt {
+	items := system.Array()
+	if len(items) == 0 || len(items) > 2 {
+		return false
+	}
+	hasClaudeCodePrompt := false
+	for _, block := range items {
+		text := strings.TrimSpace(block.Get("text").String())
+		switch {
+		case text == relayProbeSystemPrompt:
+			hasClaudeCodePrompt = true
+		case strings.HasPrefix(text, "x-anthropic-billing-header:"):
+			// hvoy/relayAPI's newer web probe prepends a synthetic billing header
+			// before the official Claude Code prompt. Real Claude Code is excluded
+			// earlier by its session header or JSON metadata.user_id.
+		default:
+			return false
+		}
+	}
+	return hasClaudeCodePrompt
+}
+
+func matchRelayWebProbeKind(rawJSON []byte) string {
+	if !relayProbeSystemLooksLikeWebShell(rawJSON) {
 		return ""
 	}
 
@@ -532,18 +554,20 @@ func matchRelayWebProbeKind(rawJSON []byte) string {
 			return ""
 		}
 		blocks, ok := anthropicMessageStrictTextBlocks(items[0])
-		if !ok || len(blocks) == 0 {
-			return ""
-		}
-		if len(blocks) == 1 && blocks[0] == relayProbeStage1Prompt {
-			return "relayapi_stage1"
-		}
-		for _, block := range blocks {
-			if block == relayProbeDetectorPrompt {
-				return "relayapi_detector"
+		if ok && len(blocks) > 0 {
+			if len(blocks) == 1 && blocks[0] == relayProbeStage1Prompt {
+				return "relayapi_stage1"
+			}
+			for _, block := range blocks {
+				if block == relayProbeDetectorPrompt {
+					return "relayapi_detector"
+				}
 			}
 		}
-		return "relayapi_web_like"
+		if len(anthropicMessageTextBlocks(items[0])) > 0 {
+			return "relayapi_web_like"
+		}
+		return ""
 	case 3:
 		if !strings.EqualFold(strings.TrimSpace(items[0].Get("role").String()), "user") ||
 			!strings.EqualFold(strings.TrimSpace(items[1].Get("role").String()), "assistant") ||
@@ -553,13 +577,13 @@ func matchRelayWebProbeKind(rawJSON []byte) string {
 		first, okFirst := anthropicMessageStrictTextBlocks(items[0])
 		_, okAssistant := anthropicMessageStrictTextBlocks(items[1])
 		last, okLast := anthropicMessageStrictTextBlocks(items[2])
-		if !okFirst || !okAssistant || !okLast || len(first) == 0 || len(last) == 0 {
-			return ""
-		}
-		if len(first) == 1 && first[0] == relayProbeStage1Prompt && len(last) == 1 && last[0] == relayProbeStage2Prompt {
+		if okFirst && okAssistant && okLast && len(first) == 1 && first[0] == relayProbeStage1Prompt && len(last) == 1 && last[0] == relayProbeStage2Prompt {
 			return "relayapi_stage2"
 		}
-		return "relayapi_web_like"
+		if len(anthropicMessageTextBlocks(items[0])) > 0 && len(anthropicMessageTextBlocks(items[2])) > 0 {
+			return "relayapi_web_like"
+		}
+		return ""
 	default:
 		return ""
 	}
@@ -594,6 +618,25 @@ func matchRelayDetectorProbeKind(rawJSON []byte) string {
 		}
 	}
 	return "relayapi_detector_py_like"
+}
+
+func relayProbeThinkingShapeAllowed(rawJSON []byte) bool {
+	thinkingType := strings.ToLower(strings.TrimSpace(gjson.GetBytes(rawJSON, "thinking.type").String()))
+	switch thinkingType {
+	case "enabled":
+		budget := gjson.GetBytes(rawJSON, "thinking.budget_tokens")
+		if !budget.Exists() {
+			return true
+		}
+		value := budget.Int()
+		return value > 0 && value <= 65536
+	case "adaptive":
+		return true
+	case "":
+		return strings.EqualFold(strings.TrimSpace(gjson.GetBytes(rawJSON, "output_config.format.type").String()), "json_schema")
+	default:
+		return false
+	}
 }
 
 func detectRelayProbeKind(ctx context.Context, handlerType string, rawJSON []byte) string {
@@ -631,11 +674,7 @@ func detectRelayProbeKind(ctx context.Context, handlerType string, rawJSON []byt
 		setRelayProbeKindContextCache(ctx, kind)
 		return kind
 	}
-	if strings.ToLower(strings.TrimSpace(gjson.GetBytes(rawJSON, "thinking.type").String())) != "enabled" {
-		setRelayProbeKindContextCache(ctx, kind)
-		return kind
-	}
-	if budget := gjson.GetBytes(rawJSON, "thinking.budget_tokens"); budget.Exists() && budget.Int() != 31999 {
+	if !relayProbeThinkingShapeAllowed(rawJSON) {
 		setRelayProbeKindContextCache(ctx, kind)
 		return kind
 	}
@@ -688,6 +727,88 @@ func (h *BaseAPIHandler) resolveClaudeProbeTargetAuthID(model string) string {
 		return ""
 	}
 	return best.authID
+}
+
+func (h *BaseAPIHandler) resolveClaudeOpus47To46AuthID(model string) (string, string) {
+	if _, changed := internalpolicy.RewriteClaudeOpus47To46(model); !changed || h == nil || h.AuthManager == nil {
+		return "", ""
+	}
+
+	type candidate struct {
+		authID    string
+		priority  int
+		rewritten string
+	}
+
+	var (
+		best  candidate
+		found bool
+	)
+	for _, auth := range h.AuthManager.List() {
+		if auth == nil || auth.Disabled || !strings.EqualFold(strings.TrimSpace(auth.Provider), "claude") {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(auth.Attributes["opus_4_7_to_4_6"]), "true") {
+			continue
+		}
+		candidateModel := model
+		if strings.EqualFold(strings.TrimSpace(auth.Attributes["opus_base_only"]), "true") {
+			if baseModel, ok := internalpolicy.RewriteClaudeOpus1MToBase(candidateModel); ok {
+				candidateModel = baseModel
+			}
+		}
+		rewritten, changed := internalpolicy.RewriteClaudeOpus47To46(candidateModel)
+		if !changed {
+			continue
+		}
+		authID := strings.TrimSpace(auth.ID)
+		if authID == "" {
+			continue
+		}
+		priority, _ := strconv.Atoi(strings.TrimSpace(auth.Attributes["priority"]))
+		current := candidate{authID: authID, priority: priority, rewritten: rewritten}
+		if !found || current.priority > best.priority || (current.priority == best.priority && current.authID < best.authID) {
+			best = current
+			found = true
+		}
+	}
+	if !found {
+		return "", ""
+	}
+	return best.authID, best.rewritten
+}
+
+func (h *BaseAPIHandler) applyClaudeOpus47To46Pin(ctx context.Context, handlerType string, rawJSON []byte, routedModel string, metadata map[string]any) (string, []byte, bool) {
+	if h == nil || metadata == nil || !strings.EqualFold(strings.TrimSpace(handlerType), "claude") {
+		return routedModel, rawJSON, false
+	}
+	if existing := strings.TrimSpace(fmt.Sprint(metadata[coreexecutor.PinnedAuthMetadataKey])); existing != "" && existing != "<nil>" {
+		return routedModel, rawJSON, false
+	}
+	authID, rewritten := h.resolveClaudeOpus47To46AuthID(routedModel)
+	if authID == "" || rewritten == "" {
+		return routedModel, rawJSON, false
+	}
+	metadata[coreexecutor.PinnedAuthMetadataKey] = authID
+	metadata[claudeOpus47RewriteLabelKey] = true
+	rawJSON = rewriteModelField(rawJSON, rewritten)
+	clientKey := util.HideAPIKey(clientAPIKeyFromContext(ctx))
+	log.WithFields(log.Fields{
+		"component":      "claude_provider_model_rewrite",
+		"client_api_key": clientKey,
+		"from_model":     strings.TrimSpace(routedModel),
+		"to_model":       strings.TrimSpace(rewritten),
+		"handler_format": handlerType,
+		"pinned_auth_id": authID,
+	}).Info("rewriting Claude Opus 4.7 request to Opus 4.6 for configured provider")
+	return rewritten, rawJSON, true
+}
+
+func forceClaudeProviderForPinnedRewrite(routedModel string, rewriteApplied bool, providers []string, normalizedModel string, errMsg *interfaces.ErrorMessage) ([]string, string, *interfaces.ErrorMessage) {
+	if !rewriteApplied || errMsg == nil {
+		return providers, normalizedModel, errMsg
+	}
+	return []string{"claude"}, routedModel, nil
 }
 
 func (h *BaseAPIHandler) applyRelayProbePin(ctx context.Context, handlerType string, rawJSON []byte, providers []string, model string, metadata map[string]any) string {
@@ -1311,8 +1432,13 @@ func (h *BaseAPIHandler) ExecuteWithAuthManager(ctx context.Context, handlerType
 	if !probeRoutingBypass {
 		routedModel, rawJSON = finalizeClaudeGPTTargetModel(rawJSON, handlerType, originalRequestedModel, routedModel)
 	}
+	claudeProviderRewriteApplied := false
+	if !probeRoutingBypass {
+		routedModel, rawJSON, claudeProviderRewriteApplied = h.applyClaudeOpus47To46Pin(ctx, handlerType, rawJSON, routedModel, reqMeta)
+	}
 
 	providers, normalizedModel, errMsg := h.getRequestDetails(routedModel)
+	providers, normalizedModel, errMsg = forceClaudeProviderForPinnedRewrite(routedModel, claudeProviderRewriteApplied, providers, normalizedModel, errMsg)
 	if originalRequestedModel == "" {
 		originalRequestedModel = normalizedModel
 	}
@@ -1509,8 +1635,13 @@ func (h *BaseAPIHandler) ExecuteCountWithAuthManager(ctx context.Context, handle
 	if !probeRoutingBypass {
 		routedModel, rawJSON = finalizeClaudeGPTTargetModel(rawJSON, handlerType, originalRequestedModel, routedModel)
 	}
+	claudeProviderRewriteApplied := false
+	if !probeRoutingBypass {
+		routedModel, rawJSON, claudeProviderRewriteApplied = h.applyClaudeOpus47To46Pin(ctx, handlerType, rawJSON, routedModel, reqMeta)
+	}
 
 	providers, normalizedModel, errMsg := h.getRequestDetails(routedModel)
+	providers, normalizedModel, errMsg = forceClaudeProviderForPinnedRewrite(routedModel, claudeProviderRewriteApplied, providers, normalizedModel, errMsg)
 	if originalRequestedModel == "" {
 		originalRequestedModel = normalizedModel
 	}
@@ -1695,8 +1826,13 @@ func (h *BaseAPIHandler) ExecuteStreamWithAuthManager(ctx context.Context, handl
 	if !probeRoutingBypass {
 		routedModel, rawJSON = finalizeClaudeGPTTargetModel(rawJSON, handlerType, originalRequestedModel, routedModel)
 	}
+	claudeProviderRewriteApplied := false
+	if !probeRoutingBypass {
+		routedModel, rawJSON, claudeProviderRewriteApplied = h.applyClaudeOpus47To46Pin(ctx, handlerType, rawJSON, routedModel, reqMeta)
+	}
 
 	providers, normalizedModel, errMsg := h.getRequestDetails(routedModel)
+	providers, normalizedModel, errMsg = forceClaudeProviderForPinnedRewrite(routedModel, claudeProviderRewriteApplied, providers, normalizedModel, errMsg)
 	if originalRequestedModel == "" {
 		originalRequestedModel = normalizedModel
 	}

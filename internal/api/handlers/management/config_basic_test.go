@@ -126,7 +126,7 @@ func TestPutClaudeToGPTReasoningEffort_RejectsInvalidValue(t *testing.T) {
 	ctx.Request = httptest.NewRequest(
 		http.MethodPut,
 		"/v0/management/claude-to-gpt-reasoning-effort",
-		bytes.NewBufferString(`{"value":"max"}`),
+		bytes.NewBufferString(`{"value":"invalid-effort"}`),
 	)
 	ctx.Request.Header.Set("Content-Type", "application/json")
 

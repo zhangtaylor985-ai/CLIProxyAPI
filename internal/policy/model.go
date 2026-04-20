@@ -9,6 +9,7 @@ import (
 const (
 	claudeModelPrefix              = "claude-"
 	claudeOpusPrefix               = "claude-opus-"
+	claudeOpus47Prefix             = "claude-opus-4-7"
 	claudeOpus46Prefix             = "claude-opus-4-6"
 	claudeOpus45FallbackPrefix     = "claude-opus-4-5-20251101"
 	claudeOpus1MMarker             = "[1m]"
@@ -26,6 +27,33 @@ const (
 func NormaliseModelKey(model string) string {
 	parsed := thinking.ParseSuffix(strings.TrimSpace(model))
 	return strings.ToLower(strings.TrimSpace(parsed.ModelName))
+}
+
+// RewriteClaudeOpus47To46 rewrites claude-opus-4-7* to claude-opus-4-6*
+// while preserving any suffix segments (e.g., "-thinking", "[1m]") and
+// thinking budget suffix "(...)".
+func RewriteClaudeOpus47To46(model string) (string, bool) {
+	trimmed := strings.TrimSpace(model)
+	if trimmed == "" {
+		return model, false
+	}
+	parsed := thinking.ParseSuffix(trimmed)
+	base := parsed.ModelName
+	baseLower := strings.ToLower(strings.TrimSpace(base))
+	if !strings.HasPrefix(baseLower, claudeOpus47Prefix) {
+		return model, false
+	}
+
+	remainder := ""
+	if len(base) >= len(claudeOpus47Prefix) {
+		remainder = base[len(claudeOpus47Prefix):]
+	}
+
+	rewritten := claudeOpus46Prefix + remainder
+	if parsed.HasSuffix {
+		rewritten = rewritten + "(" + parsed.RawSuffix + ")"
+	}
+	return rewritten, true
 }
 
 // DowngradeClaudeOpus46 rewrites claude-opus-4-6* to claude-opus-4-5-20251101* while preserving
@@ -146,6 +174,8 @@ func EffectiveClaudeGPTTargetBase(value string) string {
 // fall back to the default effort.
 func NormalizeClaudeGPTReasoningEffort(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "minimal":
+		return "minimal"
 	case "low":
 		return "low"
 	case "medium":

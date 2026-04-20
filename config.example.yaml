@@ -244,6 +244,7 @@ nonstream-keepalive-interval: 0
 #   - api-key: "sk-atSM..."
 #     probe-target: true # optional: prefer this upstream when relay probe traffic is detected
 #     prefix: "test" # optional: require calls like "test/claude-sonnet-latest" to target this credential
+#     opus-4-7-to-4-6: true # optional: rewrite claude-opus-4-7* requests to claude-opus-4-6* for this upstream
 #     base-url: "https://www.example.com" # use the custom Claude API endpoint (or set ANTHROPIC_BASE_URL to override globally)
 #     headers:
 #       X-Custom-Header: "custom-value"

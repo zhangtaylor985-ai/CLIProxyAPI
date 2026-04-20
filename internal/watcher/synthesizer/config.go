@@ -111,6 +111,12 @@ func (s *ConfigSynthesizer) synthesizeClaudeKeys(ctx *SynthesisContext) []*corea
 		if ck.ProbeTarget {
 			attrs["probe_target"] = "true"
 		}
+		if ck.OpusBaseOnly {
+			attrs["opus_base_only"] = "true"
+		}
+		if ck.Opus47To46 {
+			attrs["opus_4_7_to_4_6"] = "true"
+		}
 		if ck.Priority != 0 {
 			attrs["priority"] = strconv.Itoa(ck.Priority)
 		}

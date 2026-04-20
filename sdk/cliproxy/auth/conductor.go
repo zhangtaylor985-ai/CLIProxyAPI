@@ -1834,6 +1834,11 @@ func resolveUpstreamModelForClaudeAPIKey(cfg *internalconfig.Config, auth *Auth,
 			normalizedRequested = rewritten
 		}
 	}
+	if entry.Opus47To46 {
+		if rewritten, changed := policy.RewriteClaudeOpus47To46(normalizedRequested); changed {
+			normalizedRequested = rewritten
+		}
+	}
 	if resolved := resolveModelAliasFromConfigModels(normalizedRequested, asModelAliasEntries(entry.Models)); resolved != "" {
 		return resolved
 	}

@@ -262,6 +262,8 @@ func (h *Handler) PatchClaudeKey(c *gin.Context) {
 		BaseURL        *string               `json:"base-url"`
 		ProxyURL       *string               `json:"proxy-url"`
 		OpusBaseOnly   *bool                 `json:"opus-base-only"`
+		Opus47To46     *bool                 `json:"opus-4-7-to-4-6"`
+		ProbeTarget    *bool                 `json:"probe-target"`
 		Models         *[]config.ClaudeModel `json:"models"`
 		Headers        *map[string]string    `json:"headers"`
 		ExcludedModels *[]string             `json:"excluded-models"`
@@ -308,6 +310,12 @@ func (h *Handler) PatchClaudeKey(c *gin.Context) {
 	}
 	if body.Value.OpusBaseOnly != nil {
 		entry.OpusBaseOnly = *body.Value.OpusBaseOnly
+	}
+	if body.Value.Opus47To46 != nil {
+		entry.Opus47To46 = *body.Value.Opus47To46
+	}
+	if body.Value.ProbeTarget != nil {
+		entry.ProbeTarget = *body.Value.ProbeTarget
 	}
 	if body.Value.Models != nil {
 		entry.Models = append([]config.ClaudeModel(nil), (*body.Value.Models)...)

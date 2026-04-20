@@ -377,6 +377,9 @@ type ClaudeKey struct {
 	// the context-1m beta signal is stripped before reaching upstream.
 	OpusBaseOnly bool `yaml:"opus-base-only,omitempty" json:"opus-base-only,omitempty"`
 
+	// Opus47To46 rewrites Claude Opus 4.7 requests to Claude Opus 4.6 for this provider.
+	Opus47To46 bool `yaml:"opus-4-7-to-4-6,omitempty" json:"opus-4-7-to-4-6,omitempty"`
+
 	// Prefix optionally namespaces models for this credential (e.g., "teamA/claude-sonnet-4").
 	Prefix string `yaml:"prefix,omitempty" json:"prefix,omitempty"`
 

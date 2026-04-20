@@ -42,7 +42,7 @@ type SDKConfig struct {
 
 	// ClaudeToGPTReasoningEffort controls the default reasoning effort used by the
 	// synthesized global Claude -> GPT routing/failover rules.
-	// Supported values: "low", "medium", "high".
+	// Supported values: "minimal", "low", "medium", "high", "xhigh", and "max".
 	// When unset, the server defaults to "high".
 	ClaudeToGPTReasoningEffort string `yaml:"claude-to-gpt-reasoning-effort,omitempty" json:"claude-to-gpt-reasoning-effort,omitempty"`
 

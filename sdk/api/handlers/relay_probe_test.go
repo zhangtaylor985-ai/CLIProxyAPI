@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/interfaces"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 	coreexecutor "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/executor"
 	sdkconfig "github.com/router-for-me/CLIProxyAPI/v6/sdk/config"
@@ -132,6 +133,81 @@ func TestDetectRelayProbeKind(t *testing.T) {
 	}
 }
 
+func TestDetectRelayProbeKindMatchesCurrentHvoyWebShell(t *testing.T) {
+	ctx := relayProbeTestContext(t, "/v1/messages", map[string]string{
+		"User-Agent":     "claude-cli/2.1.102 (external, cli)",
+		"Anthropic-Beta": "oauth-2025-04-20,interleaved-thinking-2025-05-14",
+	})
+	currentHvoyUserID := "user_Dee961Afd1Ab3cDbE39DB9b546Cea1eAE9A4B9D32daBF58EF4A99Ffdf223BaB3_account__session_7e8b412e-ea28-4035-ab99-1c75c32f9c74"
+	system := []map[string]any{
+		{"type": "text", "text": "x-anthropic-billing-header: cc_version=2.1.104.e19; cc_entrypoint=cli; cch=00000;"},
+		{"type": "text", "text": relayProbeSystemPrompt, "cache_control": map[string]any{"type": "ephemeral"}},
+	}
+
+	enabledBudget := relayProbePayloadWithOverrides(t, map[string]any{
+		"model": "claude-opus-4-6",
+		"messages": []map[string]any{
+			anthropicTextMessage("user", "请回答下面的近期知识题。\n只输出 4 行。"),
+		},
+		"metadata":   map[string]any{"user_id": currentHvoyUserID},
+		"system":     system,
+		"max_tokens": 10240,
+		"stream":     true,
+		"tools":      []any{},
+		"thinking": map[string]any{
+			"type":          "enabled",
+			"budget_tokens": 4096,
+		},
+	})
+	if got := detectRelayProbeKind(ctx, "claude", enabledBudget); got != "relayapi_web_like" {
+		t.Fatalf("detectRelayProbeKind(enabledBudget) = %q, want %q", got, "relayapi_web_like")
+	}
+
+	adaptiveWithDocument := relayProbePayloadWithOverrides(t, map[string]any{
+		"model": "claude-opus-4-6",
+		"messages": []map[string]any{
+			{
+				"role": "user",
+				"content": []map[string]any{
+					{"type": "document", "source": map[string]any{"type": "base64", "media_type": "application/pdf", "data": "JVBERi0xLjQ="}},
+					{"type": "text", "text": "Read the PDF and output the hidden marker."},
+				},
+			},
+		},
+		"metadata":      map[string]any{"user_id": currentHvoyUserID},
+		"system":        system,
+		"max_tokens":    10240,
+		"stream":        true,
+		"tools":         []any{},
+		"thinking":      map[string]any{"type": "adaptive", "display": "summarized"},
+		"output_config": map[string]any{"effort": "medium"},
+	})
+	if got := detectRelayProbeKind(ctx, "claude", adaptiveWithDocument); got != "relayapi_web_like" {
+		t.Fatalf("detectRelayProbeKind(adaptiveWithDocument) = %q, want %q", got, "relayapi_web_like")
+	}
+
+	omitThinkingJSONSchema := relayProbePayloadWithOverrides(t, map[string]any{
+		"model": "claude-opus-4-6",
+		"messages": []map[string]any{
+			anthropicTextMessage("user", "Return JSON with a numeric result."),
+		},
+		"metadata":   map[string]any{"user_id": currentHvoyUserID},
+		"system":     system,
+		"max_tokens": 10240,
+		"stream":     true,
+		"tools":      []any{},
+		"output_config": map[string]any{
+			"format": map[string]any{
+				"type":   "json_schema",
+				"schema": map[string]any{"type": "object"},
+			},
+		},
+	})
+	if got := detectRelayProbeKind(ctx, "claude", omitThinkingJSONSchema); got != "relayapi_web_like" {
+		t.Fatalf("detectRelayProbeKind(omitThinkingJSONSchema) = %q, want %q", got, "relayapi_web_like")
+	}
+}
+
 func TestDetectRelayProbeKindSkipsRealClaudeCLI(t *testing.T) {
 	ctx := relayProbeTestContext(t, "/v1/messages", map[string]string{
 		"User-Agent":               "claude-cli/2.1.109 (external, sdk-cli)",
@@ -244,5 +320,76 @@ func TestApplyRelayProbePin(t *testing.T) {
 	}
 	if meta[relayProbePinnedMetadataKey] != "claude-probe" {
 		t.Fatalf("relayProbePinnedMetadataKey = %v, want %q", meta[relayProbePinnedMetadataKey], "claude-probe")
+	}
+}
+
+func TestApplyClaudeOpus47To46PinUsesProviderBaseOnlyRewrite(t *testing.T) {
+	manager := coreauth.NewManager(nil, nil, nil)
+	if _, err := manager.Register(context.Background(), &coreauth.Auth{
+		ID:       "claude-opus",
+		Provider: "claude",
+		Attributes: map[string]string{
+			"api_key":         "opus-key",
+			"base_url":        "https://api.anthropic.com",
+			"opus_base_only":  "true",
+			"opus_4_7_to_4_6": "true",
+			"priority":        "10",
+		},
+	}); err != nil {
+		t.Fatalf("Register(opus) error = %v", err)
+	}
+
+	handler := &BaseAPIHandler{
+		AuthManager: manager,
+		Cfg:         &sdkconfig.SDKConfig{},
+	}
+	raw := relayProbePayloadWithOverrides(t, map[string]any{
+		"model":      "claude-opus-4-7[1m](8192)",
+		"max_tokens": 8,
+		"messages": []map[string]any{
+			anthropicTextMessage("user", "reply ok"),
+		},
+	})
+	meta := map[string]any{}
+
+	routedModel, rewrittenJSON, applied := handler.applyClaudeOpus47To46Pin(context.Background(), "claude", raw, "claude-opus-4-7[1m](8192)", meta)
+	if !applied {
+		t.Fatalf("applyClaudeOpus47To46Pin() applied = false, want true")
+	}
+	if routedModel != "claude-opus-4-6(8192)" {
+		t.Fatalf("routedModel = %q, want %q", routedModel, "claude-opus-4-6(8192)")
+	}
+	if meta[coreexecutor.PinnedAuthMetadataKey] != "claude-opus" {
+		t.Fatalf("PinnedAuthMetadataKey = %v, want %q", meta[coreexecutor.PinnedAuthMetadataKey], "claude-opus")
+	}
+	if meta[claudeOpus47RewriteLabelKey] != true {
+		t.Fatalf("claudeOpus47RewriteLabelKey = %v, want true", meta[claudeOpus47RewriteLabelKey])
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(rewrittenJSON, &payload); err != nil {
+		t.Fatalf("json.Unmarshal(rewrittenJSON) error = %v", err)
+	}
+	if payload["model"] != "claude-opus-4-6(8192)" {
+		t.Fatalf("rewritten payload model = %v, want %q", payload["model"], "claude-opus-4-6(8192)")
+	}
+}
+
+func TestForceClaudeProviderForPinnedRewrite(t *testing.T) {
+	providers, normalizedModel, errMsg := forceClaudeProviderForPinnedRewrite(
+		"claude-opus-4-6(8192)",
+		true,
+		nil,
+		"",
+		&interfaces.ErrorMessage{StatusCode: 502},
+	)
+	if errMsg != nil {
+		t.Fatalf("errMsg = %v, want nil", errMsg)
+	}
+	if len(providers) != 1 || providers[0] != "claude" {
+		t.Fatalf("providers = %#v, want [claude]", providers)
+	}
+	if normalizedModel != "claude-opus-4-6(8192)" {
+		t.Fatalf("normalizedModel = %q, want %q", normalizedModel, "claude-opus-4-6(8192)")
 	}
 }
