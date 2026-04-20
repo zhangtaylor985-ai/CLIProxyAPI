@@ -1,7 +1,9 @@
 import importlib.util
+import os
 import pathlib
 import subprocess
 import sys
+import tempfile
 import unittest
 from unittest import mock
 
@@ -39,6 +41,47 @@ class FakeProc:
 
 
 class SessionTrajectoryArchiveTests(unittest.TestCase):
+    def test_resolve_dsn_prefers_session_env_then_shared_fallback(self):
+        mod = load_module()
+        with mock.patch.dict(os.environ, {
+            "SESSION_TRAJECTORY_PG_DSN": "postgres://session",
+            "APIKEY_POLICY_PG_DSN": "postgres://policy",
+        }, clear=True):
+            dsn, key = mod.resolve_dsn("SESSION_TRAJECTORY_PG_DSN")
+            self.assertEqual(dsn, "postgres://session")
+            self.assertEqual(key, "SESSION_TRAJECTORY_PG_DSN")
+
+        with mock.patch.dict(os.environ, {
+            "APIKEY_POLICY_PG_DSN": "postgres://policy",
+        }, clear=True):
+            dsn, key = mod.resolve_dsn("SESSION_TRAJECTORY_PG_DSN")
+            self.assertEqual(dsn, "postgres://policy")
+            self.assertEqual(key, "APIKEY_POLICY_PG_DSN")
+
+    def test_cleanup_incomplete_exports_removes_existing_files(self):
+        mod = load_module()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = pathlib.Path(tmpdir)
+            sessions = root / "session_trajectory_sessions.jsonl.gz"
+            requests = root / "session_trajectory_requests.jsonl.gz"
+            session_temps = mod.export_temp_paths(sessions)
+            sessions.write_bytes(b"abc")
+            requests.write_bytes(b"def")
+            session_temps["plain"].write_text("stale\n", encoding="utf-8")
+            session_temps["gzip"].write_bytes(b"tmp")
+            removed = mod.cleanup_incomplete_exports(
+                export_paths={
+                    "sessions": sessions,
+                    "requests": requests,
+                    "aliases": root / "missing.gz",
+                }
+            )
+            self.assertEqual(sorted(removed), ["requests", "sessions"])
+            self.assertFalse(sessions.exists())
+            self.assertFalse(requests.exists())
+            self.assertFalse(session_temps["plain"].exists())
+            self.assertFalse(session_temps["gzip"].exists())
+
     def test_vacuum_table_returns_ok_on_success(self):
         mod = load_module()
         proc = FakeProc(returncode=0)

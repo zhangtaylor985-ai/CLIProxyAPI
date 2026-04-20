@@ -10,6 +10,12 @@
 - 黑盒测试若需管理端用户名密码，直接读取当前仓库 `.env` 中的 `MANAGEMENT_TEST_ADMIN_*` / `MANAGEMENT_TEST_STAFF_*`；不要自行改数据库密码。
 - 涉及 PG 新表 / 新索引 / 新 schema 变更时，除了运行时兜底初始化，还应补显式 migration 入口到 `scripts/`，上线步骤默认先执行 migration，再重启服务。
 
+# Git 工作流
+
+- push 到 `main` 前，必须先 `git fetch origin main` 并确认本地是否落后；如落后，先在最新 `origin/main` 基底上 rebase / pull 并完成必要测试，再 push。
+- 当前仓库经常存在未提交和未跟踪的并行工作；push / pull / rebase 前必须保护现场，可用 `git stash push -u` 或临时 worktree。只 stage 本次任务相关文件，不要覆盖、删除、丢弃或顺手提交无关改动。
+- 若 `stash apply` 因远端新增同名文件导致 untracked 文件无法恢复，必须逐个比较 stash 内容与当前文件；确认内容一致后才可删除临时 stash，否则保留 stash 并向用户说明冲突文件。
+
 # 部署与 systemd
 
 - 当前这套 `/home/azureuser/cliapp/CLIProxyAPI` 线上服务由 systemd 管理，unit 名称是 `cliproxyapi.service`。

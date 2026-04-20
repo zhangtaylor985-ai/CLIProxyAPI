@@ -73,6 +73,8 @@ def build_handoff_record(*, run_state: dict[str, Any], manifest: dict[str, Any],
             "archive_counts": run_state.get("counts", {}),
             "archive_candidate_sessions": run_state.get("cursor", {}).get("candidate_sessions"),
             "archive_candidate_file": run_state.get("cursor", {}).get("candidate_file"),
+            "archive_min_last_activity_at": run_state.get("cursor", {}).get("min_last_activity_at"),
+            "archive_max_last_activity_at": run_state.get("cursor", {}).get("max_last_activity_at"),
             "archive_vacuum": run_state.get("vacuum", {}),
             "archive_warnings": run_state.get("warnings", []),
         },
@@ -161,6 +163,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--import-work-dir", type=pathlib.Path, help="fixed work dir used by import_session_trajectory_archive.py")
     parser.add_argument("--keep-import-work-dir", action="store_true", help="preserve import work dir for inspection")
     parser.add_argument("--force-rerun", action="store_true", help="rerun import/export even if this run_id already has a completed handoff record")
+    parser.add_argument("--require-storage-prefix", default="", help="optional storage prefix guard forwarded to import_session_trajectory_archive.py")
     return parser.parse_args(argv)
 
 
@@ -265,9 +268,9 @@ def main(argv: list[str]) -> int:
             "--pg-dsn",
             args.pg_dsn,
             "--truncate-target",
-            "--require-storage-prefix",
-            "/Volumes/Storage",
         ]
+        if args.require_storage_prefix:
+            import_cmd.extend(["--require-storage-prefix", args.require_storage_prefix])
         if args.skip_request_exports:
             import_cmd.append("--skip-request-exports")
         if args.start_time:

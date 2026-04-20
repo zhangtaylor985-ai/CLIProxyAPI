@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import fcntl
 import gzip
 import json
 import os
@@ -34,6 +35,13 @@ PHASES = [
     "vacuumed",
     "completed",
 ]
+
+DEFAULT_DSN_ENV_KEYS = (
+    "SESSION_TRAJECTORY_PG_DSN",
+    "APIKEY_POLICY_PG_DSN",
+    "APIKEY_BILLING_PG_DSN",
+    "PGSTORE_DSN",
+)
 
 
 def utc_now() -> datetime:
@@ -162,8 +170,13 @@ def count_gzip_text_rows(path: pathlib.Path) -> int:
         return sum(1 for _ in handle)
 
 
-def gzip_file(path: pathlib.Path, *, remove_source: bool = True) -> pathlib.Path:
-    gz_path = path.with_suffix(path.suffix + ".gz")
+def gzip_file(
+    path: pathlib.Path,
+    *,
+    output_path: pathlib.Path | None = None,
+    remove_source: bool = True,
+) -> pathlib.Path:
+    gz_path = output_path or path.with_suffix(path.suffix + ".gz")
     with path.open("rb") as src, gzip.open(gz_path, "wb") as dst:
         shutil.copyfileobj(src, dst)
     if remove_source:
@@ -178,6 +191,85 @@ def build_run_id(now: datetime) -> str:
 def require_binary(name: str) -> None:
     if shutil.which(name) is None:
         raise SystemExit(f"required binary not found in PATH: {name}")
+
+
+def resolve_dsn(env_key: str) -> tuple[str, str]:
+    preferred = env_key.strip()
+    keys: list[str] = []
+    if preferred:
+        keys.append(preferred)
+    for key in DEFAULT_DSN_ENV_KEYS:
+        if key not in keys:
+            keys.append(key)
+    for key in keys:
+        value = os.environ.get(key, "").strip()
+        if value:
+            return value, key
+    raise SystemExit(
+        "session trajectory PostgreSQL DSN is required; set one of: "
+        + ", ".join(keys)
+    )
+
+
+class RunLock:
+    def __init__(self, path: pathlib.Path) -> None:
+        self.path = path
+        self.handle: Any | None = None
+
+    def __enter__(self) -> "RunLock":
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.handle = self.path.open("a+", encoding="utf-8")
+        waiting_logged = False
+        while True:
+            try:
+                fcntl.flock(self.handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                self.handle.seek(0)
+                self.handle.truncate()
+                self.handle.write(f"pid={os.getpid()} acquired_at={datetime.now(timezone.utc).isoformat()}\n")
+                self.handle.flush()
+                return self
+            except BlockingIOError:
+                if not waiting_logged:
+                    print(f"[wait] run lock busy {self.path}; waiting for existing archive run to finish", flush=True)
+                    waiting_logged = True
+                time.sleep(5)
+
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        if self.handle is None:
+            return
+        try:
+            self.handle.seek(0)
+            self.handle.truncate()
+            self.handle.flush()
+            fcntl.flock(self.handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            self.handle.close()
+            self.handle = None
+
+
+def export_temp_paths(output_file: pathlib.Path) -> dict[str, pathlib.Path]:
+    if output_file.name.endswith(".gz"):
+        plain_name = output_file.name[:-3]
+    else:
+        plain_name = output_file.name + ".plain"
+    return {
+        "plain": output_file.with_name(f".{plain_name}.tmp"),
+        "gzip": output_file.with_name(f".{output_file.name}.tmp"),
+    }
+
+
+def cleanup_incomplete_exports(*, export_paths: dict[str, pathlib.Path]) -> list[str]:
+    removed: list[str] = []
+    for key, path in export_paths.items():
+        removed_any = False
+        for candidate in (path, *export_temp_paths(path).values()):
+            if not candidate.exists():
+                continue
+            candidate.unlink()
+            removed_any = True
+        if removed_any:
+            removed.append(key)
+    return removed
 
 
 def run_command(cmd: list[str], *, input_text: str | None = None) -> str:
@@ -232,6 +324,55 @@ def export_candidate_sessions(dsn: str, state: RunState, candidate_file: pathlib
     return count
 
 
+def prune_reactivated_candidates(dsn: str, state: RunState, candidate_file: pathlib.Path) -> dict[str, Any]:
+    schema = quote_ident(state.schema)
+    file_literal = quote_literal(str(candidate_file))
+    temp_candidate = candidate_file.with_name(f".{candidate_file.name}.tmp")
+    temp_literal = quote_literal(str(temp_candidate))
+    cutoff_literal = quote_literal(state.cutoff_at.isoformat())
+    retained_query = one_line_sql(
+        f"""
+        SELECT s.id,
+               to_char(s.last_activity_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+        FROM {schema}.session_trajectory_sessions s
+        JOIN archive_sessions a ON a.session_id = s.id
+        WHERE s.last_activity_at < {cutoff_literal}::timestamptz
+        ORDER BY s.last_activity_at ASC, s.id ASC
+        """
+    )
+    script = f"""
+\\pset tuples_only on
+\\pset format unaligned
+\\f '\\t'
+CREATE TEMP TABLE archive_sessions (
+  session_id uuid PRIMARY KEY,
+  last_activity_at timestamptz NOT NULL
+);
+\\copy archive_sessions (session_id, last_activity_at) FROM {file_literal} WITH (FORMAT csv)
+\\copy ({retained_query}) TO {temp_literal} WITH (FORMAT csv)
+SELECT
+  (SELECT count(*) FROM archive_sessions),
+  (SELECT count(*) FROM {schema}.session_trajectory_sessions s JOIN archive_sessions a ON a.session_id = s.id WHERE s.last_activity_at < {cutoff_literal}::timestamptz),
+  (SELECT count(*) FROM {schema}.session_trajectory_sessions s JOIN archive_sessions a ON a.session_id = s.id WHERE s.last_activity_at >= {cutoff_literal}::timestamptz),
+  COALESCE((SELECT to_char(max(s.last_activity_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') FROM {schema}.session_trajectory_sessions s JOIN archive_sessions a ON a.session_id = s.id WHERE s.last_activity_at < {cutoff_literal}::timestamptz), ''),
+  COALESCE((SELECT to_char(min(s.last_activity_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') FROM {schema}.session_trajectory_sessions s JOIN archive_sessions a ON a.session_id = s.id WHERE s.last_activity_at < {cutoff_literal}::timestamptz), '');
+"""
+    try:
+        line = run_psql_script(dsn, script).strip().splitlines()[-1]
+        original_count, retained_count, pruned_count, max_ts, min_ts = line.split("\t")
+        temp_candidate.replace(candidate_file)
+        return {
+            "original_sessions": int(original_count),
+            "candidate_sessions": int(retained_count),
+            "pruned_sessions": int(pruned_count),
+            "max_last_activity_at": max_ts,
+            "min_last_activity_at": min_ts,
+        }
+    finally:
+        if temp_candidate.exists():
+            temp_candidate.unlink()
+
+
 def query_target_counts(dsn: str, state: RunState, candidate_file: pathlib.Path) -> dict[str, int]:
     schema = quote_ident(state.schema)
     file_literal = quote_literal(str(candidate_file))
@@ -272,6 +413,8 @@ def export_table_to_csv(
     query: str,
 ) -> int:
     file_literal = quote_literal(str(candidate_file))
+    temp_paths = export_temp_paths(output_file)
+    plain_output_literal = quote_literal(str(temp_paths["plain"]))
     flat_query = one_line_sql(query)
     script = f"""
 CREATE TEMP TABLE archive_sessions (
@@ -279,26 +422,22 @@ CREATE TEMP TABLE archive_sessions (
   last_activity_at timestamptz NOT NULL
 );
 \\copy archive_sessions (session_id, last_activity_at) FROM {file_literal} WITH (FORMAT csv)
-COPY (SELECT row_to_json(row_payload)::text FROM ({flat_query}) AS row_payload) TO STDOUT;
+\\copy (SELECT row_to_json(row_payload)::text FROM ({flat_query}) AS row_payload) TO {plain_output_literal}
 """
-    cmd = psql_base_cmd(dsn) + ["-At", "-f", "-"]
-    with gzip.open(output_file, "wb") as gz_handle:
-        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        assert proc.stdin is not None
-        assert proc.stdout is not None
-        proc.stdin.write(script.encode("utf-8"))
-        proc.stdin.close()
-        shutil.copyfileobj(proc.stdout, gz_handle)
-        proc.stdout.close()
-        stderr = proc.stderr.read().decode("utf-8", errors="replace") if proc.stderr is not None else ""
-        return_code = proc.wait()
-    if return_code != 0:
-        raise RuntimeError(
-            "command failed\n"
-            f"cmd: {' '.join(cmd)}\n"
-            f"stderr:\n{stderr}"
-        )
-    return count_gzip_text_rows(output_file)
+    for temp_path in temp_paths.values():
+        if temp_path.exists():
+            temp_path.unlink()
+    try:
+        run_psql_script(dsn, script)
+        row_count = count_plain_rows(temp_paths["plain"])
+        gzip_file(temp_paths["plain"], output_path=temp_paths["gzip"], remove_source=True)
+        temp_paths["gzip"].replace(output_file)
+        return row_count
+    except Exception:
+        for temp_path in temp_paths.values():
+            if temp_path.exists():
+                temp_path.unlink()
+        raise
 
 
 def delete_batch(
@@ -482,7 +621,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="root directory for local exports and state files",
     )
     parser.add_argument("--run-id", help="resume an existing run by run id")
-    parser.add_argument("--dsn-env", default="APIKEY_POLICY_PG_DSN", help="environment variable holding the PostgreSQL DSN")
+    parser.add_argument(
+        "--dsn-env",
+        default="SESSION_TRAJECTORY_PG_DSN",
+        help="preferred environment variable holding the PostgreSQL DSN",
+    )
     parser.add_argument("--skip-vacuum", action="store_true", help="skip VACUUM (ANALYZE) after deletion")
     parser.add_argument(
         "--vacuum-timeout-seconds",
@@ -496,9 +639,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
     require_binary("psql")
-    dsn = os.environ.get(args.dsn_env, "").strip()
-    if not dsn:
-        raise SystemExit(f"environment variable {args.dsn_env} is required")
+    dsn, resolved_dsn_env = resolve_dsn(args.dsn_env)
 
     state, state_path = resolve_state(args)
     state.output_dir.mkdir(parents=True, exist_ok=True)
@@ -515,7 +656,8 @@ def main(argv: list[str]) -> int:
     schema = quote_ident(state.schema)
 
     print(
-        f"[start] run_id={state.run_id} schema={state.schema} cutoff_at={format_dt(state.cutoff_at)} output_dir={state.output_dir}",
+        f"[start] run_id={state.run_id} schema={state.schema} cutoff_at={format_dt(state.cutoff_at)} "
+        f"output_dir={state.output_dir} dsn_env={resolved_dsn_env}",
         flush=True,
     )
 
@@ -547,70 +689,116 @@ def main(argv: list[str]) -> int:
             flush=True,
         )
 
-    if not phase_at_least(state.phase, "exported"):
-        exported_counts = {
-            "sessions": export_table_to_csv(
-                dsn,
-                candidate_file=candidate_file,
-                output_file=export_paths["sessions"],
-                query=f"""
+    run_lock_path = state.output_dir / ".run.lock"
+    with RunLock(run_lock_path):
+        if not phase_at_least(state.phase, "exported"):
+            candidate_refresh = prune_reactivated_candidates(dsn, state, candidate_file)
+            if candidate_refresh["pruned_sessions"] > 0:
+                append_warning(
+                    state,
+                    code="reactivated_candidates_pruned",
+                    message="Reactivated sessions were removed from this archive run before export",
+                    detail=(
+                        f"run_id={state.run_id} pruned_sessions={candidate_refresh['pruned_sessions']} "
+                        f"retained_sessions={candidate_refresh['candidate_sessions']}"
+                    ),
+                )
+                print(
+                    "[warn] pruned reactivated candidate sessions before export: "
+                    f"{candidate_refresh['pruned_sessions']}",
+                    flush=True,
+                )
+            state.cursor["candidate_sessions"] = candidate_refresh["candidate_sessions"]
+            state.cursor["min_last_activity_at"] = candidate_refresh["min_last_activity_at"]
+            state.cursor["max_last_activity_at"] = candidate_refresh["max_last_activity_at"]
+            if candidate_refresh["candidate_sessions"] == 0:
+                state.counts = {"sessions": 0, "aliases": 0, "requests": 0, "request_exports": 0}
+                state.vacuum = {"summary": "skipped", "tables": {}, "results": []}
+                state.phase = "completed"
+                finalize_completion(state)
+                state.updated_at = utc_now()
+                write_run_state(state_path, state)
+                write_latest_completed(args.output_root.resolve(), state)
+                print("[done] no eligible sessions remained after revalidation", flush=True)
+                return 0
+            counts = query_target_counts(dsn, state, candidate_file)
+            state.counts.update({k: int(v) for k, v in counts.items() if k in {"sessions", "aliases", "requests", "request_exports"}})
+            state.cursor["min_last_activity_at"] = counts["min_last_activity_at"]
+            state.cursor["max_last_activity_at"] = counts["max_last_activity_at"]
+            state.updated_at = utc_now()
+            write_run_state(state_path, state)
+            removed_exports = cleanup_incomplete_exports(export_paths=export_paths)
+            if removed_exports:
+                print(
+                    "[progress] removed incomplete exports before retry: "
+                    + ", ".join(sorted(removed_exports)),
+                    flush=True,
+                )
+            exported_counts = {
+                "sessions": export_table_to_csv(
+                    dsn,
+                    candidate_file=candidate_file,
+                    output_file=export_paths["sessions"],
+                    query=f"""
   SELECT s.*
   FROM {schema}.session_trajectory_sessions s
   JOIN archive_sessions a ON a.session_id = s.id
   ORDER BY s.last_activity_at ASC, s.id ASC
 """.strip(),
-            ),
-            "aliases": export_table_to_csv(
-                dsn,
-                candidate_file=candidate_file,
-                output_file=export_paths["aliases"],
-                query=f"""
+                ),
+                "aliases": export_table_to_csv(
+                    dsn,
+                    candidate_file=candidate_file,
+                    output_file=export_paths["aliases"],
+                    query=f"""
   SELECT sa.*
   FROM {schema}.session_trajectory_session_aliases sa
   JOIN archive_sessions a ON a.session_id = sa.session_id
   ORDER BY sa.session_id ASC, sa.provider_session_id ASC
 """.strip(),
-            ),
-            "requests": export_table_to_csv(
-                dsn,
-                candidate_file=candidate_file,
-                output_file=export_paths["requests"],
-                query=f"""
+                ),
+                "requests": export_table_to_csv(
+                    dsn,
+                    candidate_file=candidate_file,
+                    output_file=export_paths["requests"],
+                    query=f"""
   SELECT r.*
   FROM {schema}.session_trajectory_requests r
   JOIN archive_sessions a ON a.session_id = r.session_id
   ORDER BY r.session_id ASC, r.request_index ASC
 """.strip(),
-            ),
-            "request_exports": export_table_to_csv(
-                dsn,
-                candidate_file=candidate_file,
-                output_file=export_paths["request_exports"],
-                query=f"""
+                ),
+                "request_exports": export_table_to_csv(
+                    dsn,
+                    candidate_file=candidate_file,
+                    output_file=export_paths["request_exports"],
+                    query=f"""
   SELECT e.*
   FROM {schema}.session_trajectory_request_exports e
   JOIN archive_sessions a ON a.session_id = e.session_id
   ORDER BY e.session_id ASC, e.export_index ASC, e.request_id ASC
 """.strip(),
-            ),
-        }
-        for key, expected in state.counts.items():
-            if key not in exported_counts:
-                continue
-            if exported_counts[key] != expected:
-                raise RuntimeError(f"exported row mismatch for {key}: expected {expected}, got {exported_counts[key]}")
-        for key, path in export_paths.items():
-            state.files[key] = str(path)
-        state.phase = "exported"
-        state.updated_at = utc_now()
-        write_run_state(state_path, state)
-        print("[progress] exports finished and verified", flush=True)
+                ),
+            }
+            for key, expected in state.counts.items():
+                if key not in exported_counts:
+                    continue
+                if exported_counts[key] != expected:
+                    raise RuntimeError(f"exported row mismatch for {key}: expected {expected}, got {exported_counts[key]}")
+            for key, path in export_paths.items():
+                state.files[key] = str(path)
+            state.phase = "exported"
+            state.updated_at = utc_now()
+            write_run_state(state_path, state)
+            print("[progress] exports finished and verified", flush=True)
 
-    request_exports_sql = lambda: f"""
+        request_exports_sql = lambda: f"""
 WITH doomed AS (
   SELECT e.request_id
   FROM {schema}.session_trajectory_request_exports e
   JOIN archive_sessions a ON a.session_id = e.session_id
+  JOIN {schema}.session_trajectory_sessions s ON s.id = e.session_id
+  WHERE s.last_activity_at < {quote_literal(state.cutoff_at.isoformat())}::timestamptz
   LIMIT {args.batch_size}
 ),
 deleted AS (
@@ -622,11 +810,13 @@ deleted AS (
 SELECT count(*) FROM deleted;
 """.strip()
 
-    requests_sql = lambda: f"""
+        requests_sql = lambda: f"""
 WITH doomed AS (
   SELECT r.id
   FROM {schema}.session_trajectory_requests r
   JOIN archive_sessions a ON a.session_id = r.session_id
+  JOIN {schema}.session_trajectory_sessions s ON s.id = r.session_id
+  WHERE s.last_activity_at < {quote_literal(state.cutoff_at.isoformat())}::timestamptz
   LIMIT {args.batch_size}
 ),
 deleted AS (
@@ -638,11 +828,13 @@ deleted AS (
 SELECT count(*) FROM deleted;
 """.strip()
 
-    aliases_sql = lambda: f"""
+        aliases_sql = lambda: f"""
 WITH doomed AS (
   SELECT sa.ctid
   FROM {schema}.session_trajectory_session_aliases sa
   JOIN archive_sessions a ON a.session_id = sa.session_id
+  JOIN {schema}.session_trajectory_sessions s ON s.id = sa.session_id
+  WHERE s.last_activity_at < {quote_literal(state.cutoff_at.isoformat())}::timestamptz
   LIMIT {args.batch_size}
 ),
 deleted AS (
@@ -654,11 +846,12 @@ deleted AS (
 SELECT count(*) FROM deleted;
 """.strip()
 
-    sessions_sql = lambda: f"""
+        sessions_sql = lambda: f"""
 WITH doomed AS (
   SELECT s.id
   FROM {schema}.session_trajectory_sessions s
   JOIN archive_sessions a ON a.session_id = s.id
+  WHERE s.last_activity_at < {quote_literal(state.cutoff_at.isoformat())}::timestamptz
   LIMIT {args.batch_size}
 ),
 deleted AS (
@@ -670,124 +863,124 @@ deleted AS (
 SELECT count(*) FROM deleted;
 """.strip()
 
-    if not phase_at_least(state.phase, "request_exports_deleted"):
-        total = delete_in_batches(
-            dsn,
-            state=state,
-            state_path=state_path,
-            candidate_file=candidate_file,
-            stage_name="request_exports",
-            sql_factory=request_exports_sql,
-        )
-        state.phase = "request_exports_deleted"
-        state.deleted["request_exports"] = total
-        state.updated_at = utc_now()
-        write_run_state(state_path, state)
-        print(f"[progress] request_exports deleted={total}", flush=True)
-
-    if not phase_at_least(state.phase, "requests_deleted"):
-        total = delete_in_batches(
-            dsn,
-            state=state,
-            state_path=state_path,
-            candidate_file=candidate_file,
-            stage_name="requests",
-            sql_factory=requests_sql,
-        )
-        state.phase = "requests_deleted"
-        state.deleted["requests"] = total
-        state.updated_at = utc_now()
-        write_run_state(state_path, state)
-        print(f"[progress] requests deleted={total}", flush=True)
-
-    if not phase_at_least(state.phase, "aliases_deleted"):
-        total = delete_in_batches(
-            dsn,
-            state=state,
-            state_path=state_path,
-            candidate_file=candidate_file,
-            stage_name="aliases",
-            sql_factory=aliases_sql,
-        )
-        state.phase = "aliases_deleted"
-        state.deleted["aliases"] = total
-        state.updated_at = utc_now()
-        write_run_state(state_path, state)
-        print(f"[progress] aliases deleted={total}", flush=True)
-
-    if not phase_at_least(state.phase, "sessions_deleted"):
-        total = delete_in_batches(
-            dsn,
-            state=state,
-            state_path=state_path,
-            candidate_file=candidate_file,
-            stage_name="sessions",
-            sql_factory=sessions_sql,
-        )
-        state.phase = "sessions_deleted"
-        state.deleted["sessions"] = total
-        state.updated_at = utc_now()
-        write_run_state(state_path, state)
-        print(f"[progress] sessions deleted={total}", flush=True)
-
-    if not args.skip_vacuum and not phase_at_least(state.phase, "vacuumed"):
-        vacuum_results: list[dict[str, Any]] = []
-        vacuum_tables: dict[str, str] = {}
-        for table_name in (
-            "session_trajectory_request_exports",
-            "session_trajectory_requests",
-            "session_trajectory_session_aliases",
-            "session_trajectory_sessions",
-        ):
-            result = vacuum_table(
+        if not phase_at_least(state.phase, "request_exports_deleted"):
+            total = delete_in_batches(
                 dsn,
-                state.schema,
-                table_name,
-                timeout_seconds=args.vacuum_timeout_seconds,
+                state=state,
+                state_path=state_path,
+                candidate_file=candidate_file,
+                stage_name="request_exports",
+                sql_factory=request_exports_sql,
             )
-            vacuum_results.append(result)
-            vacuum_tables[table_name] = result["status"]
-            if result["status"] == "ok":
+            state.phase = "request_exports_deleted"
+            state.deleted["request_exports"] = total
+            state.updated_at = utc_now()
+            write_run_state(state_path, state)
+            print(f"[progress] request_exports deleted={total}", flush=True)
+
+        if not phase_at_least(state.phase, "requests_deleted"):
+            total = delete_in_batches(
+                dsn,
+                state=state,
+                state_path=state_path,
+                candidate_file=candidate_file,
+                stage_name="requests",
+                sql_factory=requests_sql,
+            )
+            state.phase = "requests_deleted"
+            state.deleted["requests"] = total
+            state.updated_at = utc_now()
+            write_run_state(state_path, state)
+            print(f"[progress] requests deleted={total}", flush=True)
+
+        if not phase_at_least(state.phase, "aliases_deleted"):
+            total = delete_in_batches(
+                dsn,
+                state=state,
+                state_path=state_path,
+                candidate_file=candidate_file,
+                stage_name="aliases",
+                sql_factory=aliases_sql,
+            )
+            state.phase = "aliases_deleted"
+            state.deleted["aliases"] = total
+            state.updated_at = utc_now()
+            write_run_state(state_path, state)
+            print(f"[progress] aliases deleted={total}", flush=True)
+
+        if not phase_at_least(state.phase, "sessions_deleted"):
+            total = delete_in_batches(
+                dsn,
+                state=state,
+                state_path=state_path,
+                candidate_file=candidate_file,
+                stage_name="sessions",
+                sql_factory=sessions_sql,
+            )
+            state.phase = "sessions_deleted"
+            state.deleted["sessions"] = total
+            state.updated_at = utc_now()
+            write_run_state(state_path, state)
+            print(f"[progress] sessions deleted={total}", flush=True)
+
+        if not args.skip_vacuum and not phase_at_least(state.phase, "vacuumed"):
+            vacuum_results: list[dict[str, Any]] = []
+            vacuum_tables: dict[str, str] = {}
+            for table_name in (
+                "session_trajectory_request_exports",
+                "session_trajectory_requests",
+                "session_trajectory_session_aliases",
+                "session_trajectory_sessions",
+            ):
+                result = vacuum_table(
+                    dsn,
+                    state.schema,
+                    table_name,
+                    timeout_seconds=args.vacuum_timeout_seconds,
+                )
+                vacuum_results.append(result)
+                vacuum_tables[table_name] = result["status"]
+                if result["status"] == "ok":
+                    print(
+                        f"[progress] vacuum {table_name} finished in {result['elapsed_seconds']}s",
+                        flush=True,
+                    )
+                    continue
                 print(
-                    f"[progress] vacuum {table_name} finished in {result['elapsed_seconds']}s",
+                    f"[warn] vacuum {table_name} {result['status']}: {result['detail']}",
                     flush=True,
                 )
-                continue
-            print(
-                f"[warn] vacuum {table_name} {result['status']}: {result['detail']}",
-                flush=True,
-            )
-            warning_code = "vacuum_unknown" if result["status"] == "timed_out" else "vacuum_failed"
-            append_warning(
-                state,
-                code=warning_code,
-                message=f"VACUUM for {table_name} did not confirm success",
-                detail=result["detail"],
-            )
-        vacuum_summary = summarize_vacuum_results(vacuum_results)
-        state.vacuum = {
-            "summary": vacuum_summary,
-            "timeout_seconds": args.vacuum_timeout_seconds,
-            "tables": vacuum_tables,
-            "results": vacuum_results,
-        }
-        if vacuum_summary == "ok":
-            state.phase = "vacuumed"
+                warning_code = "vacuum_unknown" if result["status"] == "timed_out" else "vacuum_failed"
+                append_warning(
+                    state,
+                    code=warning_code,
+                    message=f"VACUUM for {table_name} did not confirm success",
+                    detail=result["detail"],
+                )
+            vacuum_summary = summarize_vacuum_results(vacuum_results)
+            state.vacuum = {
+                "summary": vacuum_summary,
+                "timeout_seconds": args.vacuum_timeout_seconds,
+                "tables": vacuum_tables,
+                "results": vacuum_results,
+            }
+            if vacuum_summary == "ok":
+                state.phase = "vacuumed"
+            state.updated_at = utc_now()
+            write_run_state(state_path, state)
+            if state.phase == "vacuumed":
+                print("[progress] vacuum analyze finished", flush=True)
+            else:
+                print("[warn] vacuum finished with warnings; continuing to completed", flush=True)
+        elif args.skip_vacuum and not state.vacuum:
+            state.vacuum = {"summary": "skipped", "tables": {}, "results": []}
+
+        state.phase = "completed"
+        finalize_completion(state)
         state.updated_at = utc_now()
         write_run_state(state_path, state)
-        if state.phase == "vacuumed":
-            print("[progress] vacuum analyze finished", flush=True)
-        else:
-            print("[warn] vacuum finished with warnings; continuing to completed", flush=True)
-    elif args.skip_vacuum and not state.vacuum:
-        state.vacuum = {"summary": "skipped", "tables": {}, "results": []}
-
-    state.phase = "completed"
-    finalize_completion(state)
-    state.updated_at = utc_now()
-    write_run_state(state_path, state)
-    write_latest_completed(args.output_root.resolve(), state)
-    print(f"[done] completed run_id={state.run_id}", flush=True)
+        write_latest_completed(args.output_root.resolve(), state)
+        print(f"[done] completed run_id={state.run_id}", flush=True)
     return 0
 
 

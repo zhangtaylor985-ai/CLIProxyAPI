@@ -40,6 +40,30 @@
 
 ## 3. 核心脚本与关系
 
+### 3.0 当前长期默认链路
+
+当前默认长期链路已经明确恢复为：
+
+- [archive_handoff_loop.py](/Users/taylor/code/tools/CLIProxyAPI-ori/scripts/archive_handoff_loop.py)
+
+也就是：
+
+1. 线上 `session_trajectory_archive.py` 冻结并导出 raw archive
+2. 线上删除同一批冷会话
+3. 本地自动执行 `archive_export_handoff.py`
+4. 自动接 `migrate -> import -> export`
+5. 写回 handoff 记录与游标，继续下一轮
+
+当前口径：
+
+- 默认常驻只跑旧模式
+- `live_export_delete_loop.py` 仅保留为人工排障 / 对比验证备用
+- 新旧模式的状态与游标时间统一使用 `UTC` / RFC3339 `Z`
+
+时间换算示例：
+
+- `2026-04-12 20:00:00 +08:00 = 2026-04-12T12:00:00Z`
+
 ### 3.1 线上归档清理脚本
 
 - [session_trajectory_archive.py](/Users/taylor/code/tools/CLIProxyAPI-ori/scripts/session_trajectory_archive.py)
@@ -312,6 +336,117 @@ python3 scripts/archive_export_handoff.py \
 ```bash
   --start-time 2026-04-07T11:47:43Z \
   --end-time 2026-04-07T15:29:42Z
+```
+
+如果要从 archive 启动开始就整条链路后台跑完，现在额外提供：
+
+`scripts/managed_archive_handoff.py`
+
+它负责：
+
+1. 启动 `session_trajectory_archive.py`
+2. 自动解析本轮 `run_id`
+3. archive 完成后继续执行 `archive_export_handoff.py`
+4. 把链路状态写入 `active_archive_chain.json`
+
+如果要长期连续运行，不停处理新的冷数据批次，现在再提供：
+
+`scripts/archive_handoff_loop.py`
+
+它的默认设计是：
+
+1. 查询远端当前可归档冷会话
+2. 若存在冷会话，则执行一轮 `archive -> handoff`
+3. 完成后更新文件游标
+4. 继续等待下一轮
+
+### 阶段 E：更简单的单任务长期链路
+
+如果不需要保留 raw archive 中间产物，而是更关心：
+
+- 持续出最终文件
+- 持续清理远端冷数据
+- 降低本地磁盘和流程复杂度
+
+则默认推荐：
+
+```bash
+cd /Users/taylor/code/tools/CLIProxyAPI-ori
+python3 scripts/live_export_delete_loop.py \
+  --pg-dsn 'postgres://postgres:.../cliproxy?sslmode=require'
+```
+
+它会长期循环执行：
+
+1. 快照 `last_activity_at < now() - inactive_hours` 的 session 集合
+2. 用 `export_session_trajectories` 直接导最终目录
+3. 删除同一批仍保持冷态的远端数据
+4. 可选 `VACUUM (ANALYZE)`
+5. 等待下一轮
+
+默认状态文件：
+
+- `~/CLIProxyAPI-session-live-export-loop/state.json`
+- `~/CLIProxyAPI-session-live-export-loop/cursor.json`
+- `~/CLIProxyAPI-session-live-export-loop/summary.json`
+
+默认导出目录：
+
+- `~/session-trajectory-export-live-delete/<run-id>`
+
+默认 manifest 目录：
+
+- `~/session-trajectory-export-manifests-direct`
+
+实时查看：
+
+```bash
+cd /Users/taylor/code/tools/CLIProxyAPI-ori
+python3 scripts/live_export_delete_loop.py \
+  --mode status \
+  --pg-dsn 'postgres://postgres:.../cliproxy?sslmode=require'
+```
+
+游标和状态默认都落文件，不写数据库：
+
+- `/Users/taylor/CLIProxyAPI-session-archives-local/handoffs/archive_handoff_loop.state.json`
+- `/Users/taylor/CLIProxyAPI-session-archives-local/handoffs/archive_handoff_loop.cursor.json`
+- `/Users/taylor/CLIProxyAPI-session-archives-local/handoffs/archive_handoff_loop.summary.json`
+
+实时查看长期链路状态，优先执行：
+
+```bash
+cd /Users/taylor/code/tools/CLIProxyAPI-ori
+python3 scripts/archive_handoff_loop.py \
+  --mode status \
+  --archive-pg-dsn 'postgres://postgres:.../cliproxy?sslmode=require' \
+  --archive-root /Users/taylor/CLIProxyAPI-session-archives-local \
+  --handoff-dir /Users/taylor/CLIProxyAPI-session-archives-local/handoffs \
+  --manifest-dir /Users/taylor/session-trajectory-export-manifests \
+  --target-pg-dsn 'postgresql://postgres:root123@localhost:5434/cliproxy' \
+  --skip-request-exports
+```
+
+说明：
+
+- 当 `session_trajectory_requests.jsonl.gz` 还没落盘时，状态会改看 `.session_trajectory_requests.jsonl.tmp`
+- 这能更早反映 archive 仍在推进，而不是误判成“没有进度”
+
+推荐托管命令示例：
+
+```bash
+launchctl submit -l com.codex.archive_handoff_<tag> \
+  -o /path/to/archive-handoff.log \
+  -e /path/to/archive-handoff.log -- \
+  /bin/zsh -lc 'cd /Users/taylor/code/tools/CLIProxyAPI-ori && \
+    PATH="/opt/homebrew/bin:/opt/homebrew/opt/libpq/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH" \
+    python3 scripts/managed_archive_handoff.py \
+      --archive-pg-dsn "postgres://postgres:.../cliproxy?sslmode=require" \
+      --archive-root /Users/taylor/CLIProxyAPI-session-archives-local \
+      --handoff-dir /Users/taylor/CLIProxyAPI-session-archives-local/handoffs \
+      --manifest-dir /Users/taylor/session-trajectory-export-manifests \
+      --target-pg-dsn "postgresql://postgres:root123@localhost:5434/cliproxy" \
+      --skip-request-exports'
 ```
 
 ## 6. 两类游标是什么

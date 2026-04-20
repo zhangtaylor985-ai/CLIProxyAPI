@@ -23,6 +23,10 @@ description: Use when CLIProxyAPI session trajectory data is consuming too much 
 
 `/Volumes/Storage/CLIProxyAPI-session-archives`
 
+默认长期链路状态根目录：
+
+`/Users/taylor/CLIProxyAPI-session-archives-local/handoffs`
+
 核心脚本：
 
 `scripts/session_trajectory_archive.py`
@@ -47,6 +51,7 @@ description: Use when CLIProxyAPI session trajectory data is consuming too much 
 
 - 归档粒度必须是整会话，不按单条 request 或单日硬切
 - 默认只处理 `last_activity_at < now() - 24h` 的冷会话
+- 所有游标与状态文件统一记录 `UTC` / RFC3339 `Z` 时间
 - 一旦某个 `run_id` 已经物化了候选集，后续必须继续使用同一个 `run_id`
 - 删除顺序必须固定：
   - `session_trajectory_request_exports`
@@ -103,6 +108,24 @@ python3 scripts/session_trajectory_archive.py \
 - 归档目录里的文件体积是否继续增长
 - PG `pg_stat_activity` 是否还在跑 `COPY` 或已经进入 `DELETE`
 
+如果当前跑的是长期托管链路，而不是单个 archive 进程，优先再看：
+
+```bash
+cd /Users/taylor/code/tools/CLIProxyAPI-ori
+python3 scripts/archive_handoff_loop.py \
+  --mode status \
+  --archive-pg-dsn 'postgres://.../cliproxy?sslmode=require' \
+  --archive-root /Users/taylor/CLIProxyAPI-session-archives-local \
+  --handoff-dir /Users/taylor/CLIProxyAPI-session-archives-local/handoffs \
+  --manifest-dir /Users/taylor/session-trajectory-export-manifests \
+  --target-pg-dsn 'postgresql://postgres:root123@localhost:5434/cliproxy' \
+  --skip-request-exports
+```
+
+对应 summary 文件默认在：
+
+`/Users/taylor/CLIProxyAPI-session-archives-local/handoffs/archive_handoff_loop.summary.json`
+
 ## Phase Meanings
 
 - `initialized`
@@ -155,6 +178,12 @@ python3 scripts/session_trajectory_archive.py \
   - 即 `migrate -> import -> export`
 - `task 3`
   - 直接从 PG 导需求方格式
+
+当前默认长期链路已经收敛为：
+
+- `archive_handoff_loop.py`
+
+`live_export_delete_loop.py` 只作为备用脚本保留，不再默认常驻。
 
 ## Progress Estimation
 
@@ -217,6 +246,7 @@ python3 scripts/session_trajectory_archive.py \
 进度汇报时，至少给一个“还在前进”的证据：
 
 - 某个 `.jsonl.gz` 或 `.csv` 文件 10 秒采样内继续变大
+- 若最终 `.gz` 还没出现，则看 `.session_trajectory_requests.jsonl.tmp` 是否继续变大
 - PG `n_live_tup` 继续上涨
 - `exported M/N sessions` 中的 `M` 继续增加
 - manifest 从不存在变成已生成
@@ -378,6 +408,34 @@ launchctl submit -l com.codex.session_handoff_<run-id> \
 `scripts/archive_export_handoff.py`
 
 这条路径现在就是默认路径。
+
+如果用户要求“从启动 archive 开始就整条链路自动跑完”，优先使用：
+
+`scripts/managed_archive_handoff.py`
+
+它会自动完成：
+
+- 启动 `session_trajectory_archive.py`
+- 从 archive stdout 解析本轮 `run_id`
+- archive 完成后继续执行 `archive_export_handoff.py`
+- 把当前链路状态写到 `active_archive_chain.json`
+
+如果用户要求“长期一直跑，完成一轮后继续下一轮”，优先使用：
+
+`scripts/archive_handoff_loop.py`
+
+这条长期任务默认：
+
+- 用文件持久化游标，不写数据库
+- 每轮只处理 `last_activity_at < now() - 24h` 的冷会话
+- 远端 archive 完成后自动接 handoff
+- handoff 完成后更新 cursor 文件，再继续轮询下一轮
+- 若单轮失败，会优先续同一个 `run_id`
+
+默认状态文件：
+
+- `/Users/taylor/CLIProxyAPI-session-archives-local/handoffs/archive_handoff_loop.state.json`
+- `/Users/taylor/CLIProxyAPI-session-archives-local/handoffs/archive_handoff_loop.cursor.json`
 
 如果用户没有明确要求停在 raw archive、也没有改目标时间窗或目标目录，就不要在 `phase=completed` 后停住等待，再次确认；应直接继续 handoff。
 
