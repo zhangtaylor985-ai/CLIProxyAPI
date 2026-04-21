@@ -18,16 +18,17 @@
 
 # 部署与 systemd
 
-- 当前这套 `/home/azureuser/cliapp/CLIProxyAPI` 线上服务由 systemd 管理，unit 名称是 `cliproxyapi.service`。
+- 当前这套 `/root/cliapp/CLIProxyAPI` 线上服务由 systemd 管理，unit 名称是 `cliproxyapi.service`。
 - 当前已确认的 unit 配置要点：
-  - `WorkingDirectory=/home/azureuser/cliapp/CLIProxyAPI`
-  - `EnvironmentFile=/home/azureuser/cliapp/CLIProxyAPI/.env`
-  - `ExecStart=/home/azureuser/cliapp/CLIProxyAPI/bin/cliproxyapi -config /home/azureuser/cliapp/CLIProxyAPI/config.yaml`
+  - `WorkingDirectory=/root/cliapp/CLIProxyAPI`
+  - `EnvironmentFile=/root/cliapp/CLIProxyAPI/.env`
+  - `ExecStart=/root/cliapp/CLIProxyAPI/bin/cliproxyapi -config /root/cliapp/CLIProxyAPI/config.yaml`
 - 如果当前仓库 `.env` 中 `IS_PROD=true`，默认按线上环境处理；涉及重启/发布/确认运行状态时，优先提示并使用这套 systemd 管理方式，不要假设是手工前台启动。
 - 线上重启命令：
   - `sudo systemctl restart cliproxyapi && sleep 2 && systemctl status cliproxyapi --no-pager -l`
 - 查看 unit 原始配置：
   - `systemctl cat cliproxyapi`
+- 若文档记录与线上实例不一致，以 `systemctl cat cliproxyapi` 的当前输出为准，并同步回写仓库文档。
 - 做了代码修改但要让线上生效时，先确认 `bin/cliproxyapi` 已重编译为最新二进制，再执行 systemd 重启；不要只重启旧二进制。
 
 # 文档入口

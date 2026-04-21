@@ -1,0 +1,4 @@
+interface:
+  display_name: "CLIProxyAPI Systemd Deploy"
+  short_description: "Deploy CLIProxyAPI via systemd"
+  default_prompt: "Use $cliproxyapi-systemd-deploy to pull, rebuild, restart cliproxyapi.service, and verify the live revision on /root/cliapp/CLIProxyAPI."
