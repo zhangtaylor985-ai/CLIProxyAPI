@@ -858,7 +858,6 @@ func (cfg *Config) SanitizeAPIKeyPolicies() {
 		if entry.UsesGroupBudget() {
 			entry.DailyBudgetUSD = 0
 			entry.WeeklyBudgetUSD = 0
-			entry.WeeklyBudgetAnchorAt = ""
 		}
 		if entry.TokenPackageUSD <= 0 {
 			entry.TokenPackageUSD = 0

@@ -275,7 +275,7 @@ func TestPolicyViewRoundTripUsesFamilyAccessTogglesAndMetadata(t *testing.T) {
 	}
 }
 
-func TestViewToPolicyClearsBaseBudgetsWhenGroupBoundAfterSanitize(t *testing.T) {
+func TestViewToPolicyClearsBaseBudgetsButPreservesAnchorWhenGroupBoundAfterSanitize(t *testing.T) {
 	t.Parallel()
 
 	cfg := &config.Config{
@@ -299,8 +299,11 @@ func TestViewToPolicyClearsBaseBudgetsWhenGroupBoundAfterSanitize(t *testing.T) 
 	if got.GroupID != "triple" {
 		t.Fatalf("group id = %q, want triple", got.GroupID)
 	}
-	if got.DailyBudgetUSD != 0 || got.WeeklyBudgetUSD != 0 || got.WeeklyBudgetAnchorAt != "" {
+	if got.DailyBudgetUSD != 0 || got.WeeklyBudgetUSD != 0 {
 		t.Fatalf("expected group-bound base budgets cleared, got %+v", got)
+	}
+	if got.WeeklyBudgetAnchorAt != "2026-04-02T10:00:00+08:00" {
+		t.Fatalf("expected normalized anchor to be preserved, got %+v", got)
 	}
 }
 

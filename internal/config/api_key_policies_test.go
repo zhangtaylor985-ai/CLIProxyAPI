@@ -73,7 +73,7 @@ func TestAPIKeyPolicy_WeeklyBudgetBoundsErrorsWithoutAnchorOrCreatedAt(t *testin
 	}
 }
 
-func TestConfig_SanitizeAPIKeyPolicies_ClearsBaseBudgetsWhenGroupBound(t *testing.T) {
+func TestConfig_SanitizeAPIKeyPolicies_ClearsBaseBudgetsButPreservesAnchorWhenGroupBound(t *testing.T) {
 	cfg := &Config{
 		APIKeyPolicies: []APIKeyPolicy{
 			{
@@ -92,8 +92,11 @@ func TestConfig_SanitizeAPIKeyPolicies_ClearsBaseBudgetsWhenGroupBound(t *testin
 	if got == nil {
 		t.Fatal("expected k1 policy")
 	}
-	if got.DailyBudgetUSD != 0 || got.WeeklyBudgetUSD != 0 || got.WeeklyBudgetAnchorAt != "" {
+	if got.DailyBudgetUSD != 0 || got.WeeklyBudgetUSD != 0 {
 		t.Fatalf("expected group-bound base budgets cleared, got %+v", got)
+	}
+	if got.WeeklyBudgetAnchorAt != "2026-03-15T10:00:00+08:00" {
+		t.Fatalf("expected normalized anchor to be preserved, got %+v", got)
 	}
 }
 

@@ -86,6 +86,9 @@ func TestPostgresManagement_GroupCRUDAndRecordBudgets(t *testing.T) {
 	if resolved == nil || resolved.DailyBudgetUSD != 60 || resolved.WeeklyBudgetUSD != 180 {
 		t.Fatalf("resolved policy = %+v, want group budgets applied", resolved)
 	}
+	if resolved == nil || resolved.WeeklyBudgetAnchorAt != "2026-03-31T00:00:00+08:00" {
+		t.Fatalf("resolved anchor = %+v, want group-bound anchor preserved", resolved)
+	}
 
 	now := time.Date(2026, 4, 2, 10, 0, 0, 0, policy.ChinaLocation())
 	if err := seedUsage(t, handler, "k1", "gpt-5.4", now, 2_500_000, 1200); err != nil {
@@ -114,6 +117,9 @@ func TestPostgresManagement_GroupCRUDAndRecordBudgets(t *testing.T) {
 	}
 	if !item.WeeklyBudget.Enabled || item.WeeklyBudget.LimitUSD != 180 {
 		t.Fatalf("weekly budget = %+v, want 180", item.WeeklyBudget)
+	}
+	if got := item.WeeklyBudget.StartAt; !got.Equal(time.Date(2026, 3, 31, 0, 0, 0, 0, policy.ChinaLocation())) {
+		t.Fatalf("weekly budget start = %s, want anchor start", got.Format(time.RFC3339))
 	}
 	if item.Today.CostUSD <= 0 || item.CurrentPeriod.CostUSD <= item.Today.CostUSD {
 		t.Fatalf("usage totals = today %v current %v", item.Today.CostUSD, item.CurrentPeriod.CostUSD)
