@@ -52,6 +52,16 @@ type ErrorDetail struct {
 	Code string `json:"code,omitempty"`
 }
 
+type claudeErrorDetail struct {
+	Type    string `json:"type"`
+	Message string `json:"message"`
+}
+
+type claudeErrorResponse struct {
+	Type  string            `json:"type"`
+	Error claudeErrorDetail `json:"error"`
+}
+
 const idempotencyKeyMetadataKey = "idempotency_key"
 
 const (
@@ -165,6 +175,39 @@ func BuildErrorResponseBody(status int, errText string) []byte {
 		return []byte(fmt.Sprintf(`{"error":{"message":%q,"type":"server_error","code":"internal_server_error"}}`, errText))
 	}
 	return payload
+}
+
+// BuildClaudeErrorResponseBody builds a Claude-compatible JSON error response body.
+// If errText is already a valid Claude error payload, it is returned as-is.
+func BuildClaudeErrorResponseBody(errText string) []byte {
+	trimmed := strings.TrimSpace(errText)
+	if trimmed == "" {
+		trimmed = http.StatusText(http.StatusInternalServerError)
+	}
+	if json.Valid([]byte(trimmed)) {
+		root := gjson.Parse(trimmed)
+		if root.Get("type").String() == "error" && root.Get("error.message").String() != "" {
+			return []byte(trimmed)
+		}
+	}
+
+	payload, err := json.Marshal(claudeErrorResponse{
+		Type: "error",
+		Error: claudeErrorDetail{
+			Type:    "api_error",
+			Message: trimmed,
+		},
+	})
+	if err != nil {
+		return []byte(fmt.Sprintf(`{"type":"error","error":{"type":"api_error","message":%q}}`, trimmed))
+	}
+	return payload
+}
+
+// BuildClaudeErrorResponseBodyFromMessage converts an error message to a Claude-compatible body.
+func BuildClaudeErrorResponseBodyFromMessage(msg *interfaces.ErrorMessage) []byte {
+	_, errText := errorResponseStatusAndText(msg)
+	return BuildClaudeErrorResponseBody(errText)
 }
 
 func sanitizeClientErrorText(status int, errText string) (string, bool) {
@@ -2284,10 +2327,35 @@ func replaceHeader(dst http.Header, src http.Header) {
 
 // WriteErrorResponse writes an error message to the response writer using the HTTP status embedded in the message.
 func (h *BaseAPIHandler) WriteErrorResponse(c *gin.Context, msg *interfaces.ErrorMessage) {
+	status, errText := errorResponseStatusAndText(msg)
+	h.writeErrorResponseBody(c, msg, status, errText, BuildErrorResponseBody(status, errText))
+}
+
+// WriteErrorResponseBody writes an error response using the supplied JSON body while preserving
+// the shared status/header/logging behavior of WriteErrorResponse.
+func (h *BaseAPIHandler) WriteErrorResponseBody(c *gin.Context, msg *interfaces.ErrorMessage, body []byte) {
+	status, errText := errorResponseStatusAndText(msg)
+	if len(bytes.TrimSpace(body)) == 0 {
+		body = BuildErrorResponseBody(status, errText)
+	}
+	h.writeErrorResponseBody(c, msg, status, errText, body)
+}
+
+func errorResponseStatusAndText(msg *interfaces.ErrorMessage) (int, string) {
 	status := http.StatusInternalServerError
 	if msg != nil && msg.StatusCode > 0 {
 		status = msg.StatusCode
 	}
+	errText := http.StatusText(status)
+	if msg != nil && msg.Error != nil {
+		if v := strings.TrimSpace(msg.Error.Error()); v != "" {
+			errText = v
+		}
+	}
+	return status, errText
+}
+
+func (h *BaseAPIHandler) writeErrorResponseBody(c *gin.Context, msg *interfaces.ErrorMessage, status int, errText string, body []byte) {
 	if msg != nil && msg.Addon != nil && PassthroughHeadersEnabled(h.Cfg) {
 		for key, values := range msg.Addon {
 			if len(values) == 0 {
@@ -2299,15 +2367,6 @@ func (h *BaseAPIHandler) WriteErrorResponse(c *gin.Context, msg *interfaces.Erro
 			}
 		}
 	}
-
-	errText := http.StatusText(status)
-	if msg != nil && msg.Error != nil {
-		if v := strings.TrimSpace(msg.Error.Error()); v != "" {
-			errText = v
-		}
-	}
-
-	body := BuildErrorResponseBody(status, errText)
 	// Append first to preserve upstream response logs, then drop duplicate payloads if already recorded.
 	var previous []byte
 	if existing, exists := c.Get("API_RESPONSE"); exists {

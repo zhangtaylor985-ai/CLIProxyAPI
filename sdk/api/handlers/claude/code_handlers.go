@@ -317,7 +317,8 @@ func (h *ClaudeCodeAPIHandler) forwardClaudeStream(c *gin.Context, flusher http.
 }
 
 func (h *ClaudeCodeAPIHandler) writeClientError(c *gin.Context, msg *interfaces.ErrorMessage) {
-	h.WriteErrorResponse(c, h.sanitizeClientError(c, msg))
+	sanitized := h.sanitizeClientError(c, msg)
+	h.WriteErrorResponseBody(c, sanitized, handlers.BuildClaudeErrorResponseBodyFromMessage(sanitized))
 }
 
 func (h *ClaudeCodeAPIHandler) sanitizeClientError(c *gin.Context, msg *interfaces.ErrorMessage) *interfaces.ErrorMessage {
