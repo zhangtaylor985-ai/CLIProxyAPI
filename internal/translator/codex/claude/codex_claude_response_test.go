@@ -236,6 +236,9 @@ func TestConvertCodexResponseToClaude_FunctionCallStreamingUnaffected(t *testing
 	if !strings.Contains(addedChunk, "\"name\":\"ReadFile\"") {
 		t.Fatalf("expected tool name to be preserved, got %q", addedChunk)
 	}
+	if strings.Contains(addedChunk, "\"type\":\"input_json_delta\"") {
+		t.Fatalf("expected function call start to avoid empty input_json_delta, got %q", addedChunk)
+	}
 
 	argsOut := ConvertCodexResponseToClaude(claudeCLICtx(), "gpt-5.4", nil, nil, argsDone, &param)
 	if len(argsOut) != 1 {
@@ -251,6 +254,85 @@ func TestConvertCodexResponseToClaude_FunctionCallStreamingUnaffected(t *testing
 	}
 	if !strings.Contains(string(doneOut[0]), "event: content_block_stop") {
 		t.Fatalf("expected function call completion to emit content_block_stop, got %q", string(doneOut[0]))
+	}
+}
+
+func TestConvertCodexResponseToClaude_FunctionCallDoneBeforeArgumentsWaitsForJSONCompletion(t *testing.T) {
+	added := []byte(`data: {"type":"response.output_item.added","item":{"type":"function_call","call_id":"call_123","name":"ReadFile"},"output_index":0,"sequence_number":1}`)
+	done := []byte(`data: {"type":"response.output_item.done","item":{"type":"function_call","call_id":"call_123","name":"ReadFile"},"output_index":0,"sequence_number":2}`)
+	argsDone := []byte(`data: {"type":"response.function_call_arguments.done","arguments":"{\"path\":\"README.md\"}","item_id":"call_123","output_index":0,"sequence_number":3}`)
+
+	var param any
+	_ = ConvertCodexResponseToClaude(claudeCLICtx(), "gpt-5.4", nil, nil, added, &param)
+
+	doneOut := ConvertCodexResponseToClaude(claudeCLICtx(), "gpt-5.4", nil, nil, done, &param)
+	if len(doneOut) != 1 {
+		t.Fatalf("expected 1 done output chunk, got %d", len(doneOut))
+	}
+	if got := strings.TrimSpace(string(doneOut[0])); got != "" {
+		t.Fatalf("expected tool block stop to wait for arguments completion, got %q", got)
+	}
+
+	argsOut := ConvertCodexResponseToClaude(claudeCLICtx(), "gpt-5.4", nil, nil, argsDone, &param)
+	if len(argsOut) != 1 {
+		t.Fatalf("expected 1 arguments output chunk, got %d", len(argsOut))
+	}
+	chunk := string(argsOut[0])
+	if !strings.Contains(chunk, "\\\"path\\\":\\\"README.md\\\"") {
+		t.Fatalf("expected delayed function arguments to be emitted, got %q", chunk)
+	}
+	if !strings.Contains(chunk, "event: content_block_stop") {
+		t.Fatalf("expected delayed function arguments to close tool block, got %q", chunk)
+	}
+}
+
+func TestConvertCodexResponseToClaude_ResponseCompletedClosesPendingToolBlock(t *testing.T) {
+	added := []byte(`data: {"type":"response.output_item.added","item":{"type":"function_call","call_id":"call_123","name":"ReadFile"},"output_index":0,"sequence_number":1}`)
+	done := []byte(`data: {"type":"response.output_item.done","item":{"type":"function_call","call_id":"call_123","name":"ReadFile"},"output_index":0,"sequence_number":2}`)
+	completed := []byte(`data: {"type":"response.completed","response":{"id":"resp_123","model":"gpt-5.4","usage":{"input_tokens":12,"output_tokens":4}}}`)
+
+	var param any
+	_ = ConvertCodexResponseToClaude(claudeCLICtx(), "gpt-5.4", nil, nil, added, &param)
+	_ = ConvertCodexResponseToClaude(claudeCLICtx(), "gpt-5.4", nil, nil, done, &param)
+
+	out := ConvertCodexResponseToClaude(claudeCLICtx(), "gpt-5.4", nil, nil, completed, &param)
+	if len(out) != 1 {
+		t.Fatalf("expected 1 completed output chunk, got %d", len(out))
+	}
+	chunk := string(out[0])
+	if !strings.Contains(chunk, "event: content_block_stop") {
+		t.Fatalf("expected response.completed to close any pending tool block, got %q", chunk)
+	}
+	if !strings.Contains(chunk, "event: message_delta") {
+		t.Fatalf("expected response.completed to still emit message_delta, got %q", chunk)
+	}
+}
+
+func TestConvertCodexResponseToClaude_UsesCompatibleUsageDefaults(t *testing.T) {
+	created := []byte(`data: {"type":"response.created","response":{"id":"resp_123","model":"gpt-5.4","status":"in_progress"}}`)
+	completed := []byte(`data: {"type":"response.completed","response":{"id":"resp_123","model":"gpt-5.4","usage":{"input_tokens":12,"output_tokens":4}}}`)
+
+	var param any
+	createdOut := ConvertCodexResponseToClaude(claudeCLICtx(), "gpt-5.4", nil, nil, created, &param)
+	if len(createdOut) != 1 {
+		t.Fatalf("expected 1 created output chunk, got %d", len(createdOut))
+	}
+	createdChunk := string(createdOut[0])
+	for _, needle := range []string{`"speed":"standard"`, `"service_tier":"standard"`, `"cache_creation_input_tokens":0`, `"cache_read_input_tokens":0`} {
+		if !strings.Contains(createdChunk, needle) {
+			t.Fatalf("expected message_start usage to include %s, got %q", needle, createdChunk)
+		}
+	}
+
+	completedOut := ConvertCodexResponseToClaude(claudeCLICtx(), "gpt-5.4", nil, nil, completed, &param)
+	if len(completedOut) != 1 {
+		t.Fatalf("expected 1 completed output chunk, got %d", len(completedOut))
+	}
+	completedChunk := string(completedOut[0])
+	for _, needle := range []string{`"speed":"standard"`, `"service_tier":"standard"`, `"cache_creation_input_tokens":0`, `"cache_read_input_tokens":0`} {
+		if !strings.Contains(completedChunk, needle) {
+			t.Fatalf("expected message_delta usage to include %s, got %q", needle, completedChunk)
+		}
 	}
 }
 

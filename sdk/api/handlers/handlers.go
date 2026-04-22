@@ -2112,6 +2112,12 @@ func (h *BaseAPIHandler) ExecuteStreamWithAuthManager(ctx context.Context, handl
 					chunk, ok = <-chunks
 				}
 				if !ok {
+					if !sentPayload {
+						_ = sendErr(&interfaces.ErrorMessage{
+							StatusCode: http.StatusBadGateway,
+							Error:      fmt.Errorf("upstream stream closed before first payload"),
+						})
+					}
 					return
 				}
 				if chunk.Err != nil {

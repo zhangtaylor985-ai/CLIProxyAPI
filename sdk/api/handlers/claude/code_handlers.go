@@ -11,6 +11,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -259,11 +260,11 @@ func (h *ClaudeCodeAPIHandler) handleStreamingResponse(c *gin.Context, rawJSON [
 			return
 		case chunk, ok := <-dataChan:
 			if !ok {
-				// Stream closed without data? Send DONE or just headers.
-				setSSEHeaders()
-				handlers.WriteUpstreamHeaders(c.Writer.Header(), upstreamHeaders)
-				flusher.Flush()
-				cliCancel(nil)
+				h.writeClientError(c, &interfaces.ErrorMessage{
+					StatusCode: http.StatusBadGateway,
+					Error:      errors.New("upstream stream closed before first payload"),
+				})
+				cliCancel(errors.New("upstream stream closed before first payload"))
 				return
 			}
 

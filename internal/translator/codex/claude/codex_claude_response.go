@@ -27,6 +27,8 @@ type ConvertCodexResponseToClaudeParams struct {
 	HasToolCall                        bool
 	BlockIndex                         int
 	HasReceivedArgumentsDelta          bool
+	ToolBlockOpen                      bool
+	ToolStopPending                    bool
 	LastBuiltinWebSearchQuery          string
 	EmittedSyntheticWebSearchStarts    map[string]struct{}
 	EmittedSyntheticWebSearchCompletes map[string]struct{}
@@ -73,9 +75,10 @@ func ConvertCodexResponseToClaude(ctx context.Context, _ string, originalRequest
 	clientKind := gptinclaude.DetectClientKind(ctx)
 	var template []byte
 	if typeStr == "response.created" {
-		template = []byte(`{"type":"message_start","message":{"id":"","type":"message","role":"assistant","model":"claude-opus-4-1-20250805","stop_sequence":null,"usage":{"input_tokens":0,"output_tokens":0},"content":[],"stop_reason":null}}`)
+		template = []byte(`{"type":"message_start","message":{"id":"","type":"message","role":"assistant","model":"claude-opus-4-1-20250805","stop_sequence":null,"usage":{},"content":[],"stop_reason":null}}`)
 		template, _ = sjson.SetBytes(template, "message.model", rootResult.Get("response.model").String())
 		template, _ = sjson.SetBytes(template, "message.id", rootResult.Get("response.id").String())
+		template, _ = sjson.SetRawBytes(template, "message.usage", buildClaudeUsageDefaults())
 
 		output = translatorcommon.AppendSSEEventBytes(output, "message_start", template, 2)
 	} else if typeStr == "response.reasoning_summary_part.added" {
@@ -123,8 +126,12 @@ func ConvertCodexResponseToClaude(ctx context.Context, _ string, originalRequest
 
 		output = translatorcommon.AppendSSEEventBytes(output, "content_block_stop", template, 2)
 	} else if typeStr == "response.completed" {
-		template = []byte(`{"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},"usage":{"input_tokens":0,"output_tokens":0}}`)
-		p := (*param).(*ConvertCodexResponseToClaudeParams).HasToolCall
+		params := (*param).(*ConvertCodexResponseToClaudeParams)
+		if params.ToolBlockOpen {
+			output = append(output, finalizeCodexToolUseBlock(params)...)
+		}
+		template = []byte(`{"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},"usage":{}}`)
+		p := params.HasToolCall
 		stopReason := rootResult.Get("response.stop_reason").String()
 		if p {
 			template, _ = sjson.SetBytes(template, "delta.stop_reason", "tool_use")
@@ -133,11 +140,13 @@ func ConvertCodexResponseToClaude(ctx context.Context, _ string, originalRequest
 		} else {
 			template, _ = sjson.SetBytes(template, "delta.stop_reason", "end_turn")
 		}
+		template, _ = sjson.SetRawBytes(template, "usage", buildClaudeUsageDefaults())
 		inputTokens, outputTokens, cachedTokens := extractResponsesUsage(rootResult.Get("response.usage"))
 		template, _ = sjson.SetBytes(template, "usage.input_tokens", inputTokens)
 		template, _ = sjson.SetBytes(template, "usage.output_tokens", outputTokens)
-		if cachedTokens > 0 {
-			template, _ = sjson.SetBytes(template, "usage.cache_read_input_tokens", cachedTokens)
+		template, _ = sjson.SetBytes(template, "usage.cache_read_input_tokens", cachedTokens)
+		if serviceTier := strings.TrimSpace(rootResult.Get("response.service_tier").String()); serviceTier != "" {
+			template, _ = sjson.SetBytes(template, "usage.service_tier", serviceTier)
 		}
 
 		output = translatorcommon.AppendSSEEventBytes(output, "message_delta", template, 2)
@@ -146,8 +155,11 @@ func ConvertCodexResponseToClaude(ctx context.Context, _ string, originalRequest
 		itemResult := rootResult.Get("item")
 		itemType := itemResult.Get("type").String()
 		if itemType == "function_call" {
-			(*param).(*ConvertCodexResponseToClaudeParams).HasToolCall = true
-			(*param).(*ConvertCodexResponseToClaudeParams).HasReceivedArgumentsDelta = false
+			params := (*param).(*ConvertCodexResponseToClaudeParams)
+			params.HasToolCall = true
+			params.HasReceivedArgumentsDelta = false
+			params.ToolStopPending = false
+			params.ToolBlockOpen = true
 			toolName := itemResult.Get("name").String()
 			{
 				// Restore original tool name if shortened
@@ -157,16 +169,11 @@ func ConvertCodexResponseToClaude(ctx context.Context, _ string, originalRequest
 				}
 			}
 			template = []byte(`{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"","name":"","input":{}}}`)
-			template, _ = sjson.SetBytes(template, "index", (*param).(*ConvertCodexResponseToClaudeParams).BlockIndex)
+			template, _ = sjson.SetBytes(template, "index", params.BlockIndex)
 			template, _ = sjson.SetBytes(template, "content_block.id", util.SanitizeClaudeToolID(itemResult.Get("call_id").String()))
 			template, _ = sjson.SetBytes(template, "content_block.name", toolName)
 
 			output = translatorcommon.AppendSSEEventBytes(output, "content_block_start", template, 2)
-
-			template = []byte(`{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":""}}`)
-			template, _ = sjson.SetBytes(template, "index", (*param).(*ConvertCodexResponseToClaudeParams).BlockIndex)
-
-			output = translatorcommon.AppendSSEEventBytes(output, "content_block_delta", template, 2)
 		} else if itemType == "web_search_call" {
 			itemID := strings.TrimSpace(itemResult.Get("id").String())
 			if itemID != "" {
@@ -231,11 +238,12 @@ func ConvertCodexResponseToClaude(ctx context.Context, _ string, originalRequest
 		itemResult := rootResult.Get("item")
 		itemType := itemResult.Get("type").String()
 		if itemType == "function_call" {
-			template = []byte(`{"type":"content_block_stop","index":0}`)
-			template, _ = sjson.SetBytes(template, "index", (*param).(*ConvertCodexResponseToClaudeParams).BlockIndex)
-			(*param).(*ConvertCodexResponseToClaudeParams).BlockIndex++
-
-			output = translatorcommon.AppendSSEEventBytes(output, "content_block_stop", template, 2)
+			params := (*param).(*ConvertCodexResponseToClaudeParams)
+			if params.HasReceivedArgumentsDelta {
+				output = append(output, finalizeCodexToolUseBlock(params)...)
+			} else {
+				params.ToolStopPending = true
+			}
 		} else if itemType == "web_search_call" {
 			if query := strings.TrimSpace(itemResult.Get("action.query").String()); query != "" {
 				(*param).(*ConvertCodexResponseToClaudeParams).LastBuiltinWebSearchQuery = query
@@ -273,9 +281,10 @@ func ConvertCodexResponseToClaude(ctx context.Context, _ string, originalRequest
 			}
 		}
 	} else if typeStr == "response.function_call_arguments.delta" {
-		(*param).(*ConvertCodexResponseToClaudeParams).HasReceivedArgumentsDelta = true
+		params := (*param).(*ConvertCodexResponseToClaudeParams)
+		params.HasReceivedArgumentsDelta = true
 		template = []byte(`{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":""}}`)
-		template, _ = sjson.SetBytes(template, "index", (*param).(*ConvertCodexResponseToClaudeParams).BlockIndex)
+		template, _ = sjson.SetBytes(template, "index", params.BlockIndex)
 		template, _ = sjson.SetBytes(template, "delta.partial_json", rootResult.Get("delta").String())
 
 		output = translatorcommon.AppendSSEEventBytes(output, "content_block_delta", template, 2)
@@ -285,14 +294,19 @@ func ConvertCodexResponseToClaude(ctx context.Context, _ string, originalRequest
 		// Emit the full arguments as a single input_json_delta so the
 		// downstream Claude client receives the complete tool input.
 		// When delta events were already received, skip to avoid duplicating arguments.
-		if !(*param).(*ConvertCodexResponseToClaudeParams).HasReceivedArgumentsDelta {
+		params := (*param).(*ConvertCodexResponseToClaudeParams)
+		if !params.HasReceivedArgumentsDelta {
 			if args := rootResult.Get("arguments").String(); args != "" {
 				template = []byte(`{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":""}}`)
-				template, _ = sjson.SetBytes(template, "index", (*param).(*ConvertCodexResponseToClaudeParams).BlockIndex)
+				template, _ = sjson.SetBytes(template, "index", params.BlockIndex)
 				template, _ = sjson.SetBytes(template, "delta.partial_json", args)
 
 				output = translatorcommon.AppendSSEEventBytes(output, "content_block_delta", template, 2)
 			}
+		}
+		params.HasReceivedArgumentsDelta = true
+		if params.ToolStopPending {
+			output = append(output, finalizeCodexToolUseBlock(params)...)
 		}
 	}
 
@@ -471,6 +485,23 @@ func extractResponsesUsage(usage gjson.Result) (int64, int64, int64) {
 	}
 
 	return inputTokens, outputTokens, cachedTokens
+}
+
+func buildClaudeUsageDefaults() []byte {
+	return []byte(`{"input_tokens":0,"output_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":0,"ephemeral_5m_input_tokens":0},"inference_geo":"","iterations":[],"speed":"standard"}`)
+}
+
+func finalizeCodexToolUseBlock(params *ConvertCodexResponseToClaudeParams) []byte {
+	if params == nil || !params.ToolBlockOpen {
+		return nil
+	}
+	template := []byte(`{"type":"content_block_stop","index":0}`)
+	template, _ = sjson.SetBytes(template, "index", params.BlockIndex)
+	params.BlockIndex++
+	params.ToolBlockOpen = false
+	params.ToolStopPending = false
+	params.HasReceivedArgumentsDelta = false
+	return translatorcommon.AppendSSEEventBytes(nil, "content_block_stop", template, 2)
 }
 
 // buildReverseMapFromClaudeOriginalShortToOriginal builds a map[short]original from original Claude request tools.

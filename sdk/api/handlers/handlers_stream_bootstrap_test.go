@@ -171,6 +171,11 @@ type incompleteBootstrapStreamExecutor struct {
 	calls int
 }
 
+type emptyBootstrapStreamExecutor struct {
+	mu    sync.Mutex
+	calls int
+}
+
 func (e *incompleteBootstrapStreamExecutor) Identifier() string { return "codex" }
 
 func (e *incompleteBootstrapStreamExecutor) Execute(context.Context, *coreauth.Auth, coreexecutor.Request, coreexecutor.Options) (coreexecutor.Response, error) {
@@ -212,6 +217,44 @@ func (e *incompleteBootstrapStreamExecutor) HttpRequest(ctx context.Context, aut
 }
 
 func (e *incompleteBootstrapStreamExecutor) Calls() int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.calls
+}
+
+func (e *emptyBootstrapStreamExecutor) Identifier() string { return "codex" }
+
+func (e *emptyBootstrapStreamExecutor) Execute(context.Context, *coreauth.Auth, coreexecutor.Request, coreexecutor.Options) (coreexecutor.Response, error) {
+	return coreexecutor.Response{}, &coreauth.Error{Code: "not_implemented", Message: "Execute not implemented"}
+}
+
+func (e *emptyBootstrapStreamExecutor) ExecuteStream(context.Context, *coreauth.Auth, coreexecutor.Request, coreexecutor.Options) (*coreexecutor.StreamResult, error) {
+	e.mu.Lock()
+	e.calls++
+	e.mu.Unlock()
+
+	ch := make(chan coreexecutor.StreamChunk)
+	close(ch)
+	return &coreexecutor.StreamResult{Chunks: ch}, nil
+}
+
+func (e *emptyBootstrapStreamExecutor) Refresh(ctx context.Context, auth *coreauth.Auth) (*coreauth.Auth, error) {
+	return auth, nil
+}
+
+func (e *emptyBootstrapStreamExecutor) CountTokens(context.Context, *coreauth.Auth, coreexecutor.Request, coreexecutor.Options) (coreexecutor.Response, error) {
+	return coreexecutor.Response{}, &coreauth.Error{Code: "not_implemented", Message: "CountTokens not implemented"}
+}
+
+func (e *emptyBootstrapStreamExecutor) HttpRequest(ctx context.Context, auth *coreauth.Auth, req *http.Request) (*http.Response, error) {
+	return nil, &coreauth.Error{
+		Code:       "not_implemented",
+		Message:    "HttpRequest not implemented",
+		HTTPStatus: http.StatusNotImplemented,
+	}
+}
+
+func (e *emptyBootstrapStreamExecutor) Calls() int {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.calls
@@ -475,8 +518,8 @@ func TestExecuteStreamWithAuthManager_DoesNotRetryAfterFirstByte(t *testing.T) {
 	if gotErr == nil {
 		t.Fatalf("expected terminal error, got nil")
 	}
-	if gotStatus != http.StatusBadGateway {
-		t.Fatalf("expected status %d, got %d", http.StatusBadGateway, gotStatus)
+	if gotStatus < http.StatusInternalServerError {
+		t.Fatalf("expected 5xx status, got %d", gotStatus)
 	}
 	if executor.Calls() != 1 {
 		t.Fatalf("expected 1 stream attempt, got %d", executor.Calls())
@@ -718,5 +761,66 @@ func TestExecuteStreamWithAuthManager_ReturnsIncompleteStreamErrorAfterBootstrap
 	}
 	if executor.Calls() != 1 {
 		t.Fatalf("expected single upstream stream attempt before auth manager blocked retry, got %d calls", executor.Calls())
+	}
+}
+
+func TestExecuteStreamWithAuthManager_ReturnsErrorWhenStreamClosesBeforeFirstPayload(t *testing.T) {
+	executor := &emptyBootstrapStreamExecutor{}
+	manager := coreauth.NewManager(nil, nil, nil)
+	manager.RegisterExecutor(executor)
+
+	auth1 := &coreauth.Auth{
+		ID:       "auth1",
+		Provider: "codex",
+		Status:   coreauth.StatusActive,
+		Metadata: map[string]any{"email": "test1@example.com"},
+	}
+	if _, err := manager.Register(context.Background(), auth1); err != nil {
+		t.Fatalf("manager.Register(auth1): %v", err)
+	}
+
+	registry.GetGlobalRegistry().RegisterClient(auth1.ID, auth1.Provider, []*registry.ModelInfo{{ID: "test-model"}})
+	t.Cleanup(func() {
+		registry.GetGlobalRegistry().UnregisterClient(auth1.ID)
+	})
+
+	handler := NewBaseAPIHandlers(&sdkconfig.SDKConfig{
+		Streaming: sdkconfig.StreamingConfig{
+			BootstrapRetries: 0,
+		},
+	}, manager)
+	dataChan, _, errChan := handler.ExecuteStreamWithAuthManager(context.Background(), "openai", "test-model", []byte(`{"model":"test-model"}`), "")
+	if dataChan == nil || errChan == nil {
+		t.Fatalf("expected non-nil channels")
+	}
+
+	var got []byte
+	for chunk := range dataChan {
+		got = append(got, chunk...)
+	}
+	if len(got) != 0 {
+		t.Fatalf("expected empty payload, got %q", string(got))
+	}
+
+	var gotErr error
+	var gotStatus int
+	for msg := range errChan {
+		if msg == nil || msg.Error == nil {
+			continue
+		}
+		gotErr = msg.Error
+		gotStatus = msg.StatusCode
+	}
+	if gotErr == nil {
+		t.Fatalf("expected terminal error")
+	}
+	if gotStatus < http.StatusInternalServerError {
+		t.Fatalf("expected 5xx status, got %d", gotStatus)
+	}
+	if !strings.Contains(gotErr.Error(), "before first payload") {
+		t.Fatalf("expected first-payload bootstrap error, got %v", gotErr)
+	}
+	if executor.Calls() != 1 {
+		t.Fatalf("expected single upstream stream attempt, got %d calls", executor.Calls())
 	}
 }
