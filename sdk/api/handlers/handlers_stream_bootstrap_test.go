@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 
@@ -163,6 +164,57 @@ func (e *invalidJSONStreamExecutor) HttpRequest(ctx context.Context, auth *corea
 		Message:    "HttpRequest not implemented",
 		HTTPStatus: http.StatusNotImplemented,
 	}
+}
+
+type incompleteBootstrapStreamExecutor struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (e *incompleteBootstrapStreamExecutor) Identifier() string { return "codex" }
+
+func (e *incompleteBootstrapStreamExecutor) Execute(context.Context, *coreauth.Auth, coreexecutor.Request, coreexecutor.Options) (coreexecutor.Response, error) {
+	return coreexecutor.Response{}, &coreauth.Error{Code: "not_implemented", Message: "Execute not implemented"}
+}
+
+func (e *incompleteBootstrapStreamExecutor) ExecuteStream(context.Context, *coreauth.Auth, coreexecutor.Request, coreexecutor.Options) (*coreexecutor.StreamResult, error) {
+	e.mu.Lock()
+	e.calls++
+	e.mu.Unlock()
+
+	ch := make(chan coreexecutor.StreamChunk, 1)
+	ch <- coreexecutor.StreamChunk{
+		Err: &coreauth.Error{
+			Code:       "stream_incomplete",
+			Message:    "stream error: stream disconnected before completion: stream closed before response.completed",
+			Retryable:  false,
+			HTTPStatus: http.StatusRequestTimeout,
+		},
+	}
+	close(ch)
+	return &coreexecutor.StreamResult{Chunks: ch}, nil
+}
+
+func (e *incompleteBootstrapStreamExecutor) Refresh(ctx context.Context, auth *coreauth.Auth) (*coreauth.Auth, error) {
+	return auth, nil
+}
+
+func (e *incompleteBootstrapStreamExecutor) CountTokens(context.Context, *coreauth.Auth, coreexecutor.Request, coreexecutor.Options) (coreexecutor.Response, error) {
+	return coreexecutor.Response{}, &coreauth.Error{Code: "not_implemented", Message: "CountTokens not implemented"}
+}
+
+func (e *incompleteBootstrapStreamExecutor) HttpRequest(ctx context.Context, auth *coreauth.Auth, req *http.Request) (*http.Response, error) {
+	return nil, &coreauth.Error{
+		Code:       "not_implemented",
+		Message:    "HttpRequest not implemented",
+		HTTPStatus: http.StatusNotImplemented,
+	}
+}
+
+func (e *incompleteBootstrapStreamExecutor) Calls() int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.calls
 }
 
 func (e *authAwareStreamExecutor) Identifier() string { return "codex" }
@@ -605,5 +657,66 @@ func TestExecuteStreamWithAuthManager_ValidatesOpenAIResponsesStreamDataJSON(t *
 	}
 	if !gotErr {
 		t.Fatalf("expected terminal error")
+	}
+}
+
+func TestExecuteStreamWithAuthManager_ReturnsIncompleteStreamErrorAfterBootstrapRetry(t *testing.T) {
+	executor := &incompleteBootstrapStreamExecutor{}
+	manager := coreauth.NewManager(nil, nil, nil)
+	manager.RegisterExecutor(executor)
+
+	auth1 := &coreauth.Auth{
+		ID:       "auth1",
+		Provider: "codex",
+		Status:   coreauth.StatusActive,
+		Metadata: map[string]any{"email": "test1@example.com"},
+	}
+	if _, err := manager.Register(context.Background(), auth1); err != nil {
+		t.Fatalf("manager.Register(auth1): %v", err)
+	}
+
+	registry.GetGlobalRegistry().RegisterClient(auth1.ID, auth1.Provider, []*registry.ModelInfo{{ID: "test-model"}})
+	t.Cleanup(func() {
+		registry.GetGlobalRegistry().UnregisterClient(auth1.ID)
+	})
+
+	handler := NewBaseAPIHandlers(&sdkconfig.SDKConfig{
+		Streaming: sdkconfig.StreamingConfig{
+			BootstrapRetries: 1,
+		},
+	}, manager)
+	dataChan, _, errChan := handler.ExecuteStreamWithAuthManager(context.Background(), "openai", "test-model", []byte(`{"model":"test-model"}`), "")
+	if dataChan == nil || errChan == nil {
+		t.Fatalf("expected non-nil channels")
+	}
+
+	var got []byte
+	for chunk := range dataChan {
+		got = append(got, chunk...)
+	}
+	if len(got) != 0 {
+		t.Fatalf("expected empty payload, got %q", string(got))
+	}
+
+	var gotErr error
+	var gotStatus int
+	for msg := range errChan {
+		if msg == nil || msg.Error == nil {
+			continue
+		}
+		gotErr = msg.Error
+		gotStatus = msg.StatusCode
+	}
+	if gotErr == nil {
+		t.Fatalf("expected terminal error")
+	}
+	if gotStatus != http.StatusRequestTimeout {
+		t.Fatalf("expected status %d, got %d", http.StatusRequestTimeout, gotStatus)
+	}
+	if !strings.Contains(gotErr.Error(), "response.completed") {
+		t.Fatalf("expected incomplete stream error, got %v", gotErr)
+	}
+	if executor.Calls() != 1 {
+		t.Fatalf("expected single upstream stream attempt before auth manager blocked retry, got %d calls", executor.Calls())
 	}
 }

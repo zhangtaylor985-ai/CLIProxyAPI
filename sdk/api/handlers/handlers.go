@@ -6,6 +6,7 @@ package handlers
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -2127,7 +2128,7 @@ func (h *BaseAPIHandler) ExecuteStreamWithAuthManager(ctx context.Context, handl
 							chunks = retryResult.Chunks
 							continue outer
 						}
-						streamErr = &statusHeadersError{err: retryExecErr.Error, code: retryExecErr.StatusCode, addon: retryExecErr.Addon}
+						streamErr = preferSpecificStreamRetryError(streamErr, retryExecErr)
 					}
 
 					if !sentPayload && !failoverAttempted && failoverEnabled && containsProvider(providers, "claude") && failoverTargetModel != "" && failoverTargetModel != normalizedModel {
@@ -2177,16 +2178,14 @@ func (h *BaseAPIHandler) ExecuteStreamWithAuthManager(ctx context.Context, handl
 									}
 									continue outer
 								}
-								streamErr = &statusHeadersError{err: retryExecErr.Error, code: retryExecErr.StatusCode, addon: retryExecErr.Addon}
+								streamErr = preferSpecificStreamRetryError(streamErr, retryExecErr)
 							}
 						}
 					}
 
 					status := http.StatusInternalServerError
-					if se, ok := streamErr.(interface{ StatusCode() int }); ok && se != nil {
-						if code := se.StatusCode(); code > 0 {
-							status = code
-						}
+					if code := statusFromError(streamErr); code > 0 {
+						status = code
 					}
 					var addon http.Header
 					if he, ok := streamErr.(interface{ Headers() http.Header }); ok && he != nil {
@@ -2252,12 +2251,32 @@ func statusFromError(err error) int {
 	if err == nil {
 		return 0
 	}
-	if se, ok := err.(interface{ StatusCode() int }); ok && se != nil {
+	var se interface{ StatusCode() int }
+	if errors.As(err, &se) && se != nil {
 		if code := se.StatusCode(); code > 0 {
 			return code
 		}
 	}
 	return 0
+}
+
+func preferSpecificStreamRetryError(original error, retry *interfaces.ErrorMessage) error {
+	if retry == nil {
+		return original
+	}
+	wrappedRetry := &statusHeadersError{err: retry.Error, code: retry.StatusCode, addon: retry.Addon}
+	originalStatus := statusFromError(original)
+	if originalStatus == 0 {
+		return wrappedRetry
+	}
+	retryStatus := retry.StatusCode
+	if retryStatus <= 0 {
+		retryStatus = statusFromError(retry.Error)
+	}
+	if retryStatus == 0 || retryStatus == http.StatusInternalServerError {
+		return original
+	}
+	return wrappedRetry
 }
 
 func (h *BaseAPIHandler) getRequestDetails(modelName string) (providers []string, normalizedModel string, err *interfaces.ErrorMessage) {

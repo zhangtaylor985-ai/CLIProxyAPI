@@ -124,6 +124,44 @@ func ConvertOpenAIResponsesRequestToClaude(modelName string, inputRawJSON []byte
 	// Stream
 	out, _ = sjson.SetBytes(out, "stream", stream)
 
+	// Map response_format and text settings to Claude text.format/text.verbosity.
+	rf := root.Get("response_format")
+	text := root.Get("text")
+	if rf.Exists() {
+		if !gjson.GetBytes(out, "text").Exists() {
+			out, _ = sjson.SetRawBytes(out, "text", []byte(`{}`))
+		}
+
+		switch rf.Get("type").String() {
+		case "text":
+			out, _ = sjson.SetBytes(out, "text.format.type", "text")
+		case "json_schema":
+			js := rf.Get("json_schema")
+			if js.Exists() {
+				out, _ = sjson.SetBytes(out, "text.format.type", "json_schema")
+				if v := js.Get("name"); v.Exists() {
+					out, _ = sjson.SetBytes(out, "text.format.name", v.Value())
+				}
+				if v := js.Get("strict"); v.Exists() {
+					out, _ = sjson.SetBytes(out, "text.format.strict", v.Value())
+				}
+				if v := js.Get("schema"); v.Exists() {
+					out, _ = sjson.SetRawBytes(out, "text.format.schema", []byte(v.Raw))
+				}
+			}
+		}
+		if v := text.Get("verbosity"); v.Exists() {
+			out, _ = sjson.SetBytes(out, "text.verbosity", v.Value())
+		}
+	} else if text.Exists() {
+		if v := text.Get("verbosity"); v.Exists() {
+			if !gjson.GetBytes(out, "text").Exists() {
+				out, _ = sjson.SetRawBytes(out, "text", []byte(`{}`))
+			}
+			out, _ = sjson.SetBytes(out, "text.verbosity", v.Value())
+		}
+	}
+
 	// instructions -> as a leading message (use role user for Claude API compatibility)
 	instructionsText := ""
 	extractedFromSystem := false
