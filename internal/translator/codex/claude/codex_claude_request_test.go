@@ -221,3 +221,66 @@ func TestConvertClaudeRequestToCodex_MapsClaudeCodeWebSearchToolToBuiltinSearch(
 		t.Fatalf("reasoning.effort = %q, want %q; output=%s", got, "high", string(result))
 	}
 }
+
+func TestConvertClaudeRequestToCodex_PreservesUnknownToolResultContentBlocksAsInputText(t *testing.T) {
+	input := `{
+		"model": "claude-opus-4-6",
+		"messages": [{
+			"role": "user",
+			"content": [{
+				"type": "tool_result",
+				"tool_use_id": "toolu_123",
+				"content": [
+					{"type": "text", "text": "updated"},
+					{"type": "tool_progress", "status": "done", "step": "finalize"}
+				]
+			}]
+		}]
+	}`
+
+	result := ConvertClaudeRequestToCodex("gpt-5.4", []byte(input), true)
+	output := gjson.GetBytes(result, "input.0")
+
+	if got := output.Get("type").String(); got != "function_call_output" {
+		t.Fatalf("input.0.type = %q, want %q; output=%s", got, "function_call_output", string(result))
+	}
+	if got := output.Get("output.0.type").String(); got != "input_text" {
+		t.Fatalf("output.0.type = %q, want %q; output=%s", got, "input_text", string(result))
+	}
+	if got := output.Get("output.0.text").String(); got != "updated" {
+		t.Fatalf("output.0.text = %q, want %q; output=%s", got, "updated", string(result))
+	}
+	if got := output.Get("output.1.type").String(); got != "input_text" {
+		t.Fatalf("output.1.type = %q, want %q; output=%s", got, "input_text", string(result))
+	}
+	rawFallback := output.Get("output.1.text").String()
+	fallbackJSON := gjson.Parse(rawFallback)
+	if got := fallbackJSON.Get("type").String(); got != "tool_progress" {
+		t.Fatalf("output.1.text.type = %q, want %q; output=%s", got, "tool_progress", string(result))
+	}
+	if got := fallbackJSON.Get("status").String(); got != "done" {
+		t.Fatalf("output.1.text.status = %q, want %q; output=%s", got, "done", string(result))
+	}
+	if got := fallbackJSON.Get("step").String(); got != "finalize" {
+		t.Fatalf("output.1.text.step = %q, want %q; output=%s", got, "finalize", string(result))
+	}
+}
+
+func TestConvertClaudeRequestToCodex_PreservesPlainStringToolResultOutput(t *testing.T) {
+	input := `{
+		"model": "claude-opus-4-6",
+		"messages": [{
+			"role": "user",
+			"content": [{
+				"type": "tool_result",
+				"tool_use_id": "toolu_123",
+				"content": "Updated task #9 status"
+			}]
+		}]
+	}`
+
+	result := ConvertClaudeRequestToCodex("gpt-5.4", []byte(input), true)
+	if got := gjson.GetBytes(result, "input.0.output").String(); got != "Updated task #9 status" {
+		t.Fatalf("input.0.output = %q, want %q; output=%s", got, "Updated task #9 status", string(result))
+	}
+}

@@ -122,6 +122,15 @@ func ConvertClaudeRequestToCodex(modelName string, inputRawJSON []byte, _ bool) 
 				hasContent = true
 			}
 
+			appendToolResultText := func(rawText string, toolResultContent *[]byte, toolResultContentIndex *int) {
+				if rawText == "" {
+					return
+				}
+				*toolResultContent, _ = sjson.SetBytes(*toolResultContent, fmt.Sprintf("%d.type", *toolResultContentIndex), "input_text")
+				*toolResultContent, _ = sjson.SetBytes(*toolResultContent, fmt.Sprintf("%d.text", *toolResultContentIndex), rawText)
+				*toolResultContentIndex++
+			}
+
 			messageContentsResult := messageResult.Get("content")
 			if messageContentsResult.IsArray() {
 				messageContentResults := messageContentsResult.Array()
@@ -202,9 +211,13 @@ func ConvertClaudeRequestToCodex(modelName string, inputRawJSON []byte, _ bool) 
 										}
 									}
 								} else if toolResultContentType == "text" {
-									toolResultContent, _ = sjson.SetBytes(toolResultContent, fmt.Sprintf("%d.type", toolResultContentIndex), "input_text")
-									toolResultContent, _ = sjson.SetBytes(toolResultContent, fmt.Sprintf("%d.text", toolResultContentIndex), contentResults[k].Get("text").String())
-									toolResultContentIndex++
+									appendToolResultText(contentResults[k].Get("text").String(), &toolResultContent, &toolResultContentIndex)
+								} else {
+									fallbackText := contentResults[k].Get("text").String()
+									if fallbackText == "" {
+										fallbackText = contentResults[k].Raw
+									}
+									appendToolResultText(fallbackText, &toolResultContent, &toolResultContentIndex)
 								}
 							}
 							if toolResultContentIndex > 0 {

@@ -308,6 +308,59 @@ func TestConvertCodexResponseToClaude_ResponseCompletedClosesPendingToolBlock(t 
 	}
 }
 
+func TestConvertCodexResponseToClaude_OutputItemDoneMessageFallsBackToTextEvents(t *testing.T) {
+	var param any
+	chunks := [][]byte{
+		[]byte(`data: {"type":"response.created","response":{"id":"resp_1","model":"gpt-5.4"}}`),
+		[]byte(`data: {"type":"response.output_item.done","item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]},"output_index":0}`),
+		[]byte(`data: {"type":"response.completed","response":{"id":"resp_1","model":"gpt-5.4","usage":{"input_tokens":1,"output_tokens":1}}}`),
+	}
+
+	var transcript strings.Builder
+	for _, chunk := range chunks {
+		out := ConvertCodexResponseToClaude(claudeCLICtx(), "gpt-5.4", nil, nil, chunk, &param)
+		if len(out) != 1 {
+			t.Fatalf("expected 1 output chunk, got %d", len(out))
+		}
+		transcript.Write(out[0])
+	}
+
+	got := transcript.String()
+	if !strings.Contains(got, `event: content_block_start`) {
+		t.Fatalf("expected fallback message to open a text block, got %q", got)
+	}
+	if !strings.Contains(got, `event: content_block_delta`) || !strings.Contains(got, `"text_delta","text":"ok"`) {
+		t.Fatalf("expected fallback message text delta, got %q", got)
+	}
+	if !strings.Contains(got, `event: content_block_stop`) {
+		t.Fatalf("expected fallback message to close the text block, got %q", got)
+	}
+}
+
+func TestConvertCodexResponseToClaude_OutputItemDoneMessageDoesNotDuplicateDeltaStream(t *testing.T) {
+	var param any
+	chunks := [][]byte{
+		[]byte(`data: {"type":"response.created","response":{"id":"resp_1","model":"gpt-5.4"}}`),
+		[]byte(`data: {"type":"response.content_part.added","item_id":"msg_1","output_index":0,"content_index":0,"part":{"type":"output_text","text":""}}`),
+		[]byte(`data: {"type":"response.output_text.delta","item_id":"msg_1","output_index":0,"content_index":0,"delta":"hello"}`),
+		[]byte(`data: {"type":"response.content_part.done","item_id":"msg_1","output_index":0,"content_index":0,"part":{"type":"output_text","text":"hello"}}`),
+		[]byte(`data: {"type":"response.output_item.done","item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hello"}]},"output_index":0}`),
+	}
+
+	var transcript strings.Builder
+	for _, chunk := range chunks {
+		out := ConvertCodexResponseToClaude(claudeCLICtx(), "gpt-5.4", nil, nil, chunk, &param)
+		if len(out) != 1 {
+			t.Fatalf("expected 1 output chunk, got %d", len(out))
+		}
+		transcript.Write(out[0])
+	}
+
+	if count := strings.Count(transcript.String(), `"text_delta","text":"hello"`); count != 1 {
+		t.Fatalf("expected fallback path to avoid duplicating streamed text, got %d transcript=%q", count, transcript.String())
+	}
+}
+
 func TestConvertCodexResponseToClaude_UsesCompatibleUsageDefaults(t *testing.T) {
 	created := []byte(`data: {"type":"response.created","response":{"id":"resp_123","model":"gpt-5.4","status":"in_progress"}}`)
 	completed := []byte(`data: {"type":"response.completed","response":{"id":"resp_123","model":"gpt-5.4","usage":{"input_tokens":12,"output_tokens":4}}}`)
