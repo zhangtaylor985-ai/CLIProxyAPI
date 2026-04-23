@@ -306,7 +306,9 @@ func (h *ClaudeCodeAPIHandler) forwardClaudeStream(c *gin.Context, flusher http.
 			if errMsg.StatusCode > 0 {
 				status = errMsg.StatusCode
 			}
-			c.Status(status)
+			if !c.Writer.Written() {
+				c.Status(status)
+			}
 
 			errorBytes, _ := json.Marshal(h.toClaudeError(errMsg))
 			_, _ = fmt.Fprintf(c.Writer, "event: error\ndata: %s\n\n", errorBytes)
