@@ -982,6 +982,30 @@ func isClaudeFailoverEligible(status int, err error) bool {
 	}
 }
 
+func (h *BaseAPIHandler) claudeGlobalFallbackTarget(ctx context.Context, requestedModel string) (string, bool) {
+	if h == nil || h.Cfg == nil || !h.Cfg.ClaudeToGPTRoutingEnabled {
+		return "", false
+	}
+	policy := apiKeyPolicyFromContext(ctx)
+	if policy == nil || !policy.AllowsClaudeGlobalFallback() {
+		return "", false
+	}
+	return globalClaudeGPTTarget(h.Cfg, requestedModel)
+}
+
+func globalClaudeGPTTarget(cfg *config.SDKConfig, requestedModel string) (string, bool) {
+	if !internalpolicy.IsClaudeModel(requestedModel) {
+		return "", false
+	}
+	if cfg == nil {
+		return internalpolicy.DefaultGlobalClaudeGPTTarget(requestedModel, "")
+	}
+	if family := strings.TrimSpace(cfg.ClaudeToGPTTargetFamily); family != "" {
+		return internalpolicy.DefaultClaudeGPTTargetForFamily(requestedModel, family)
+	}
+	return internalpolicy.DefaultGlobalClaudeGPTTarget(requestedModel, cfg.ClaudeToGPTReasoningEffort)
+}
+
 func errString(err error) string {
 	if err == nil {
 		return ""
@@ -1490,9 +1514,8 @@ func (h *BaseAPIHandler) ExecuteWithAuthManager(ctx context.Context, handlerType
 		if probeRoutingBypass {
 			return nil, nil, errMsg
 		}
-		if policy := apiKeyPolicyFromContext(ctx); policy != nil {
-			targetModel, enabled := policy.ClaudeFailoverTargetModelFor(requestedModel)
-			if enabled && strings.TrimSpace(targetModel) != "" && targetModel != requestedModel && seemsClaudeModel(routedModel) && isClaudeFailoverEligible(errMsg.StatusCode, errMsg.Error) {
+		if targetModel, enabled := h.claudeGlobalFallbackTarget(ctx, requestedModel); enabled {
+			if strings.TrimSpace(targetModel) != "" && targetModel != requestedModel && seemsClaudeModel(routedModel) && isClaudeFailoverEligible(errMsg.StatusCode, errMsg.Error) {
 				failoverPayload := rewriteModelField(rawJSON, targetModel)
 				targetModel, failoverPayload = finalizeClaudeGPTTargetModel(failoverPayload, handlerType, originalRequestedModel, targetModel)
 				failoverProviders, failoverModel, detailErr := h.getRequestDetails(targetModel)
@@ -1581,11 +1604,10 @@ func (h *BaseAPIHandler) ExecuteWithAuthManager(ctx context.Context, handlerType
 		return out, outHeaders, nil
 	}
 
-	policy := apiKeyPolicyFromContext(ctx)
 	targetModel := ""
 	enabled := false
-	if policy != nil && !probeRoutingBypass {
-		targetModel, enabled = policy.ClaudeFailoverTargetModelFor(requestedModel)
+	if !probeRoutingBypass {
+		targetModel, enabled = h.claudeGlobalFallbackTarget(ctx, requestedModel)
 	}
 	if !probeRoutingBypass && enabled && containsProvider(providers, "claude") && strings.TrimSpace(targetModel) != "" && targetModel != normalizedModel {
 		status := execErr.StatusCode
@@ -1693,9 +1715,8 @@ func (h *BaseAPIHandler) ExecuteCountWithAuthManager(ctx context.Context, handle
 		if probeRoutingBypass {
 			return nil, nil, errMsg
 		}
-		if policy := apiKeyPolicyFromContext(ctx); policy != nil {
-			targetModel, enabled := policy.ClaudeFailoverTargetModelFor(requestedModel)
-			if enabled && strings.TrimSpace(targetModel) != "" && targetModel != requestedModel && seemsClaudeModel(routedModel) && isClaudeFailoverEligible(errMsg.StatusCode, errMsg.Error) {
+		if targetModel, enabled := h.claudeGlobalFallbackTarget(ctx, requestedModel); enabled {
+			if strings.TrimSpace(targetModel) != "" && targetModel != requestedModel && seemsClaudeModel(routedModel) && isClaudeFailoverEligible(errMsg.StatusCode, errMsg.Error) {
 				failoverPayload := rewriteModelField(rawJSON, targetModel)
 				targetModel, failoverPayload = finalizeClaudeGPTTargetModel(failoverPayload, handlerType, originalRequestedModel, targetModel)
 				failoverProviders, failoverModel, detailErr := h.getRequestDetails(targetModel)
@@ -1784,11 +1805,10 @@ func (h *BaseAPIHandler) ExecuteCountWithAuthManager(ctx context.Context, handle
 		return out, outHeaders, nil
 	}
 
-	policy := apiKeyPolicyFromContext(ctx)
 	targetModel := ""
 	enabled := false
-	if policy != nil && !probeRoutingBypass {
-		targetModel, enabled = policy.ClaudeFailoverTargetModelFor(requestedModel)
+	if !probeRoutingBypass {
+		targetModel, enabled = h.claudeGlobalFallbackTarget(ctx, requestedModel)
 	}
 	if !probeRoutingBypass && enabled && containsProvider(providers, "claude") && strings.TrimSpace(targetModel) != "" && targetModel != normalizedModel {
 		status := execErr.StatusCode
@@ -1887,9 +1907,8 @@ func (h *BaseAPIHandler) ExecuteStreamWithAuthManager(ctx context.Context, handl
 			close(errChan)
 			return nil, nil, errChan
 		}
-		if policy := apiKeyPolicyFromContext(ctx); policy != nil {
-			targetModel, enabled := policy.ClaudeFailoverTargetModelFor(requestedModel)
-			if enabled && strings.TrimSpace(targetModel) != "" && targetModel != requestedModel && seemsClaudeModel(routedModel) && isClaudeFailoverEligible(errMsg.StatusCode, errMsg.Error) {
+		if targetModel, enabled := h.claudeGlobalFallbackTarget(ctx, requestedModel); enabled {
+			if strings.TrimSpace(targetModel) != "" && targetModel != requestedModel && seemsClaudeModel(routedModel) && isClaudeFailoverEligible(errMsg.StatusCode, errMsg.Error) {
 				failoverPayload := rewriteModelField(rawJSON, targetModel)
 				targetModel, failoverPayload = finalizeClaudeGPTTargetModel(failoverPayload, handlerType, originalRequestedModel, targetModel)
 				failoverProviders, failoverModel, detailErr := h.getRequestDetails(targetModel)
@@ -1960,8 +1979,8 @@ func (h *BaseAPIHandler) ExecuteStreamWithAuthManager(ctx context.Context, handl
 		failoverEnabled     bool
 		failoverAttempted   bool
 	)
-	if policy := apiKeyPolicyFromContext(ctx); policy != nil && !probeRoutingBypass {
-		failoverTargetModel, failoverEnabled = policy.ClaudeFailoverTargetModelFor(modelName)
+	if !probeRoutingBypass {
+		failoverTargetModel, failoverEnabled = h.claudeGlobalFallbackTarget(ctx, modelName)
 	}
 
 	execStream := func(execProviders []string, execReq coreexecutor.Request, execOpts coreexecutor.Options) (*coreexecutor.StreamResult, *interfaces.ErrorMessage) {

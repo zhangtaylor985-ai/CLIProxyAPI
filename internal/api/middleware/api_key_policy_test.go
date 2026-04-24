@@ -658,7 +658,7 @@ func TestAPIKeyPolicyMiddleware_ClaudeUsageLimitFallsBackToGlobalRouting(t *test
 	if got := gjson.GetBytes(w.Body.Bytes(), "model").String(); got != "claude-opus-4-6" {
 		t.Fatalf("model=%q", got)
 	}
-	if got := gjson.GetBytes(w.Body.Bytes(), "routed_target").String(); got != "gpt-5.4(high)" {
+	if got := gjson.GetBytes(w.Body.Bytes(), "routed_target").String(); got != "gpt-5.5(high)" {
 		t.Fatalf("routed_target=%q body=%s", got, w.Body.String())
 	}
 }

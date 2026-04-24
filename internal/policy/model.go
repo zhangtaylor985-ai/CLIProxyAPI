@@ -16,11 +16,9 @@ const (
 	claudeThinkingSuffixLiteral    = "-thinking"
 	ClaudeGPTTargetFamilyGPT52     = "gpt-5.2"
 	ClaudeGPTTargetFamilyGPT54     = "gpt-5.4"
+	ClaudeGPTTargetFamilyGPT55     = "gpt-5.5"
 	ClaudeGPTTargetModelGPT53Codex = "gpt-5.3-codex"
-	defaultClaudeGPTOpusTargetBase = "gpt-5.4"
-	defaultClaudeGPTSonnetTarget   = "gpt-5.3-codex"
-	defaultClaudeGPTHighTarget     = "gpt-5.4(high)"
-	defaultClaudeGPTMediumTarget   = "gpt-5.4(medium)"
+	defaultClaudeGPTTargetBase     = "gpt-5.5"
 )
 
 // NormaliseModelKey returns a lowercased model name without thinking budget suffix "(...)".
@@ -129,6 +127,8 @@ func NormalizeClaudeGPTTargetFamily(value string) string {
 		return ClaudeGPTTargetFamilyGPT52
 	case ClaudeGPTTargetFamilyGPT54:
 		return ClaudeGPTTargetFamilyGPT54
+	case ClaudeGPTTargetFamilyGPT55:
+		return ClaudeGPTTargetFamilyGPT55
 	case ClaudeGPTTargetModelGPT53Codex:
 		return ClaudeGPTTargetModelGPT53Codex
 	default:
@@ -144,6 +144,8 @@ func NormalizeClaudeGPTTargetBase(value string) string {
 		return ClaudeGPTTargetFamilyGPT52
 	case ClaudeGPTTargetFamilyGPT54:
 		return ClaudeGPTTargetFamilyGPT54
+	case ClaudeGPTTargetFamilyGPT55:
+		return ClaudeGPTTargetFamilyGPT55
 	case ClaudeGPTTargetModelGPT53Codex:
 		return ClaudeGPTTargetModelGPT53Codex
 	default:
@@ -152,21 +154,21 @@ func NormalizeClaudeGPTTargetBase(value string) string {
 }
 
 // EffectiveClaudeGPTTargetFamily resolves the configured Claude -> GPT family,
-// defaulting to gpt-5.4 when unset or invalid.
+// defaulting to gpt-5.5 when unset or invalid.
 func EffectiveClaudeGPTTargetFamily(value string) string {
 	if family := NormalizeClaudeGPTTargetFamily(value); family != "" {
 		return family
 	}
-	return ClaudeGPTTargetFamilyGPT54
+	return ClaudeGPTTargetFamilyGPT55
 }
 
 // EffectiveClaudeGPTTargetBase resolves the configured per-key Claude -> GPT target base model,
-// defaulting to gpt-5.4 when unset or invalid.
+// defaulting to gpt-5.5 when unset or invalid.
 func EffectiveClaudeGPTTargetBase(value string) string {
 	if base := NormalizeClaudeGPTTargetBase(value); base != "" {
 		return base
 	}
-	return ClaudeGPTTargetFamilyGPT54
+	return ClaudeGPTTargetFamilyGPT55
 }
 
 // NormalizeClaudeGPTReasoningEffort returns a canonical reasoning effort for global
@@ -213,21 +215,14 @@ func DefaultClaudeGPTTargetForFamily(model, family string) (string, bool) {
 }
 
 // DefaultGlobalClaudeGPTTarget maps Claude requests to the fixed global Claude -> GPT
-// strategy used by the system settings:
-//   - Claude Opus  -> gpt-5.4(<effort>)
-//   - Other Claude -> gpt-5.3-codex(<effort>)
+// strategy used by the system settings.
 func DefaultGlobalClaudeGPTTarget(model, reasoningEffort string) (string, bool) {
 	key := NormaliseModelKey(model)
 	if !strings.HasPrefix(key, claudeModelPrefix) {
 		return "", false
 	}
 
-	targetBase := defaultClaudeGPTSonnetTarget
-	if strings.HasPrefix(key, claudeOpusPrefix) {
-		targetBase = defaultClaudeGPTOpusTargetBase
-	}
-
-	return targetBase + "(" + EffectiveClaudeGPTReasoningEffort(reasoningEffort) + ")", true
+	return defaultClaudeGPTTargetBase + "(" + EffectiveClaudeGPTReasoningEffort(reasoningEffort) + ")", true
 }
 
 // MatchWildcard performs case-insensitive matching where '*' matches any substring.

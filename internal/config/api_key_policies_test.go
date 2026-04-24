@@ -256,13 +256,13 @@ func TestConfig_EffectiveAPIKeyPolicy_AddsGlobalClaudeRoutingRules(t *testing.T)
 	}
 
 	target, decision := policy.RoutedModelFor("k1", "claude-opus-4-6", time.Unix(0, 0))
-	if decision == nil || target != "gpt-5.4(high)" {
+	if decision == nil || target != "gpt-5.5(high)" {
 		t.Fatalf("expected opus routing to high, got target=%q decision=%+v", target, decision)
 	}
 
 	target, decision = policy.RoutedModelFor("k1", "claude-sonnet-4-6", time.Unix(0, 0))
-	if decision == nil || target != "gpt-5.3-codex(high)" {
-		t.Fatalf("expected sonnet routing to gpt-5.3-codex(high), got target=%q decision=%+v", target, decision)
+	if decision == nil || target != "gpt-5.5(high)" {
+		t.Fatalf("expected sonnet routing to gpt-5.5(high), got target=%q decision=%+v", target, decision)
 	}
 }
 
@@ -280,13 +280,13 @@ func TestConfig_EffectiveAPIKeyPolicy_UsesGlobalClaudeGPTReasoningEffort(t *test
 	}
 
 	target, decision := policy.RoutedModelFor("k1", "claude-opus-4-6", time.Unix(0, 0))
-	if decision == nil || target != "gpt-5.4(low)" {
-		t.Fatalf("expected opus routing to gpt-5.4(low), got target=%q decision=%+v", target, decision)
+	if decision == nil || target != "gpt-5.5(low)" {
+		t.Fatalf("expected opus routing to gpt-5.5(low), got target=%q decision=%+v", target, decision)
 	}
 
 	target, decision = policy.RoutedModelFor("k1", "claude-sonnet-4-6", time.Unix(0, 0))
-	if decision == nil || target != "gpt-5.3-codex(low)" {
-		t.Fatalf("expected sonnet routing to gpt-5.3-codex(low), got target=%q decision=%+v", target, decision)
+	if decision == nil || target != "gpt-5.5(low)" {
+		t.Fatalf("expected sonnet routing to gpt-5.5(low), got target=%q decision=%+v", target, decision)
 	}
 }
 
@@ -342,13 +342,13 @@ func TestConfig_EffectiveAPIKeyPolicyWithOptions_ForcesGlobalClaudeRouting(t *te
 	}
 
 	target, decision := policy.RoutedModelFor("k1", "claude-opus-4-6", time.Unix(0, 0))
-	if decision == nil || target != "gpt-5.4(high)" {
-		t.Fatalf("expected forced opus routing to gpt-5.4(high), got target=%q decision=%+v", target, decision)
+	if decision == nil || target != "gpt-5.5(high)" {
+		t.Fatalf("expected forced opus routing to gpt-5.5(high), got target=%q decision=%+v", target, decision)
 	}
 
 	target, decision = policy.RoutedModelFor("k1", "claude-sonnet-4-6", time.Unix(0, 0))
-	if decision == nil || target != "gpt-5.3-codex(high)" {
-		t.Fatalf("expected forced sonnet routing to gpt-5.3-codex(high), got target=%q decision=%+v", target, decision)
+	if decision == nil || target != "gpt-5.5(high)" {
+		t.Fatalf("expected forced sonnet routing to gpt-5.5(high), got target=%q decision=%+v", target, decision)
 	}
 }
 
@@ -378,7 +378,7 @@ func TestConfig_EffectiveAPIKeyPolicy_UsesPerKeyClaudeGPT53CodexTarget(t *testin
 	}
 }
 
-func TestConfig_EffectiveAPIKeyPolicy_SynthesizesClaudeFailoverForOptInKeys(t *testing.T) {
+func TestAPIKeyPolicy_AllowsClaudeGlobalFallbackDefaultsForOptInKeys(t *testing.T) {
 	cfg := &Config{
 		SDKConfig: SDKConfig{ClaudeToGPTRoutingEnabled: true},
 		APIKeyPolicies: []APIKeyPolicy{
@@ -393,98 +393,19 @@ func TestConfig_EffectiveAPIKeyPolicy_SynthesizesClaudeFailoverForOptInKeys(t *t
 	if routed, decision := policy.RoutedModelFor("k1", "claude-opus-4-6", time.Unix(0, 0)); decision != nil || routed != "" {
 		t.Fatalf("expected opted-in key to keep Claude routing, got target=%q decision=%+v", routed, decision)
 	}
-
-	target, ok := policy.ClaudeFailoverTargetModelFor("claude-opus-4-6")
-	if !ok || target != "gpt-5.4(high)" {
-		t.Fatalf("expected opus failover target gpt-5.4(high), got target=%q enabled=%v", target, ok)
-	}
-
-	target, ok = policy.ClaudeFailoverTargetModelFor("claude-sonnet-4-6")
-	if !ok || target != "gpt-5.3-codex(high)" {
-		t.Fatalf("expected sonnet failover target gpt-5.3-codex(high), got target=%q enabled=%v", target, ok)
+	if !policy.AllowsClaudeGlobalFallback() {
+		t.Fatal("expected native Claude opt-in key to allow global fallback by default")
 	}
 }
 
-func TestConfig_EffectiveAPIKeyPolicy_SynthesizesClaudeFailoverUsingGlobalReasoningEffort(t *testing.T) {
-	cfg := &Config{
-		SDKConfig: SDKConfig{
-			ClaudeToGPTRoutingEnabled:  true,
-			ClaudeToGPTReasoningEffort: "medium",
-		},
-		APIKeyPolicies: []APIKeyPolicy{
-			{APIKey: "k1", EnableClaudeModels: boolPtr(true)},
-		},
+func TestAPIKeyPolicy_AllowsClaudeGlobalFallbackCanBeDisabled(t *testing.T) {
+	policy := &APIKeyPolicy{
+		EnableClaudeModels:          boolPtr(true),
+		ClaudeGlobalFallbackEnabled: boolPtr(false),
 	}
 
-	policy := cfg.EffectiveAPIKeyPolicy("k1")
-	if policy == nil {
-		t.Fatal("expected synthesized policy")
-	}
-
-	target, ok := policy.ClaudeFailoverTargetModelFor("claude-opus-4-6")
-	if !ok || target != "gpt-5.4(medium)" {
-		t.Fatalf("expected opus failover target gpt-5.4(medium), got target=%q enabled=%v", target, ok)
-	}
-
-	target, ok = policy.ClaudeFailoverTargetModelFor("claude-sonnet-4-6")
-	if !ok || target != "gpt-5.3-codex(medium)" {
-		t.Fatalf("expected sonnet failover target gpt-5.3-codex(medium), got target=%q enabled=%v", target, ok)
-	}
-}
-
-func TestConfig_EffectiveAPIKeyPolicy_SynthesizesClaudeFailoverUsingPerKeyGPT53CodexTarget(t *testing.T) {
-	cfg := &Config{
-		SDKConfig: SDKConfig{ClaudeToGPTRoutingEnabled: true},
-		APIKeyPolicies: []APIKeyPolicy{
-			{
-				APIKey:                "k1",
-				EnableClaudeModels:    boolPtr(true),
-				ClaudeGPTTargetFamily: "gpt-5.3-codex",
-			},
-		},
-	}
-
-	policy := cfg.EffectiveAPIKeyPolicy("k1")
-	if policy == nil {
-		t.Fatal("expected synthesized policy")
-	}
-
-	target, ok := policy.ClaudeFailoverTargetModelFor("claude-opus-4-6")
-	if !ok || target != "gpt-5.3-codex(high)" {
-		t.Fatalf("expected opus failover target gpt-5.3-codex(high), got target=%q enabled=%v", target, ok)
-	}
-
-	target, ok = policy.ClaudeFailoverTargetModelFor("claude-sonnet-4-6")
-	if !ok || target != "gpt-5.3-codex(medium)" {
-		t.Fatalf("expected sonnet failover target gpt-5.3-codex(medium), got target=%q enabled=%v", target, ok)
-	}
-}
-
-func TestConfig_EffectiveAPIKeyPolicy_SynthesizesClaudeFailoverUsingPerKeyFamily(t *testing.T) {
-	cfg := &Config{
-		SDKConfig: SDKConfig{ClaudeToGPTRoutingEnabled: true},
-		APIKeyPolicies: []APIKeyPolicy{
-			{
-				APIKey:                "k1",
-				EnableClaudeModels:    boolPtr(true),
-				ClaudeGPTTargetFamily: "gpt-5.2",
-			},
-		},
-	}
-
-	policy := cfg.EffectiveAPIKeyPolicy("k1")
-	if policy == nil {
-		t.Fatal("expected synthesized policy")
-	}
-
-	target, ok := policy.ClaudeFailoverTargetModelFor("claude-opus-4-6")
-	if !ok || target != "gpt-5.2(high)" {
-		t.Fatalf("expected opus failover target gpt-5.2(high), got target=%q enabled=%v", target, ok)
-	}
-
-	target, ok = policy.ClaudeFailoverTargetModelFor("claude-sonnet-4-6")
-	if !ok || target != "gpt-5.2(medium)" {
-		t.Fatalf("expected sonnet failover target gpt-5.2(medium), got target=%q enabled=%v", target, ok)
+	if policy.AllowsClaudeGlobalFallback() {
+		t.Fatal("expected explicit false to disable native Claude global fallback")
 	}
 }
 
@@ -526,52 +447,13 @@ func TestConfig_EffectiveAPIKeyPolicy_ExplicitPolicyCanAllowGPTAccess(t *testing
 	}
 }
 
-func TestAPIKeyPolicy_ClaudeFailoverTargetModel_DefaultsToMedium(t *testing.T) {
-	policy := &APIKeyPolicy{
-		Failover: APIKeyFailoverPolicy{
-			Claude: ProviderFailoverPolicy{Enabled: true},
-		},
-	}
-
-	target, ok := policy.ClaudeFailoverTargetModel()
-	if !ok {
-		t.Fatal("expected failover target to be enabled")
-	}
-	if target != "gpt-5.4(medium)" {
-		t.Fatalf("expected default failover target gpt-5.4(medium), got %q", target)
-	}
-}
-
-func TestAPIKeyPolicy_ClaudeFailoverTargetModel_AllowsConfiguredGPT52Targets(t *testing.T) {
-	policy := &APIKeyPolicy{
-		Failover: APIKeyFailoverPolicy{
-			Claude: ProviderFailoverPolicy{
-				Enabled:     true,
-				TargetModel: "gpt-5.2(medium)",
-				Rules: []ModelFailoverRule{
-					{FromModel: "claude-opus-*", TargetModel: "gpt-5.2(high)"},
-				},
-			},
-		},
-	}
-
-	target, ok := policy.ClaudeFailoverTargetModelFor("claude-opus-4-6")
-	if !ok || target != "gpt-5.2(high)" {
-		t.Fatalf("expected opus failover target gpt-5.2(high), got target=%q enabled=%v", target, ok)
-	}
-
-	target, ok = policy.ClaudeFailoverTargetModelFor("claude-sonnet-4-6")
-	if !ok || target != "gpt-5.2(medium)" {
-		t.Fatalf("expected default failover target gpt-5.2(medium), got target=%q enabled=%v", target, ok)
-	}
-}
-
 func TestConfig_SanitizeAPIKeyPolicies_NormalizesClaudeGPTTargetFamily(t *testing.T) {
 	cfg := &Config{
 		APIKeyPolicies: []APIKeyPolicy{
 			{APIKey: "k1", ClaudeGPTTargetFamily: " GPT-5.2 "},
 			{APIKey: "k2", ClaudeGPTTargetFamily: " GPT-5.3-CODEX "},
-			{APIKey: "k3", ClaudeGPTTargetFamily: "unknown"},
+			{APIKey: "k3", ClaudeGPTTargetFamily: " GPT-5.5 "},
+			{APIKey: "k4", ClaudeGPTTargetFamily: "unknown"},
 		},
 	}
 
@@ -583,15 +465,18 @@ func TestConfig_SanitizeAPIKeyPolicies_NormalizesClaudeGPTTargetFamily(t *testin
 	if got := cfg.FindAPIKeyPolicy("k2"); got == nil || got.ClaudeGPTTargetFamily != "gpt-5.3-codex" {
 		t.Fatalf("k2 family = %v", got)
 	}
-	if got := cfg.FindAPIKeyPolicy("k3"); got == nil || got.ClaudeGPTTargetFamily != "" {
-		t.Fatalf("k2 family = %v", got)
+	if got := cfg.FindAPIKeyPolicy("k3"); got == nil || got.ClaudeGPTTargetFamily != "gpt-5.5" {
+		t.Fatalf("k3 family = %v", got)
+	}
+	if got := cfg.FindAPIKeyPolicy("k4"); got == nil || got.ClaudeGPTTargetFamily != "" {
+		t.Fatalf("k4 family = %v", got)
 	}
 }
 
 func TestConfig_ClaudeGPTTargetFamilyOrDefault(t *testing.T) {
 	cfg := &Config{}
-	if got := cfg.ClaudeGPTTargetFamilyOrDefault(); got != "gpt-5.4" {
-		t.Fatalf("expected default family gpt-5.4, got %q", got)
+	if got := cfg.ClaudeGPTTargetFamilyOrDefault(); got != "gpt-5.5" {
+		t.Fatalf("expected default family gpt-5.5, got %q", got)
 	}
 
 	cfg.ClaudeToGPTTargetFamily = "gpt-5.2"

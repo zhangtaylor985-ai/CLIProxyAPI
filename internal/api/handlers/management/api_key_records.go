@@ -20,36 +20,34 @@ import (
 )
 
 type apiKeyPolicyView struct {
-	APIKey                string                     `json:"api_key"`
-	Name                  string                     `json:"name"`
-	Note                  string                     `json:"note"`
-	CreatedAt             string                     `json:"created_at"`
-	ExpiresAt             string                     `json:"expires_at"`
-	Disabled              bool                       `json:"disabled"`
-	GroupID               string                     `json:"group_id"`
-	GroupName             string                     `json:"group_name"`
-	AllowClaudeFamily     bool                       `json:"allow_claude_family"`
-	AllowGPTFamily        bool                       `json:"allow_gpt_family"`
-	FastMode              bool                       `json:"fast_mode"`
-	CodexChannelMode      string                     `json:"codex_channel_mode"`
-	EnableClaudeModels    bool                       `json:"enable_claude_models"`
-	ClaudeUsageLimitUSD   float64                    `json:"claude_usage_limit_usd"`
-	ClaudeGPTTargetFamily string                     `json:"claude_gpt_target_family"`
-	EnableClaudeOpus1M    bool                       `json:"enable_claude_opus_1m"`
-	ClaudeCodeOnlyMode    string                     `json:"claude_code_only_mode"`
-	UpstreamBaseURL       string                     `json:"upstream_base_url"`
-	ExcludedModels        []string                   `json:"excluded_models"`
-	AllowClaudeOpus46     bool                       `json:"allow_claude_opus_46"`
-	DailyLimits           map[string]int             `json:"daily_limits"`
-	DailyBudgetUSD        float64                    `json:"daily_budget_usd"`
-	WeeklyBudgetUSD       float64                    `json:"weekly_budget_usd"`
-	WeeklyBudgetAnchorAt  string                     `json:"weekly_budget_anchor_at"`
-	TokenPackageUSD       float64                    `json:"token_package_usd"`
-	TokenPackageStartedAt string                     `json:"token_package_started_at"`
-	ModelRoutingRules     []config.ModelRoutingRule  `json:"model_routing_rules"`
-	ClaudeFailoverEnabled bool                       `json:"claude_failover_enabled"`
-	ClaudeFailoverTarget  string                     `json:"claude_failover_target"`
-	ClaudeFailoverRules   []config.ModelFailoverRule `json:"claude_failover_rules"`
+	APIKey                    string                    `json:"api_key"`
+	Name                      string                    `json:"name"`
+	Note                      string                    `json:"note"`
+	CreatedAt                 string                    `json:"created_at"`
+	ExpiresAt                 string                    `json:"expires_at"`
+	Disabled                  bool                      `json:"disabled"`
+	GroupID                   string                    `json:"group_id"`
+	GroupName                 string                    `json:"group_name"`
+	AllowClaudeFamily         bool                      `json:"allow_claude_family"`
+	AllowGPTFamily            bool                      `json:"allow_gpt_family"`
+	FastMode                  bool                      `json:"fast_mode"`
+	CodexChannelMode          string                    `json:"codex_channel_mode"`
+	EnableClaudeModels        bool                      `json:"enable_claude_models"`
+	ClaudeUsageLimitUSD       float64                   `json:"claude_usage_limit_usd"`
+	ClaudeGPTTargetFamily     string                    `json:"claude_gpt_target_family"`
+	EnableClaudeOpus1M        bool                      `json:"enable_claude_opus_1m"`
+	ClaudeCodeOnlyMode        string                    `json:"claude_code_only_mode"`
+	UpstreamBaseURL           string                    `json:"upstream_base_url"`
+	ExcludedModels            []string                  `json:"excluded_models"`
+	AllowClaudeOpus46         bool                      `json:"allow_claude_opus_46"`
+	DailyLimits               map[string]int            `json:"daily_limits"`
+	DailyBudgetUSD            float64                   `json:"daily_budget_usd"`
+	WeeklyBudgetUSD           float64                   `json:"weekly_budget_usd"`
+	WeeklyBudgetAnchorAt      string                    `json:"weekly_budget_anchor_at"`
+	TokenPackageUSD           float64                   `json:"token_package_usd"`
+	TokenPackageStartedAt     string                    `json:"token_package_started_at"`
+	ModelRoutingRules         []config.ModelRoutingRule `json:"model_routing_rules"`
+	ClaudeGlobalFallback      bool                      `json:"claude_global_fallback_enabled"`
 }
 
 type apiKeyUsageTotals struct {
@@ -130,27 +128,27 @@ type apiKeyEventView struct {
 }
 
 type apiKeyRecordSummaryView struct {
-	APIKey             string                 `json:"api_key"`
-	MaskedAPIKey       string                 `json:"masked_api_key"`
-	Name               string                 `json:"name"`
-	Note               string                 `json:"note"`
-	CreatedAt          string                 `json:"created_at"`
-	ExpiresAt          string                 `json:"expires_at"`
-	Disabled           bool                   `json:"disabled"`
-	GroupID            string                 `json:"group_id"`
-	GroupName          string                 `json:"group_name"`
-	Registered         bool                   `json:"registered"`
-	HasExplicitPolicy  bool                   `json:"has_explicit_policy"`
-	LastUsedAt         *time.Time             `json:"last_used_at,omitempty"`
-	Today              apiKeyUsageTotals      `json:"today"`
-	CurrentPeriod      apiKeyUsageTotals      `json:"current_period"`
-	DailyBudget        apiKeyBudgetWindowView `json:"daily_budget"`
-	WeeklyBudget       apiKeyBudgetWindowView `json:"weekly_budget"`
-	TokenPackage       apiKeyTokenPackageView `json:"token_package"`
-	DailyLimitCount    int                    `json:"daily_limit_count"`
-	PolicyFamily       string                 `json:"policy_family"`
-	EnableClaudeModels bool                   `json:"enable_claude_models"`
-	FastMode           bool                   `json:"fast_mode"`
+	APIKey                    string                 `json:"api_key"`
+	MaskedAPIKey              string                 `json:"masked_api_key"`
+	Name                      string                 `json:"name"`
+	Note                      string                 `json:"note"`
+	CreatedAt                 string                 `json:"created_at"`
+	ExpiresAt                 string                 `json:"expires_at"`
+	Disabled                  bool                   `json:"disabled"`
+	GroupID                   string                 `json:"group_id"`
+	GroupName                 string                 `json:"group_name"`
+	Registered                bool                   `json:"registered"`
+	HasExplicitPolicy         bool                   `json:"has_explicit_policy"`
+	LastUsedAt                *time.Time             `json:"last_used_at,omitempty"`
+	Today                     apiKeyUsageTotals      `json:"today"`
+	CurrentPeriod             apiKeyUsageTotals      `json:"current_period"`
+	DailyBudget               apiKeyBudgetWindowView `json:"daily_budget"`
+	WeeklyBudget              apiKeyBudgetWindowView `json:"weekly_budget"`
+	TokenPackage              apiKeyTokenPackageView `json:"token_package"`
+	DailyLimitCount           int                    `json:"daily_limit_count"`
+	PolicyFamily              string                 `json:"policy_family"`
+	EnableClaudeModels        bool                   `json:"enable_claude_models"`
+	FastMode                  bool                   `json:"fast_mode"`
 }
 
 type apiKeyRecordDetailView struct {
@@ -962,22 +960,21 @@ func (h *Handler) optionalGroupView(group *apikeygroup.Group) *apiKeyGroupView {
 func policyToView(apiKey string, p *config.APIKeyPolicy, group *apikeygroup.Group) apiKeyPolicyView {
 	allowClaudeFamily, allowGPTFamily, extraExcludedModels := config.ExcludedModelFamilyAccess(nil)
 	view := apiKeyPolicyView{
-		APIKey:              apiKey,
-		Name:                "",
-		Note:                "",
-		CreatedAt:           "",
-		ExpiresAt:           "",
-		Disabled:            false,
-		GroupID:             "",
-		GroupName:           "",
-		AllowClaudeFamily:   allowClaudeFamily,
-		AllowGPTFamily:      allowGPTFamily,
-		AllowClaudeOpus46:   true,
-		DailyLimits:         map[string]int{},
-		ExcludedModels:      extraExcludedModels,
-		ModelRoutingRules:   nil,
-		ClaudeFailoverRules: nil,
-		CodexChannelMode:    "auto",
+		APIKey:            apiKey,
+		Name:              "",
+		Note:              "",
+		CreatedAt:         "",
+		ExpiresAt:         "",
+		Disabled:          false,
+		GroupID:           "",
+		GroupName:         "",
+		AllowClaudeFamily: allowClaudeFamily,
+		AllowGPTFamily:    allowGPTFamily,
+		AllowClaudeOpus46: true,
+		DailyLimits:       map[string]int{},
+		ExcludedModels:    extraExcludedModels,
+		ModelRoutingRules: nil,
+		CodexChannelMode:  "auto",
 	}
 	if p == nil {
 		return view
@@ -996,6 +993,7 @@ func policyToView(apiKey string, p *config.APIKeyPolicy, group *apikeygroup.Grou
 	view.FastMode = p.FastMode
 	view.CodexChannelMode = p.CodexChannelModeOrDefault()
 	view.EnableClaudeModels = p.ClaudeModelsEnabled()
+	view.ClaudeGlobalFallback = p.AllowsClaudeGlobalFallback()
 	view.ClaudeUsageLimitUSD = p.ClaudeUsageLimitUSD
 	view.ClaudeGPTTargetFamily = p.ClaudeGPTTargetFamily
 	view.EnableClaudeOpus1M = p.ClaudeOpus1MEnabled()
@@ -1016,14 +1014,12 @@ func policyToView(apiKey string, p *config.APIKeyPolicy, group *apikeygroup.Grou
 	view.TokenPackageUSD = p.TokenPackageUSD
 	view.TokenPackageStartedAt = p.TokenPackageStartedAt
 	view.ModelRoutingRules = append([]config.ModelRoutingRule(nil), p.ModelRouting.Rules...)
-	view.ClaudeFailoverEnabled = p.Failover.Claude.Enabled
-	view.ClaudeFailoverTarget = p.Failover.Claude.TargetModel
-	view.ClaudeFailoverRules = append([]config.ModelFailoverRule(nil), p.Failover.Claude.Rules...)
 	return view
 }
 
 func viewToPolicy(apiKey string, view apiKeyPolicyView) config.APIKeyPolicy {
 	enableClaudeModels := view.EnableClaudeModels
+	claudeGlobalFallback := view.ClaudeGlobalFallback
 	enableClaudeOpus1M := view.EnableClaudeOpus1M
 	allowClaudeOpus46 := view.AllowClaudeOpus46
 	var claudeCodeOnly *bool
@@ -1038,38 +1034,32 @@ func viewToPolicy(apiKey string, view apiKeyPolicyView) config.APIKeyPolicy {
 		claudeCodeOnly = &value
 	}
 	return config.APIKeyPolicy{
-		APIKey:                apiKey,
-		Name:                  strings.TrimSpace(view.Name),
-		Note:                  strings.TrimSpace(view.Note),
-		CreatedAt:             strings.TrimSpace(view.CreatedAt),
-		ExpiresAt:             strings.TrimSpace(view.ExpiresAt),
-		Disabled:              view.Disabled,
-		GroupID:               strings.TrimSpace(view.GroupID),
-		FastMode:              view.FastMode,
-		CodexChannelMode:      config.NormalizeCodexChannelMode(view.CodexChannelMode),
-		EnableClaudeModels:    &enableClaudeModels,
-		ClaudeUsageLimitUSD:   view.ClaudeUsageLimitUSD,
-		ClaudeGPTTargetFamily: strings.TrimSpace(view.ClaudeGPTTargetFamily),
-		EnableClaudeOpus1M:    &enableClaudeOpus1M,
-		ClaudeCodeOnly:        claudeCodeOnly,
-		UpstreamBaseURL:       strings.TrimSpace(view.UpstreamBaseURL),
-		ExcludedModels:        config.BuildExcludedModelFamilies(view.AllowClaudeFamily, view.AllowGPTFamily, view.ExcludedModels),
-		AllowClaudeOpus46:     &allowClaudeOpus46,
-		DailyLimits:           copyDailyLimits(view.DailyLimits),
-		DailyBudgetUSD:        view.DailyBudgetUSD,
-		WeeklyBudgetUSD:       view.WeeklyBudgetUSD,
-		WeeklyBudgetAnchorAt:  strings.TrimSpace(view.WeeklyBudgetAnchorAt),
-		TokenPackageUSD:       view.TokenPackageUSD,
-		TokenPackageStartedAt: strings.TrimSpace(view.TokenPackageStartedAt),
+		APIKey:                      apiKey,
+		Name:                        strings.TrimSpace(view.Name),
+		Note:                        strings.TrimSpace(view.Note),
+		CreatedAt:                   strings.TrimSpace(view.CreatedAt),
+		ExpiresAt:                   strings.TrimSpace(view.ExpiresAt),
+		Disabled:                    view.Disabled,
+		GroupID:                     strings.TrimSpace(view.GroupID),
+		FastMode:                    view.FastMode,
+		CodexChannelMode:            config.NormalizeCodexChannelMode(view.CodexChannelMode),
+		EnableClaudeModels:          &enableClaudeModels,
+		ClaudeGlobalFallbackEnabled: &claudeGlobalFallback,
+		ClaudeUsageLimitUSD:         view.ClaudeUsageLimitUSD,
+		ClaudeGPTTargetFamily:       strings.TrimSpace(view.ClaudeGPTTargetFamily),
+		EnableClaudeOpus1M:          &enableClaudeOpus1M,
+		ClaudeCodeOnly:              claudeCodeOnly,
+		UpstreamBaseURL:             strings.TrimSpace(view.UpstreamBaseURL),
+		ExcludedModels:              config.BuildExcludedModelFamilies(view.AllowClaudeFamily, view.AllowGPTFamily, view.ExcludedModels),
+		AllowClaudeOpus46:           &allowClaudeOpus46,
+		DailyLimits:                 copyDailyLimits(view.DailyLimits),
+		DailyBudgetUSD:              view.DailyBudgetUSD,
+		WeeklyBudgetUSD:             view.WeeklyBudgetUSD,
+		WeeklyBudgetAnchorAt:        strings.TrimSpace(view.WeeklyBudgetAnchorAt),
+		TokenPackageUSD:             view.TokenPackageUSD,
+		TokenPackageStartedAt:       strings.TrimSpace(view.TokenPackageStartedAt),
 		ModelRouting: config.APIKeyModelRoutingPolicy{
 			Rules: append([]config.ModelRoutingRule(nil), view.ModelRoutingRules...),
-		},
-		Failover: config.APIKeyFailoverPolicy{
-			Claude: config.ProviderFailoverPolicy{
-				Enabled:     view.ClaudeFailoverEnabled,
-				TargetModel: strings.TrimSpace(view.ClaudeFailoverTarget),
-				Rules:       append([]config.ModelFailoverRule(nil), view.ClaudeFailoverRules...),
-			},
 		},
 	}
 }
@@ -1207,10 +1197,7 @@ func isEmptyPolicyView(view apiKeyPolicyView) bool {
 		strings.TrimSpace(view.WeeklyBudgetAnchorAt) == "" &&
 		view.TokenPackageUSD == 0 &&
 		strings.TrimSpace(view.TokenPackageStartedAt) == "" &&
-		len(view.ModelRoutingRules) == 0 &&
-		!view.ClaudeFailoverEnabled &&
-		strings.TrimSpace(view.ClaudeFailoverTarget) == "" &&
-		len(view.ClaudeFailoverRules) == 0
+		len(view.ModelRoutingRules) == 0
 }
 
 func tokenPackageChanged(previousUSD float64, previousStartedAt string, afterPolicy *config.APIKeyPolicy) bool {

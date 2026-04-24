@@ -69,9 +69,14 @@ type APIKeyPolicy struct {
 	ClaudeUsageLimitUSD float64 `yaml:"claude-usage-limit-usd,omitempty" json:"claude-usage-limit-usd,omitempty"`
 
 	// ClaudeGPTTargetFamily optionally overrides the target base model used by the synthesized
-	// Claude -> GPT routing/failover defaults for this API key. Supported values:
-	// "gpt-5.2", "gpt-5.4", and "gpt-5.3-codex". When unset, the server defaults to gpt-5.4.
+	// Claude -> GPT routing defaults for this API key. Supported values:
+	// "gpt-5.2", "gpt-5.4", "gpt-5.5", and "gpt-5.3-codex". When unset, the server defaults to gpt-5.5.
 	ClaudeGPTTargetFamily string `yaml:"claude-gpt-target-family,omitempty" json:"claude-gpt-target-family,omitempty"`
+
+	// ClaudeGlobalFallbackEnabled allows an API key that uses native Claude models to retry
+	// failed Claude calls through the global Claude -> GPT configuration.
+	// Nil preserves the default of enabled for native Claude opt-in keys.
+	ClaudeGlobalFallbackEnabled *bool `yaml:"claude-global-fallback-enabled,omitempty" json:"claude-global-fallback-enabled,omitempty"`
 
 	// EnableClaudeOpus1M allows this API key to keep Claude Opus 1M capability even when
 	// the global disable-claude-opus-1m switch is enabled.
@@ -99,11 +104,6 @@ type APIKeyPolicy struct {
 	// This supports deterministic time-window split routing for coherence (e.g. 50% of 1h windows
 	// routed to Codex while still presenting the original requested model to the client).
 	ModelRouting APIKeyModelRoutingPolicy `yaml:"model-routing,omitempty" json:"model-routing,omitempty"`
-
-	// Failover controls automatic provider failover behaviour for this API key.
-	// It allows transparent retry against a configured target model when a provider becomes unavailable
-	// (e.g., Claude weekly cap, rolling-window caps, or account issues).
-	Failover APIKeyFailoverPolicy `yaml:"failover,omitempty" json:"failover,omitempty"`
 
 	// AllowClaudeOpus46 controls whether requests may use claude-opus-4-6.
 	// When false, the server will transparently downgrade claude-opus-4-6* to claude-opus-4-5-20251101*.
@@ -169,32 +169,6 @@ type ModelRoutingDecision struct {
 	Bucket              int64
 }
 
-// ProviderFailoverPolicy defines per-provider automatic failover settings.
-type ProviderFailoverPolicy struct {
-	// Enabled toggles failover behaviour for the provider.
-	Enabled bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
-
-	// TargetModel is the model ID to retry when failover triggers (e.g. "gpt-5.4(medium)").
-	TargetModel string `yaml:"target-model,omitempty" json:"target-model,omitempty"`
-
-	// Rules optionally override the target model based on the requested model.
-	// Matching is case-insensitive and supports '*' wildcard.
-	Rules []ModelFailoverRule `yaml:"rules,omitempty" json:"rules,omitempty"`
-}
-
-// ModelFailoverRule defines a model-specific failover target.
-type ModelFailoverRule struct {
-	FromModel   string `yaml:"from-model,omitempty" json:"from-model,omitempty"`
-	TargetModel string `yaml:"target-model,omitempty" json:"target-model,omitempty"`
-}
-
-// APIKeyFailoverPolicy groups failover configuration for a client API key.
-// Provider keys match internal provider identifiers (e.g. "claude").
-type APIKeyFailoverPolicy struct {
-	// Claude controls failover behaviour when the request is routed to the Claude provider.
-	Claude ProviderFailoverPolicy `yaml:"claude,omitempty" json:"claude,omitempty"`
-}
-
 type APIKeyPolicyEffectiveOptions struct {
 	ForceGlobalClaudeRouting bool
 }
@@ -243,40 +217,11 @@ func defaultGlobalClaudeRoutingRulesForFamily(family string) []ModelRoutingRule 
 	}
 }
 
-func defaultGlobalClaudeFailoverRules(reasoningEffort string) []ModelFailoverRule {
-	opusTarget, _ := policy.DefaultGlobalClaudeGPTTarget("claude-opus-default", reasoningEffort)
-	defaultTarget, _ := policy.DefaultGlobalClaudeGPTTarget("claude-default", reasoningEffort)
-	return []ModelFailoverRule{
-		{FromModel: "claude-opus-*", TargetModel: opusTarget},
-		{FromModel: "claude-*", TargetModel: defaultTarget},
-	}
-}
-
-func defaultGlobalClaudeFailoverRulesForFamily(family string) []ModelFailoverRule {
-	opusTarget, _ := policy.DefaultClaudeGPTTargetForFamily("claude-opus-default", family)
-	defaultTarget, _ := policy.DefaultClaudeGPTTargetForFamily("claude-default", family)
-	return []ModelFailoverRule{
-		{FromModel: "claude-opus-*", TargetModel: opusTarget},
-		{FromModel: "claude-*", TargetModel: defaultTarget},
-	}
-}
-
 func synthesizedClaudeRoutingRules(targetFamily, reasoningEffort string) []ModelRoutingRule {
 	if strings.TrimSpace(targetFamily) != "" {
 		return defaultGlobalClaudeRoutingRulesForFamily(targetFamily)
 	}
 	return defaultGlobalClaudeRoutingRules(reasoningEffort)
-}
-
-func synthesizedClaudeFailoverRules(targetFamily, reasoningEffort string) []ModelFailoverRule {
-	if strings.TrimSpace(targetFamily) != "" {
-		return defaultGlobalClaudeFailoverRulesForFamily(targetFamily)
-	}
-	return defaultGlobalClaudeFailoverRules(reasoningEffort)
-}
-
-func hasExplicitClaudeFailoverConfig(p ProviderFailoverPolicy) bool {
-	return p.Enabled || strings.TrimSpace(p.TargetModel) != "" || len(p.Rules) > 0
 }
 
 // RoutedModelFor resolves the effective model that should be executed for a request.
@@ -387,6 +332,16 @@ func (p *APIKeyPolicy) ClaudeModelsEnabled() bool {
 		return false
 	}
 	return *p.EnableClaudeModels
+}
+
+func (p *APIKeyPolicy) AllowsClaudeGlobalFallback() bool {
+	if p == nil || !p.ClaudeModelsEnabled() {
+		return false
+	}
+	if p.ClaudeGlobalFallbackEnabled == nil {
+		return true
+	}
+	return *p.ClaudeGlobalFallbackEnabled
 }
 
 func (p *APIKeyPolicy) ClaudeUsageLimitEnabled() bool {
@@ -577,54 +532,6 @@ func (p *APIKeyPolicy) WeeklyBudgetBounds(now time.Time) (time.Time, time.Time, 
 	return start, end, nil
 }
 
-// ClaudeFailoverTargetModel resolves the configured Claude failover target model.
-// Returns ("", false) when failover is disabled.
-// When enabled but target-model is empty, it returns a safe default.
-func (p *APIKeyPolicy) ClaudeFailoverTargetModel() (string, bool) {
-	if p == nil {
-		return "", false
-	}
-	if !p.Failover.Claude.Enabled {
-		return "", false
-	}
-	target := strings.TrimSpace(p.Failover.Claude.TargetModel)
-	if target == "" {
-		target, _ = policy.DefaultClaudeGPTTargetForFamily("claude-default", p.ClaudeGPTTargetFamilyOrDefault())
-	}
-	return target, true
-}
-
-// ClaudeFailoverTargetModelFor resolves the configured Claude failover target model for a specific request.
-// Rules are evaluated first; when no rules match, it falls back to ClaudeFailoverTargetModel().
-func (p *APIKeyPolicy) ClaudeFailoverTargetModelFor(requestedModel string) (string, bool) {
-	if p == nil {
-		return "", false
-	}
-	if !p.Failover.Claude.Enabled {
-		return "", false
-	}
-
-	requestKey := policy.NormaliseModelKey(requestedModel)
-	if requestKey != "" && len(p.Failover.Claude.Rules) > 0 {
-		for _, rule := range p.Failover.Claude.Rules {
-			from := strings.ToLower(strings.TrimSpace(rule.FromModel))
-			if from == "" {
-				continue
-			}
-			if !policy.MatchWildcard(from, requestKey) {
-				continue
-			}
-			target := strings.TrimSpace(rule.TargetModel)
-			if target == "" {
-				continue
-			}
-			return target, true
-		}
-	}
-
-	return p.ClaudeFailoverTargetModel()
-}
-
 // FindAPIKeyPolicy returns the APIKeyPolicy matching the provided key.
 // It returns nil when no policy is configured or the key is blank.
 func (cfg *Config) FindAPIKeyPolicy(apiKey string) *APIKeyPolicy {
@@ -722,16 +629,6 @@ func (cfg *Config) EffectiveAPIKeyPolicyWithOptions(apiKey string, opts APIKeyPo
 			)
 			return &entry
 		}
-		if found != nil {
-			if cfg.ClaudeToGPTRoutingEnabled && entry.ClaudeModelsEnabled() && !hasExplicitClaudeFailoverConfig(entry.Failover.Claude) {
-				entry.Failover.Claude.Enabled = true
-				entry.Failover.Claude.Rules = append(
-					[]ModelFailoverRule(nil),
-					synthesizedClaudeFailoverRules(entry.ClaudeGPTTargetFamily, cfg.ClaudeGPTReasoningEffortOrDefault())...,
-				)
-			}
-			return &entry
-		}
 		return &entry
 	}
 
@@ -800,26 +697,6 @@ func (cfg *Config) SanitizeAPIKeyPolicies() {
 				rules = append(rules, rule)
 			}
 			entry.ModelRouting.Rules = rules
-		}
-
-		// Failover sanitization.
-		entry.Failover.Claude.TargetModel = strings.TrimSpace(entry.Failover.Claude.TargetModel)
-		if len(entry.Failover.Claude.Rules) > 0 {
-			rules := make([]ModelFailoverRule, 0, len(entry.Failover.Claude.Rules))
-			for _, rule := range entry.Failover.Claude.Rules {
-				rule.FromModel = strings.TrimSpace(rule.FromModel)
-				rule.TargetModel = strings.TrimSpace(rule.TargetModel)
-				if rule.FromModel == "" || rule.TargetModel == "" {
-					continue
-				}
-				rules = append(rules, rule)
-			}
-			entry.Failover.Claude.Rules = rules
-		}
-		if !entry.Failover.Claude.Enabled {
-			// Disabled failover should not leave inert target/rule config behind.
-			entry.Failover.Claude.TargetModel = ""
-			entry.Failover.Claude.Rules = nil
 		}
 
 		if len(entry.DailyLimits) > 0 {

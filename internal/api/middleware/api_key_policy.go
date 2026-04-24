@@ -139,7 +139,7 @@ func APIKeyPolicyMiddleware(getConfig func() *config.Config, limiter policy.Dail
 
 		requestNow := time.Now()
 		// Access controls are evaluated against the client-requested model namespace.
-		// Downstream routing/failover targets remain unaffected by excluded-models.
+		// Downstream routing/fallback targets remain unaffected by excluded-models.
 		effectiveModel := model
 
 		// 1) Transparent model downgrade rules.

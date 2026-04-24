@@ -34,14 +34,13 @@ type SDKConfig struct {
 	// to route to GPT targets unless the API key policy explicitly enables Claude models.
 	ClaudeToGPTRoutingEnabled bool `yaml:"claude-to-gpt-routing-enabled" json:"claude-to-gpt-routing-enabled"`
 
-	// ClaudeToGPTTargetFamily selects the default GPT family used by the global
-	// Claude -> GPT routing/failover defaults. Supported values: "gpt-5.2", "gpt-5.4",
-	// and "gpt-5.3-codex".
-	// When unset, the server defaults to gpt-5.4.
+	// ClaudeToGPTTargetFamily selects the default GPT family used by Claude -> GPT routing.
+	// Supported values: "gpt-5.2", "gpt-5.4", "gpt-5.5", and "gpt-5.3-codex".
+	// When unset, the server defaults to gpt-5.5.
 	ClaudeToGPTTargetFamily string `yaml:"claude-to-gpt-target-family,omitempty" json:"claude-to-gpt-target-family,omitempty"`
 
 	// ClaudeToGPTReasoningEffort controls the default reasoning effort used by the
-	// synthesized global Claude -> GPT routing/failover rules.
+	// synthesized global Claude -> GPT routing and fallback rules.
 	// Supported values: "minimal", "low", "medium", "high", "xhigh", and "max".
 	// When unset, the server defaults to "high".
 	ClaudeToGPTReasoningEffort string `yaml:"claude-to-gpt-reasoning-effort,omitempty" json:"claude-to-gpt-reasoning-effort,omitempty"`

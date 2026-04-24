@@ -41,9 +41,8 @@ api-keys:
 # - excluded-models supports '*' wildcard matching and is case-insensitive.
 # - allow-claude-opus-4-6: when false, requests for claude-opus-4-6* are downgraded to claude-opus-4-5-20251101*.
 # - model-routing: optional deterministic time-window routing to a target model (e.g. split Claude -> Codex by hour).
-# - failover: optional per-provider automatic retry to a target model when a provider becomes unavailable.
-#   Supports model-specific rules to override the target based on the requested model (wildcards supported).
-#   (e.g. Claude weekly cap / rolling-window caps / account issues). Useful for automatically switching to Codex.
+# - claude-global-fallback-enabled: when enable-claude-models is true, failed native Claude calls
+#   may retry through the global Claude -> GPT configuration.
 # - daily-limits: request counts are tracked per day in China Standard Time (UTC+8).
 # - claude-usage-limit-usd: when enable-claude-models is true, the API key may keep using Claude
 #   until cumulative Claude spend reaches this limit. Once reached, it falls back to the global
@@ -77,23 +76,17 @@ api-key-policies:
       rules:
         - enabled: true
           from-model: "claude-opus-4-6*"
-          target-model: "gpt-5.4(high)"
+          target-model: "gpt-5.5(high)"
           target-percent: 50
           sticky-window-seconds: 3600
         - enabled: true
           from-model: "claude-sonnet-4-6*"
-          target-model: "gpt-5.4(medium)"
+          target-model: "gpt-5.5(medium)"
           target-percent: 50
           sticky-window-seconds: 3600
-    failover:
-      claude:
-        enabled: true
-        target-model: "gpt-5.4(medium)" # default fallback when no rules match
-        rules:
-          - from-model: "claude-opus-4-6*"
-            target-model: "gpt-5.4(high)"
-          - from-model: "claude-sonnet-4-6*"
-            target-model: "gpt-5.4(medium)"
+    # Optional: when enable-claude-models is true, retry failed native Claude calls
+    # through the global Claude -> GPT config. Defaults to true for native Claude opt-in keys.
+    claude-global-fallback-enabled: true
     claude-usage-limit-usd: 30
     allow-claude-opus-4-6: true
     token-package-usd: 1000
@@ -156,13 +149,12 @@ session-trajectory-enabled: true
 # Proxy URL. Supports socks5/http/https protocols. Example: socks5://user:pass@192.168.1.1:1080/
 proxy-url: ""
 
-# Deprecated global target-family override. New global defaults are:
-#   claude-opus-*  -> gpt-5.4(<effort>)
-#   other claude-* -> gpt-5.3-codex(<effort>)
+# Deprecated global target-family override. New global default is:
+#   claude-* -> gpt-5.5(<effort>)
 # Per-API-key `claude-gpt-target-family` overrides still work when explicitly configured.
 claude-to-gpt-target-family: ""
 
-# Default reasoning effort for synthesized global Claude -> GPT routing/failover rules.
+# Default reasoning effort for synthesized global Claude -> GPT routing/fallback rules.
 # Supported values: low, medium, high
 claude-to-gpt-reasoning-effort: "high"
 

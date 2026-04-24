@@ -230,14 +230,16 @@ func TestPolicyViewRoundTripUsesFamilyAccessTogglesAndMetadata(t *testing.T) {
 	now := time.Date(2026, 4, 6, 9, 0, 0, 0, time.UTC)
 	expiresAt := now.Add(24 * time.Hour)
 	policyEntry := &config.APIKeyPolicy{
-		APIKey:           "k1",
-		Name:             "Test Key",
-		Note:             "Operator note",
-		CreatedAt:        now.Format(time.RFC3339),
-		ExpiresAt:        expiresAt.Format(time.RFC3339),
-		Disabled:         true,
-		CodexChannelMode: "provider",
-		ExcludedModels:   []string{"claude-*", "gpt-*", "chatgpt-*", "o1*", "o3*", "o4*", "custom-*"},
+		APIKey:                      "k1",
+		Name:                        "Test Key",
+		Note:                        "Operator note",
+		CreatedAt:                   now.Format(time.RFC3339),
+		ExpiresAt:                   expiresAt.Format(time.RFC3339),
+		Disabled:                    true,
+		CodexChannelMode:            "provider",
+		EnableClaudeModels:          boolPtr(true),
+		ClaudeGlobalFallbackEnabled: boolPtr(false),
+		ExcludedModels:              []string{"claude-*", "gpt-*", "chatgpt-*", "o1*", "o3*", "o4*", "custom-*"},
 	}
 
 	view := policyToView("k1", policyEntry, nil)
@@ -259,6 +261,9 @@ func TestPolicyViewRoundTripUsesFamilyAccessTogglesAndMetadata(t *testing.T) {
 	if view.CodexChannelMode != "provider" {
 		t.Fatalf("expected codex channel mode to round-trip, got %+v", view)
 	}
+	if view.ClaudeGlobalFallback {
+		t.Fatalf("expected claude global fallback flag to round-trip as disabled, got %+v", view)
+	}
 
 	roundTrip := viewToPolicy("k1", view)
 	if !roundTrip.Disabled || roundTrip.CreatedAt != policyEntry.CreatedAt || roundTrip.ExpiresAt != policyEntry.ExpiresAt {
@@ -269,6 +274,9 @@ func TestPolicyViewRoundTripUsesFamilyAccessTogglesAndMetadata(t *testing.T) {
 	}
 	if roundTrip.Name != policyEntry.Name || roundTrip.Note != policyEntry.Note {
 		t.Fatalf("unexpected round-trip name/note: %+v", roundTrip)
+	}
+	if roundTrip.ClaudeGlobalFallbackEnabled == nil || *roundTrip.ClaudeGlobalFallbackEnabled {
+		t.Fatalf("unexpected round-trip claude global fallback flag: %+v", roundTrip)
 	}
 	if got := roundTrip.ExcludedModels; len(got) != 7 {
 		t.Fatalf("unexpected round-trip excluded models: %#v", got)

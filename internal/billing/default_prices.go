@@ -93,6 +93,11 @@ var DefaultPrices = map[string]PriceMicroUSDPer1M{
 		Completion: 15_000_000, // $15.00 / 1M
 		Cached:     250_000,    // $0.25 / 1M
 	},
+	policy.NormaliseModelKey("gpt-5.5"): {
+		Prompt:     5_000_000,  // $5.00 / 1M
+		Completion: 30_000_000, // $30.00 / 1M
+		Cached:     500_000,    // $0.50 / 1M
+	},
 }
 
 // ResolveDefaultPrice returns the built-in fallback price for a model,

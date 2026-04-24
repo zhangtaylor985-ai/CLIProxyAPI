@@ -98,6 +98,27 @@ func TestNormalizeClaudeGPTReasoningEffort(t *testing.T) {
 	}
 }
 
+func TestDefaultGlobalClaudeGPTTargetUsesGPT55(t *testing.T) {
+	target, ok := DefaultGlobalClaudeGPTTarget("claude-opus-4-6", "medium")
+	if !ok || target != "gpt-5.5(medium)" {
+		t.Fatalf("DefaultGlobalClaudeGPTTarget opus = %q, %v", target, ok)
+	}
+
+	target, ok = DefaultGlobalClaudeGPTTarget("claude-sonnet-4-6", "low")
+	if !ok || target != "gpt-5.5(low)" {
+		t.Fatalf("DefaultGlobalClaudeGPTTarget sonnet = %q, %v", target, ok)
+	}
+}
+
+func TestNormalizeClaudeGPTTargetFamilySupportsGPT55(t *testing.T) {
+	if got := NormalizeClaudeGPTTargetFamily(" GPT-5.5 "); got != "gpt-5.5" {
+		t.Fatalf("NormalizeClaudeGPTTargetFamily gpt-5.5 = %q", got)
+	}
+	if got := EffectiveClaudeGPTTargetFamily(""); got != "gpt-5.5" {
+		t.Fatalf("EffectiveClaudeGPTTargetFamily default = %q", got)
+	}
+}
+
 func TestMatchWildcard(t *testing.T) {
 	tests := []struct {
 		pat  string
