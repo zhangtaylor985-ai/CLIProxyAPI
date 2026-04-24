@@ -540,6 +540,8 @@ func applyAPIKeyConfigOverlay(ctx context.Context, store apikeyconfig.Store, cfg
 // setupRoutes configures the API routes for the server.
 // It defines the endpoints and associates them with their respective handlers.
 func (s *Server) setupRoutes() {
+	s.engine.GET("/healthz", s.handleHealthz)
+	s.engine.HEAD("/healthz", s.handleHealthz)
 	s.engine.GET("/management.html", s.serveManagementControlPanel)
 	openaiHandlers := openai.NewOpenAIAPIHandler(s.handlers)
 	geminiHandlers := gemini.NewGeminiAPIHandler(s.handlers)
@@ -660,6 +662,13 @@ func (s *Server) setupRoutes() {
 	})
 
 	// Management routes are registered lazily by registerManagementRoutes when a secret is configured.
+}
+
+func (s *Server) handleHealthz(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"status":  "ok",
+		"service": "cliproxyapi",
+	})
 }
 
 // AttachWebsocketRoute registers a websocket upgrade handler on the primary Gin engine.

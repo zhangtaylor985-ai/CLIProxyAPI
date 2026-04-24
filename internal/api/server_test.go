@@ -112,6 +112,24 @@ func TestAmpProviderModelRoutes(t *testing.T) {
 	}
 }
 
+func TestHealthzRouteDoesNotRequireAPIKey(t *testing.T) {
+	server := newTestServer(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	rr := httptest.NewRecorder()
+	server.engine.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("unexpected status code: got %d want %d; body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+	body := rr.Body.String()
+	for _, want := range []string{`"status":"ok"`, `"service":"cliproxyapi"`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("healthz response missing %q: %s", want, body)
+		}
+	}
+}
+
 func TestDefaultRequestLoggerFactory_UsesResolvedLogDirectory(t *testing.T) {
 	t.Setenv("WRITABLE_PATH", "")
 	t.Setenv("writable_path", "")
