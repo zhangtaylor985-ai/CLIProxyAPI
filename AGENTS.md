@@ -14,9 +14,14 @@
 
 - 新需求默认使用独立 Git worktree 承载，并在该 worktree 内创建 `codex/<任务名>` feature branch；只有很小的只读检查或用户明确要求在当前目录处理时，才直接使用当前工作区。
 - 创建新 worktree 前先检查当前仓库状态与现有 worktree，选择清晰目录名，避免复用已有任务目录；完成后在对应 worktree 内提交、测试、合并或推送。
+- 新任务优先从最新 `origin/main` 新建干净 worktree：先 `git fetch origin main`，再基于 `origin/main` 创建 `codex/<任务名>` 分支；不要默认复用已经完成任务的旧 worktree。
+- 如果必须回到旧任务 worktree 继续做新工作，先同步主线再改代码：`git status` 确认现场，必要时 `git stash push -u`，然后 `git fetch origin main && git rebase origin/main`；优先用 rebase 保持 feature branch 线性，只有明确需要保留合并历史时才 merge。
 - push 到 `main` 前，必须先 `git fetch origin main` 并确认本地是否落后；如落后，先在最新 `origin/main` 基底上 rebase / pull 并完成必要测试，再 push。
 - 当前仓库经常存在未提交和未跟踪的并行工作；push / pull / rebase 前必须保护现场，可用 `git stash push -u` 或临时 worktree。只 stage 本次任务相关文件，不要覆盖、删除、丢弃或顺手提交无关改动。
 - 若 `stash apply` 因远端新增同名文件导致 untracked 文件无法恢复，必须逐个比较 stash 内容与当前文件；确认内容一致后才可删除临时 stash，否则保留 stash 并向用户说明冲突文件。
+- 在临时 worktree 推送到 `main` 后，原始目录不会自动更新；回到 `/Users/taylor/code/tools/CLIProxyAPI-ori` 前，先保护该目录未提交现场，再 `git fetch origin main && git pull --ff-only` 或等价安全流程同步。
+- 一个完整任务闭环默认包含：新建/同步 worktree、记录计划或进度、实现、定向测试、必要黑盒、全量回归、fetch/rebase 到最新主线、只 stage 本任务文件、提交、push、回到主目录同步、按需部署、观察、最后清理临时 worktree。
+- 临时 worktree 完成任务并确认生产发布与观察无回滚需求后再删除；删除前确认其中没有唯一的 debug 证据、未提交补丁或需保留 artifacts。清理可用 `git worktree remove <path>`，必要时再 `git worktree prune`。
 
 # 部署与 systemd
 
