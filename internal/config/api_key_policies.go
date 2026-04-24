@@ -636,7 +636,7 @@ func (cfg *Config) EffectiveAPIKeyPolicyWithOptions(apiKey string, opts APIKeyPo
 	if !cfg.ShouldRouteClaudeToGPT(key) {
 		if opts.ForceGlobalClaudeRouting && cfg.ClaudeToGPTRoutingEnabled {
 			entry.ModelRouting.Rules = append(
-				defaultGlobalClaudeRoutingRules(cfg.ClaudeGPTReasoningEffortOrDefault()),
+				synthesizedClaudeRoutingRules(cfg.ClaudeToGPTTargetFamily, cfg.ClaudeGPTReasoningEffortOrDefault()),
 				entry.ModelRouting.Rules...,
 			)
 			return &entry
@@ -646,14 +646,18 @@ func (cfg *Config) EffectiveAPIKeyPolicyWithOptions(apiKey string, opts APIKeyPo
 
 	if opts.ForceGlobalClaudeRouting {
 		entry.ModelRouting.Rules = append(
-			defaultGlobalClaudeRoutingRules(cfg.ClaudeGPTReasoningEffortOrDefault()),
+			synthesizedClaudeRoutingRules(cfg.ClaudeToGPTTargetFamily, cfg.ClaudeGPTReasoningEffortOrDefault()),
 			entry.ModelRouting.Rules...,
 		)
 		return &entry
 	}
 
+	targetFamily := entry.ClaudeGPTTargetFamily
+	if strings.TrimSpace(targetFamily) == "" {
+		targetFamily = cfg.ClaudeToGPTTargetFamily
+	}
 	entry.ModelRouting.Rules = append(
-		synthesizedClaudeRoutingRules(entry.ClaudeGPTTargetFamily, cfg.ClaudeGPTReasoningEffortOrDefault()),
+		synthesizedClaudeRoutingRules(targetFamily, cfg.ClaudeGPTReasoningEffortOrDefault()),
 		entry.ModelRouting.Rules...,
 	)
 
