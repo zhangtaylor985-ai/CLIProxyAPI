@@ -34,6 +34,37 @@ Treat the JSONL filename as a likely Claude `sessionId`, but verify by parsing t
 
 ## Workflow
 
+### 0. Check Current Visibility
+
+Before deep triage, confirm what evidence is currently available:
+
+```bash
+rg -n '^(session-trajectory-enabled|request-log|error-logs-max-files|logging-to-file):' config.yaml
+
+find logs -maxdepth 1 -type f \( -name 'main*.log' -o -name 'error-v1-messages-*' \) \
+  -printf '%TY-%Tm-%Td %TH:%TM %s %p\n' | sort | tail -30
+
+set -a
+source ./.env >/dev/null 2>&1
+set +a
+
+psql "$SESSION_TRAJECTORY_PG_DSN" -F $'\t' -Atc "
+select request_id, session_id, status, started_at, ended_at, duration_ms,
+       source, call_type, provider, model,
+       left(coalesce(error_json::text,''),240)
+from public.session_trajectory_requests
+order by started_at desc
+limit 12;
+"
+```
+
+Interpretation:
+
+- `session-trajectory-enabled: true`: prefer Session DB first; it can correlate `provider_session_id`, request ID, request status, response JSON, and error JSON.
+- `request-log: true`: detailed request logs are written for all supported requests; use `logs/*-<request_id>.log` or the management `request-log-by-id` endpoint.
+- `request-log` absent or false: full request logs are disabled, but forced `error-*.log` files are still generated for HTTP/API error responses.
+- `error-v1-messages-*` exists only for server-detected error responses. A client-side parse failure over HTTP 200 may not generate an error log.
+
 ### 1. Extract Client Evidence
 
 For each JSONL:
@@ -136,7 +167,19 @@ Request/response error snapshots rotate aggressively. Verify whether files still
 find logs -maxdepth 1 -type f \( -name 'error-v1-messages-<date>*' -o -name '*<request_id>*' \) -printf '%TY-%Tm-%Td %TH:%TM %s %p\n' | sort
 ```
 
-If no `error-v1-messages-*` file exists for the incident date, state that the detailed request snapshot has rotated out and rely on main logs plus Session DB.
+You can also look up a known request ID through the management route:
+
+```bash
+# Requires management authentication in real use.
+GET /v0/management/request-log-by-id/<request_id>
+```
+
+Behavior to remember:
+
+- When `request-log=true`, request logs are normal full logs and are not returned by `/request-error-logs`.
+- When `request-log=false`, `error-*.log` files are forced only for responses the server classifies as errors: final HTTP status `>=400` or an internal API error marker.
+- A Claude client `API Error: Failed to parse JSON` can happen after the proxy returns HTTP 200 with a body the client cannot parse. That case may have no `error-v1-messages-*`; use Session DB `response_json` / `error_json`, then correlate `request_id` in `main.log`.
+- If no `error-v1-messages-*` file exists for the incident date, state that the detailed request snapshot is unavailable and rely on main logs plus Session DB.
 
 ### 6. Inspect Request Consistency Only When Needed
 
@@ -185,4 +228,3 @@ Conclusion:
 - state whether existing fix covers it
 - next code or ops action
 ```
-
