@@ -25,6 +25,8 @@
 - 如果必须回到旧任务 worktree 继续做新工作，先同步主线再改代码：`git status` 确认现场，必要时 `git stash push -u`，然后 `git fetch origin main && git rebase origin/main`；优先用 rebase 保持 feature branch 线性，只有明确需要保留合并历史时才 merge。
 - push 到 `main` 前，必须先 `git fetch origin main` 并确认本地是否落后；如落后，先在最新 `origin/main` 基底上 rebase / pull 并完成必要测试，再 push。
 - 当前仓库经常存在未提交和未跟踪的并行工作；push / pull / rebase 前必须保护现场，可用 `git stash push -u` 或临时 worktree。只 stage 本次任务相关文件，不要覆盖、删除、丢弃或顺手提交无关改动。
+- 当用户明确要求“合并到 main / 发 main / 上主线 / 可以 push 主线”时，默认由助手自动完成：先在干净 worktree 中 `git fetch origin main`，确认主线无落后或先 rebase / merge 到最新主线，完成必要测试后再 push `main`。只有出现冲突、高风险部署窗口、测试失败或用户明确要求手动合并时，才停下来让用户处理。
+- 默认不要把“push feature branch”理解成“已经进入主线”；如果只是为了备份或开 PR，可先推 feature branch。若用户目标是线上修复或主线生效，应继续合并并 push `main`，再按需部署。
 - 若 `stash apply` 因远端新增同名文件导致 untracked 文件无法恢复，必须逐个比较 stash 内容与当前文件；确认内容一致后才可删除临时 stash，否则保留 stash 并向用户说明冲突文件。
 - 在临时 worktree 推送到 `main` 后，原始目录不会自动更新；回到 `/Users/taylor/code/tools/CLIProxyAPI-ori` 前，先保护该目录未提交现场，再 `git fetch origin main && git pull --ff-only` 或等价安全流程同步。
 - 一个完整任务闭环默认包含：新建/同步 worktree、记录计划或进度、实现、定向测试、必要黑盒、全量回归、fetch/rebase 到最新主线、只 stage 本任务文件、提交、push、回到主目录同步、按需部署、观察、最后清理临时 worktree。
