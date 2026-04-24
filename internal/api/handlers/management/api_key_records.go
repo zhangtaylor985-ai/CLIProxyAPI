@@ -166,6 +166,25 @@ type apiKeyRecordDetailView struct {
 	RecentEvents    []apiKeyEventView       `json:"recent_events"`
 }
 
+type apiKeyInsightSummaryView struct {
+	MaskedAPIKey  string                 `json:"masked_api_key"`
+	CreatedAt     string                 `json:"created_at"`
+	ExpiresAt     string                 `json:"expires_at"`
+	LastUsedAt    *time.Time             `json:"last_used_at,omitempty"`
+	Today         apiKeyUsageTotals      `json:"today"`
+	CurrentPeriod apiKeyUsageTotals      `json:"current_period"`
+	DailyBudget   apiKeyBudgetWindowView `json:"daily_budget"`
+	WeeklyBudget  apiKeyBudgetWindowView `json:"weekly_budget"`
+	TokenPackage  apiKeyTokenPackageView `json:"token_package"`
+}
+
+type apiKeyInsightDetailView struct {
+	Summary       apiKeyInsightSummaryView `json:"summary"`
+	TodayReport   apiKeyUsageTotals        `json:"today_report"`
+	CurrentPeriod apiKeyUsageTotals        `json:"current_period_report"`
+	RecentDays    []apiKeyRecentDayView    `json:"recent_days"`
+}
+
 type apiKeyRecordMutation struct {
 	NewAPIKey   string           `json:"new_api_key"`
 	Policy      apiKeyPolicyView `json:"policy"`
@@ -390,16 +409,16 @@ func (h *Handler) QueryAPIKeyInsights(c *gin.Context) {
 
 	now := time.Now().In(policy.ChinaLocation())
 	rangeDays := parseRangeDays(body.Range)
-	items := make([]apiKeyRecordDetailView, 0, len(keys))
+	items := make([]apiKeyInsightDetailView, 0, len(keys))
 	invalid := make([]string, 0)
 	for _, apiKey := range keys {
 		if !h.apiKeyExists(apiKey) {
 			invalid = append(invalid, apiKey)
 			continue
 		}
-		detail, err := h.buildAPIKeyRecordDetail(c.Request.Context(), apiKey, now, rangeDays, 50)
+		detail, err := h.buildAPIKeyInsightDetail(c.Request.Context(), apiKey, now, rangeDays)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load usage insights"})
 			return
 		}
 		items = append(items, detail)
@@ -501,6 +520,46 @@ func (h *Handler) buildAPIKeyRecordDetail(ctx context.Context, apiKey string, no
 		ModelUsage:      modelUsage,
 		DailyLimits:     dailyLimits,
 		RecentEvents:    recentEvents,
+	}, nil
+}
+
+func (h *Handler) buildAPIKeyInsightDetail(ctx context.Context, apiKey string, now time.Time, rangeDays int) (apiKeyInsightDetailView, error) {
+	if !h.apiKeyExists(apiKey) && (h.cfg == nil || h.cfg.FindAPIKeyPolicy(apiKey) == nil) {
+		return apiKeyInsightDetailView{}, errAPIKeyNotFound
+	}
+
+	summary, err := h.buildAPIKeySummary(ctx, apiKey, now, rangeDays)
+	if err != nil {
+		return apiKeyInsightDetailView{}, err
+	}
+	todayReport, err := h.loadDayTotals(ctx, apiKey, policy.DayKeyChina(now))
+	if err != nil {
+		return apiKeyInsightDetailView{}, err
+	}
+	periodRows, err := h.loadCurrentPeriodRows(ctx, apiKey, now)
+	if err != nil {
+		return apiKeyInsightDetailView{}, err
+	}
+	recentDays, err := h.buildRecentDayViews(ctx, apiKey, now, rangeDays)
+	if err != nil {
+		return apiKeyInsightDetailView{}, err
+	}
+
+	return apiKeyInsightDetailView{
+		Summary: apiKeyInsightSummaryView{
+			MaskedAPIKey:  summary.MaskedAPIKey,
+			CreatedAt:     summary.CreatedAt,
+			ExpiresAt:     summary.ExpiresAt,
+			LastUsedAt:    summary.LastUsedAt,
+			Today:         summary.Today,
+			CurrentPeriod: summary.CurrentPeriod,
+			DailyBudget:   summary.DailyBudget,
+			WeeklyBudget:  summary.WeeklyBudget,
+			TokenPackage:  summary.TokenPackage,
+		},
+		TodayReport:   todayReport,
+		CurrentPeriod: totalsFromRows(periodRows),
+		RecentDays:    recentDays,
 	}, nil
 }
 

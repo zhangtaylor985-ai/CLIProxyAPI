@@ -10,6 +10,12 @@
 - 黑盒测试若需管理端用户名密码，直接读取当前仓库 `.env` 中的 `MANAGEMENT_TEST_ADMIN_*` / `MANAGEMENT_TEST_STAFF_*`；不要自行改数据库密码。
 - 涉及 PG 新表 / 新索引 / 新 schema 变更时，除了运行时兜底初始化，还应补显式 migration 入口到 `scripts/`，上线步骤默认先执行 migration，再重启服务。
 
+# 用户侧黑盒守则
+
+- 面向普通用户、客户自助查询页、公开查询接口和客户端错误响应时，必须对内部 GPT / Codex 路由和目标模型黑盒；不得返回或展示 `gpt-*`、`chatgpt-*`、内部 target family、model routing、fallback target、provider model usage 等信息。
+- 用户侧接口只返回用户需要理解的聚合账单、额度、Token、状态与趋势；模型级拆分、路由策略、真实上游模型名只允许出现在已认证的管理端运维界面中。
+- 新增或修改用户侧 API / UI 前，先检查响应 JSON、错误文本、前端表格和浏览器 Network 面板，确认没有泄露内部 GPT 模型或路由细节。
+
 # Git 工作流
 
 - 新需求默认使用独立 Git worktree 承载，并在该 worktree 内创建 `codex/<任务名>` feature branch；只有很小的只读检查或用户明确要求在当前目录处理时，才直接使用当前工作区。

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -86,7 +87,17 @@ func TestQueryAPIKeyInsightsFiltersInvalidKeys(t *testing.T) {
 	handler, cleanup := newAPIKeyRecordsTestHandler(t, &config.Config{
 		SDKConfig: sdkconfig.SDKConfig{APIKeys: []string{"k-valid"}},
 		APIKeyPolicies: []config.APIKeyPolicy{
-			{APIKey: "k-valid", CreatedAt: "2026-03-24T00:00:00+08:00"},
+			{
+				APIKey:                "k-valid",
+				CreatedAt:             "2026-03-24T00:00:00+08:00",
+				ClaudeGPTTargetFamily: "gpt-5.5",
+				DailyLimits:           map[string]int{"gpt-5.4": 100},
+				ModelRouting: config.APIKeyModelRoutingPolicy{
+					Rules: []config.ModelRoutingRule{
+						{FromModel: "claude-*", TargetModel: "gpt-5.5(high)"},
+					},
+				},
+			},
 		},
 	})
 	defer cleanup()
@@ -110,8 +121,8 @@ func TestQueryAPIKeyInsightsFiltersInvalidKeys(t *testing.T) {
 	}
 
 	var body struct {
-		Items       []apiKeyRecordDetailView `json:"items"`
-		InvalidKeys []string                 `json:"invalid_keys"`
+		Items       []apiKeyInsightDetailView `json:"items"`
+		InvalidKeys []string                  `json:"invalid_keys"`
 	}
 	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
 		t.Fatalf("json.Unmarshal: %v", err)
@@ -122,8 +133,24 @@ func TestQueryAPIKeyInsightsFiltersInvalidKeys(t *testing.T) {
 	if len(body.InvalidKeys) != 1 || body.InvalidKeys[0] != "k-invalid" {
 		t.Fatalf("invalid keys = %+v, want [k-invalid]", body.InvalidKeys)
 	}
-	if body.Items[0].Summary.APIKey != "k-valid" {
-		t.Fatalf("summary api key = %q, want k-valid", body.Items[0].Summary.APIKey)
+	if body.Items[0].Summary.MaskedAPIKey == "" {
+		t.Fatalf("summary masked api key is empty")
+	}
+
+	response := strings.ToLower(recorder.Body.String())
+	for _, forbidden := range []string{
+		"gpt",
+		"model_usage",
+		"explicit_policy",
+		"effective_policy",
+		"model_routing_rules",
+		"daily_limits",
+		"recent_events",
+		"api_key\":\"k-valid",
+	} {
+		if strings.Contains(response, forbidden) {
+			t.Fatalf("public insights response leaked %q: %s", forbidden, recorder.Body.String())
+		}
 	}
 }
 
