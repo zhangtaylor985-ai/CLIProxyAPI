@@ -19,6 +19,8 @@ Use this skill to quickly prove whether a Claude client `API Error: Failed to pa
 - Default to the current repo `.env` database connection. Do not switch databases unless the user explicitly asks.
 - Do not expose `.env` secrets or full auth filenames in final summaries. Mask account labels when not essential.
 - Do not start with broad `request_json::text LIKE` scans on `session_trajectory_requests`; use session aliases and time windows first.
+- Treat Session trajectory as the primary request-level evidence source. It normally replaces local `logging-to-file` files for Claude parse-error triage.
+- Do not enable `logging-to-file` or full `request-log` just to investigate a normal request failure. Use `journalctl -u cliproxyapi.service` only when checking process-level events or Session DB recording gaps.
 - If the user says not to change code, only inspect and report.
 - Use UTC timestamps from server logs and Postgres unless explicitly converting from client local time.
 
@@ -41,9 +43,6 @@ Before deep triage, confirm what evidence is currently available:
 ```bash
 rg -n '^(session-trajectory-enabled|request-log|error-logs-max-files|logging-to-file):' config.yaml
 
-find logs -maxdepth 1 -type f \( -name 'main*.log' -o -name 'error-v1-messages-*' \) \
-  -printf '%TY-%Tm-%Td %TH:%TM %s %p\n' | sort | tail -30
-
 set -a
 source ./.env >/dev/null 2>&1
 set +a
@@ -60,10 +59,10 @@ limit 12;
 
 Interpretation:
 
-- `session-trajectory-enabled: true`: prefer Session DB first; it can correlate `provider_session_id`, request ID, request status, response JSON, and error JSON.
-- `request-log: true`: detailed request logs are written for all supported requests; use `logs/*-<request_id>.log` or the management `request-log-by-id` endpoint.
-- `request-log` absent or false: full request logs are disabled, but forced `error-*.log` files are still generated for HTTP/API error responses.
-- `error-v1-messages-*` exists only for server-detected error responses. A client-side parse failure over HTTP 200 may not generate an error log.
+- `session-trajectory-enabled: true`: preferred and normally sufficient for request triage; it correlates `provider_session_id`, request ID, status, request JSON, response JSON, error JSON, token usage, model, and timing.
+- `logging-to-file: false`: acceptable production posture. Request-level triage should still work from Session DB; process-level logs remain available through systemd journal.
+- `request-log` absent or false: preferred production posture. Full per-request local files are disabled.
+- `request-log: true`: high-overhead raw request logging. Treat as a temporary last resort for raw headers/wire payloads, not a default triage dependency.
 
 ### 1. Extract Client Evidence
 
@@ -127,28 +126,23 @@ Classify the result:
 
 - `status=error` plus `response_json` is an empty assistant skeleton usually means upstream/stream failed and the recorder did not preserve the real upstream error in `error_json`.
 - `status=success` at the same client timestamp suggests the parse error may be a later client-side transcript/local tool issue or a different request.
-- missing rows can mean trajectory persistence failed; check main logs for `failed to persist session trajectory`.
+- missing rows can mean trajectory persistence failed; check `journalctl -u cliproxyapi.service` for `failed to persist session trajectory`.
 
 Avoid selecting huge `request_json` unless needed. If needed, query one request by `request_id`, not a time range.
 
-### 4. Correlate Main Logs
+### 4. Correlate Process Logs Only If Needed
 
-Find the main log file covering the request time:
+Use process logs only when Session DB has a gap or when the failure is about service startup, config reload, recorder initialization, or persistence. With `logging-to-file: false`, use systemd journal instead of local `logs/main*.log`:
 
 ```bash
-find logs -maxdepth 1 -type f -name 'main*log' -printf '%TY-%Tm-%Td %TH:%TM %s %p\n' | sort
+journalctl -u cliproxyapi.service --since '<start-utc>' --until '<end-utc>' --no-pager -l
 ```
 
-Then search by `request_id`:
+Search by `request_id` or known signatures:
 
 ```bash
-rg -n '<request_id>|Headers were already written|request error, error status|failed to persist session trajectory' logs/main*.log -S
-```
-
-For exact context:
-
-```bash
-sed -n '<start-line>,<end-line>p' logs/<main-log-file>
+journalctl -u cliproxyapi.service --since '<start-utc>' --until '<end-utc>' --no-pager -l \
+  | rg '<request_id>|Headers were already written|request error, error status|failed to persist session trajectory'
 ```
 
 Important signatures:
@@ -159,9 +153,11 @@ Important signatures:
 - `request error, error status: 400, error message: No tool output found for function call ...`: historical tool_use/tool_result mismatch sent upstream.
 - `failed to persist session trajectory ... unsupported Unicode escape`: Session DB recording gap for that request.
 
-### 5. Check Error Request Logs
+### 5. Avoid Local Request Logs By Default
 
-Request/response error snapshots rotate aggressively. Verify whether files still exist:
+Do not depend on local request log files for normal triage. They may be absent when `logging-to-file=false` or `request-log=false`, and Session DB is the source of truth for completed request records.
+
+Only check local error snapshots if Session DB lacks the needed raw payload:
 
 ```bash
 find logs -maxdepth 1 -type f \( -name 'error-v1-messages-<date>*' -o -name '*<request_id>*' \) -printf '%TY-%Tm-%Td %TH:%TM %s %p\n' | sort
@@ -178,8 +174,8 @@ Behavior to remember:
 
 - When `request-log=true`, request logs are normal full logs and are not returned by `/request-error-logs`.
 - When `request-log=false`, `error-*.log` files are forced only for responses the server classifies as errors: final HTTP status `>=400` or an internal API error marker.
-- A Claude client `API Error: Failed to parse JSON` can happen after the proxy returns HTTP 200 with a body the client cannot parse. That case may have no `error-v1-messages-*`; use Session DB `response_json` / `error_json`, then correlate `request_id` in `main.log`.
-- If no `error-v1-messages-*` file exists for the incident date, state that the detailed request snapshot is unavailable and rely on main logs plus Session DB.
+- A Claude client `API Error: Failed to parse JSON` can happen after the proxy returns HTTP 200 with a body the client cannot parse. That case may have no `error-v1-messages-*`; use Session DB `response_json` / `error_json`, then correlate `request_id` in journal only if needed.
+- If no `error-v1-messages-*` file exists for the incident date, do not treat that as a blocker; rely on Session DB first.
 
 ### 6. Inspect Request Consistency Only When Needed
 
@@ -201,7 +197,7 @@ If `jq` is unavailable, use Python to count `tool_use.id` and `tool_result.tool_
 Use this mapping in the report:
 
 - Pre-stream schema issue: request fails before first SSE chunk; code path should use Claude error JSON body.
-- Mid-stream failure: access log shows `200`, Session request is `error`, and main log says `Headers were already written`; fix stream terminal error behavior, not only JSON body format.
+- Mid-stream failure: Session request is `error`, and journal may say `Headers were already written`; fix stream terminal error behavior, not only JSON body format.
 - Upstream auth/session: logs show `401 invalidated oauth token` or `session expired`; rotate/re-auth upstream account and consider failover behavior.
 - Tool history mismatch: logs show `No tool output found for function call`; inspect request history transformation and thinking/tool replay cleanup.
 - Local client/tool issue: JSONL shows local `tool_result` errors and no proxy parse error.
@@ -219,8 +215,8 @@ Session DB:
 - request_id/status/model/duration around the error
 
 Main logs:
-- matching request_id lines
-- whether HTTP 200 was already committed
+- matching journal lines, if needed
+- whether HTTP 200 was already committed, if visible
 - upstream error signature if available
 
 Conclusion:
