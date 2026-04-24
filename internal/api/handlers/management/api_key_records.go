@@ -31,6 +31,7 @@ type apiKeyPolicyView struct {
 	AllowClaudeFamily         bool                      `json:"allow_claude_family"`
 	AllowGPTFamily            bool                      `json:"allow_gpt_family"`
 	FastMode                  bool                      `json:"fast_mode"`
+	SessionTrajectoryDisabled bool                      `json:"session_trajectory_disabled"`
 	CodexChannelMode          string                    `json:"codex_channel_mode"`
 	EnableClaudeModels        bool                      `json:"enable_claude_models"`
 	ClaudeUsageLimitUSD       float64                   `json:"claude_usage_limit_usd"`
@@ -149,6 +150,7 @@ type apiKeyRecordSummaryView struct {
 	PolicyFamily              string                 `json:"policy_family"`
 	EnableClaudeModels        bool                   `json:"enable_claude_models"`
 	FastMode                  bool                   `json:"fast_mode"`
+	SessionTrajectoryDisabled bool                   `json:"session_trajectory_disabled"`
 }
 
 type apiKeyRecordDetailView struct {
@@ -598,6 +600,7 @@ func (h *Handler) buildAPIKeySummary(ctx context.Context, apiKey string, now tim
 		summary.PolicyFamily = effectivePolicy.ClaudeGPTTargetFamilyOrDefault()
 		summary.EnableClaudeModels = effectivePolicy.ClaudeModelsEnabled()
 		summary.FastMode = effectivePolicy.FastModeEnabled()
+		summary.SessionTrajectoryDisabled = effectivePolicy.SessionTrajectoryDisabled
 	}
 	if effectiveGroup != nil {
 		summary.GroupName = effectiveGroup.Name
@@ -991,6 +994,7 @@ func policyToView(apiKey string, p *config.APIKeyPolicy, group *apikeygroup.Grou
 	}
 	view.AllowClaudeFamily, view.AllowGPTFamily, view.ExcludedModels = config.ExcludedModelFamilyAccess(p.ExcludedModels)
 	view.FastMode = p.FastMode
+	view.SessionTrajectoryDisabled = p.SessionTrajectoryDisabled
 	view.CodexChannelMode = p.CodexChannelModeOrDefault()
 	view.EnableClaudeModels = p.ClaudeModelsEnabled()
 	view.ClaudeGlobalFallback = p.AllowsClaudeGlobalFallback()
@@ -1042,6 +1046,7 @@ func viewToPolicy(apiKey string, view apiKeyPolicyView) config.APIKeyPolicy {
 		Disabled:                    view.Disabled,
 		GroupID:                     strings.TrimSpace(view.GroupID),
 		FastMode:                    view.FastMode,
+		SessionTrajectoryDisabled:   view.SessionTrajectoryDisabled,
 		CodexChannelMode:            config.NormalizeCodexChannelMode(view.CodexChannelMode),
 		EnableClaudeModels:          &enableClaudeModels,
 		ClaudeGlobalFallbackEnabled: &claudeGlobalFallback,
@@ -1182,6 +1187,7 @@ func isEmptyPolicyView(view apiKeyPolicyView) bool {
 		!view.AllowClaudeFamily &&
 		!view.AllowGPTFamily &&
 		!view.FastMode &&
+		!view.SessionTrajectoryDisabled &&
 		strings.TrimSpace(view.CodexChannelMode) == "" &&
 		!view.EnableClaudeModels &&
 		strings.TrimSpace(view.ClaudeCodeOnlyMode) == "" &&

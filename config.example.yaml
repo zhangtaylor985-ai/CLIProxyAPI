@@ -53,6 +53,8 @@ api-keys:
 # - token-package-usd / token-package-started-at: one-time prepaid spend allowance for the API key.
 #   While package balance remains, daily/weekly spend budgets are bypassed. Once exhausted,
 #   daily/weekly spend budgets resume counting only from the depletion point forward.
+# - session-trajectory-disabled: when true, this API key will not persist new requests to
+#   session trajectory storage. The global session-trajectory-enabled switch remains the top-level gate.
 # - Storage:
 #   - api-key policies / top-level api-keys can be persisted in Postgres via
 #     APIKEY_POLICY_PG_DSN / APIKEY_POLICY_PG_SCHEMA.
@@ -70,6 +72,8 @@ api-key-policies:
     # Optional: restrict which Codex auth channel this client API key may use.
     # Values: auto | provider | auth_file
     codex-channel-mode: "auto"
+    # Optional: disable session trajectory capture for this client API key only.
+    session-trajectory-disabled: false
     excluded-models:
       - "claude-haiku-4-5-20251001"
     model-routing:

@@ -236,6 +236,7 @@ func TestPolicyViewRoundTripUsesFamilyAccessTogglesAndMetadata(t *testing.T) {
 		CreatedAt:                   now.Format(time.RFC3339),
 		ExpiresAt:                   expiresAt.Format(time.RFC3339),
 		Disabled:                    true,
+		SessionTrajectoryDisabled:   true,
 		CodexChannelMode:            "provider",
 		EnableClaudeModels:          boolPtr(true),
 		ClaudeGlobalFallbackEnabled: boolPtr(false),
@@ -258,6 +259,9 @@ func TestPolicyViewRoundTripUsesFamilyAccessTogglesAndMetadata(t *testing.T) {
 	if !view.Disabled || view.CreatedAt == "" || view.ExpiresAt == "" {
 		t.Fatalf("expected metadata to round-trip, got %+v", view)
 	}
+	if !view.SessionTrajectoryDisabled {
+		t.Fatalf("expected session trajectory disabled flag to round-trip, got %+v", view)
+	}
 	if view.CodexChannelMode != "provider" {
 		t.Fatalf("expected codex channel mode to round-trip, got %+v", view)
 	}
@@ -274,6 +278,9 @@ func TestPolicyViewRoundTripUsesFamilyAccessTogglesAndMetadata(t *testing.T) {
 	}
 	if roundTrip.Name != policyEntry.Name || roundTrip.Note != policyEntry.Note {
 		t.Fatalf("unexpected round-trip name/note: %+v", roundTrip)
+	}
+	if !roundTrip.SessionTrajectoryDisabled {
+		t.Fatalf("unexpected round-trip session trajectory flag: %+v", roundTrip)
 	}
 	if roundTrip.ClaudeGlobalFallbackEnabled == nil || *roundTrip.ClaudeGlobalFallbackEnabled {
 		t.Fatalf("unexpected round-trip claude global fallback flag: %+v", roundTrip)
@@ -362,6 +369,9 @@ func TestIsEmptyPolicyViewTreatsZeroValueAsEmpty(t *testing.T) {
 	}
 	if isEmptyPolicyView(apiKeyPolicyView{Disabled: true}) {
 		t.Fatal("expected disabled policy to be treated as non-empty")
+	}
+	if isEmptyPolicyView(apiKeyPolicyView{SessionTrajectoryDisabled: true}) {
+		t.Fatal("expected session trajectory disabled policy to be treated as non-empty")
 	}
 }
 

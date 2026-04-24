@@ -191,6 +191,20 @@ func TestConfig_SanitizeAPIKeyPolicies_NormalizesCodexChannelMode(t *testing.T) 
 	}
 }
 
+func TestAPIKeyPolicySessionTrajectoryEnabled(t *testing.T) {
+	t.Parallel()
+
+	if !((*APIKeyPolicy)(nil)).SessionTrajectoryEnabled() {
+		t.Fatal("nil policy should allow session trajectory capture")
+	}
+	if !(&APIKeyPolicy{}).SessionTrajectoryEnabled() {
+		t.Fatal("default policy should allow session trajectory capture")
+	}
+	if (&APIKeyPolicy{SessionTrajectoryDisabled: true}).SessionTrajectoryEnabled() {
+		t.Fatal("disabled policy should block session trajectory capture")
+	}
+}
+
 func TestConfig_ShouldRouteClaudeToGPT_DefaultsToAllKeysWhenGlobalEnabled(t *testing.T) {
 	cfg := &Config{SDKConfig: SDKConfig{ClaudeToGPTRoutingEnabled: true}}
 

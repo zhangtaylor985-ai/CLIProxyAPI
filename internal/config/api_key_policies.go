@@ -54,6 +54,11 @@ type APIKeyPolicy struct {
 	// to use the priority service tier when the target model supports it.
 	FastMode bool `yaml:"fast-mode,omitempty" json:"fast-mode,omitempty"`
 
+	// SessionTrajectoryDisabled disables PostgreSQL-backed session trajectory capture
+	// for requests authenticated by this API key. The global session-trajectory-enabled
+	// switch remains the top-level gate.
+	SessionTrajectoryDisabled bool `yaml:"session-trajectory-disabled,omitempty" json:"session-trajectory-disabled,omitempty"`
+
 	// CodexChannelMode restricts which Codex credential channel this API key may use.
 	// Supported values are "auto", "provider", and "auth_file".
 	CodexChannelMode string `yaml:"codex-channel-mode,omitempty" json:"codex-channel-mode,omitempty"`
@@ -377,6 +382,13 @@ func (p *APIKeyPolicy) FastModeEnabled() bool {
 		return false
 	}
 	return p.FastMode
+}
+
+func (p *APIKeyPolicy) SessionTrajectoryEnabled() bool {
+	if p == nil {
+		return true
+	}
+	return !p.SessionTrajectoryDisabled
 }
 
 func NormalizeCodexChannelMode(raw string) string {

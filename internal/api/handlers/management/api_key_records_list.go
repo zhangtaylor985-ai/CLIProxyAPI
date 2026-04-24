@@ -19,23 +19,24 @@ import (
 // handler can build an entire page without touching the billing store more
 // than twice (groups + batched last_used_at lookup).
 type apiKeyRecordSummaryLiteView struct {
-	APIKey             string     `json:"api_key"`
-	MaskedAPIKey       string     `json:"masked_api_key"`
-	Name               string     `json:"name"`
-	Note               string     `json:"note"`
-	CreatedAt          string     `json:"created_at"`
-	ExpiresAt          string     `json:"expires_at"`
-	Disabled           bool       `json:"disabled"`
-	GroupID            string     `json:"group_id"`
-	GroupName          string     `json:"group_name"`
-	Registered         bool       `json:"registered"`
-	HasExplicitPolicy  bool       `json:"has_explicit_policy"`
-	LastUsedAt         *time.Time `json:"last_used_at,omitempty"`
-	DailyLimitCount    int        `json:"daily_limit_count"`
-	PolicyFamily       string     `json:"policy_family"`
-	EnableClaudeModels bool       `json:"enable_claude_models"`
-	FastMode           bool       `json:"fast_mode"`
-	Expired            bool       `json:"expired"`
+	APIKey                    string     `json:"api_key"`
+	MaskedAPIKey              string     `json:"masked_api_key"`
+	Name                      string     `json:"name"`
+	Note                      string     `json:"note"`
+	CreatedAt                 string     `json:"created_at"`
+	ExpiresAt                 string     `json:"expires_at"`
+	Disabled                  bool       `json:"disabled"`
+	GroupID                   string     `json:"group_id"`
+	GroupName                 string     `json:"group_name"`
+	Registered                bool       `json:"registered"`
+	HasExplicitPolicy         bool       `json:"has_explicit_policy"`
+	LastUsedAt                *time.Time `json:"last_used_at,omitempty"`
+	DailyLimitCount           int        `json:"daily_limit_count"`
+	PolicyFamily              string     `json:"policy_family"`
+	EnableClaudeModels        bool       `json:"enable_claude_models"`
+	FastMode                  bool       `json:"fast_mode"`
+	SessionTrajectoryDisabled bool       `json:"session_trajectory_disabled"`
+	Expired                   bool       `json:"expired"`
 }
 
 type apiKeyRecordListPagination struct {
@@ -297,6 +298,7 @@ func (h *Handler) buildAPIKeyRecordSummariesLite(ctx context.Context, now time.T
 			view.PolicyFamily = effective.ClaudeGPTTargetFamilyOrDefault()
 			view.EnableClaudeModels = effective.ClaudeModelsEnabled()
 			view.FastMode = effective.FastModeEnabled()
+			view.SessionTrajectoryDisabled = effective.SessionTrajectoryDisabled
 		}
 		if view.GroupID != "" {
 			if grp, ok := groups[view.GroupID]; ok {
