@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -87,5 +88,22 @@ func TestBuildErrorResponseBody_SanitizesUnknownProviderLeakFromJSON(t *testing.
 	}
 	if payload.Error.Message != "upstream model temporarily unavailable, please retry later" {
 		t.Fatalf("message = %q", payload.Error.Message)
+	}
+}
+
+func TestBuildClaudeErrorResponseBodyFromMessage_SanitizesUnknownProviderLeak(t *testing.T) {
+	body := BuildClaudeErrorResponseBodyFromMessage(&interfaces.ErrorMessage{
+		StatusCode: http.StatusBadGateway,
+		Error:      errors.New(`{"error":{"message":"unknown provider for model gpt-5.4(medium)"}}`),
+	})
+	var payload claudeErrorResponse
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if payload.Error.Message != "upstream model temporarily unavailable, please retry later" {
+		t.Fatalf("message = %q", payload.Error.Message)
+	}
+	if strings.Contains(strings.ToLower(string(body)), "gpt") {
+		t.Fatalf("Claude error body leaked internal model: %s", string(body))
 	}
 }

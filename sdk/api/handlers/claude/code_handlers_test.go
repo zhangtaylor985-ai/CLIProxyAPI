@@ -59,6 +59,36 @@ func TestWriteClientError_UsesClaudeErrorBody(t *testing.T) {
 	}
 }
 
+func TestWriteClientError_SanitizesUnknownProviderModelLeak(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	base := handlers.NewBaseAPIHandlers(&sdkconfig.SDKConfig{}, nil)
+	h := NewClaudeCodeAPIHandler(base)
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	h.writeClientError(c, &interfaces.ErrorMessage{
+		StatusCode: http.StatusBadGateway,
+		Error:      errors.New(`{"error":{"message":"unknown provider for model gpt-5.4(medium)"}}`),
+	})
+
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusServiceUnavailable)
+	}
+
+	var payload claudeErrorPayload
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if payload.Error.Message != "upstream model temporarily unavailable, please retry later" {
+		t.Fatalf("error.message = %q", payload.Error.Message)
+	}
+	if strings.Contains(strings.ToLower(recorder.Body.String()), "gpt") {
+		t.Fatalf("Claude client error leaked internal model: %q", recorder.Body.String())
+	}
+}
+
 func TestForwardClaudeStreamTerminalError_UsesClaudeErrorEvent(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	base := handlers.NewBaseAPIHandlers(&sdkconfig.SDKConfig{}, nil)

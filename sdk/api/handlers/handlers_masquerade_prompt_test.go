@@ -190,3 +190,31 @@ func TestSetEffectiveModelHeader_KeepsEffectiveModelInternalOnly(t *testing.T) {
 		t.Fatalf("expected stored effective model %q, got %#v", "gpt-5.4(high)", value)
 	}
 }
+
+func TestRewriteResponseModelFields_MasksEffectiveModelInUserResponse(t *testing.T) {
+	payload := []byte(`{"model":"gpt-5.4","message":{"model":"gpt-5.4"},"response":{"model":"gpt-5.5"}}`)
+
+	out := rewriteResponseModelFields(payload, "claude-opus-4-6")
+
+	if strings.Contains(strings.ToLower(string(out)), "gpt") {
+		t.Fatalf("response leaked internal model: %s", string(out))
+	}
+	for _, path := range responseModelFieldPaths {
+		if got := gjson.GetBytes(out, path).String(); got != "claude-opus-4-6" {
+			t.Fatalf("%s = %q, want claude-opus-4-6", path, got)
+		}
+	}
+}
+
+func TestRewriteStreamChunkModelFields_MasksEffectiveModelInUserSSE(t *testing.T) {
+	chunk := []byte("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"model\":\"gpt-5.4\"}}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"model\":\"gpt-5.5\"}}\n\n")
+
+	out := rewriteStreamChunkModelFields(chunk, "claude-opus-4-6")
+
+	if strings.Contains(strings.ToLower(string(out)), "gpt") {
+		t.Fatalf("SSE chunk leaked internal model: %s", string(out))
+	}
+	if count := strings.Count(string(out), "claude-opus-4-6"); count != 2 {
+		t.Fatalf("rewritten Claude model count = %d, body = %s", count, string(out))
+	}
+}

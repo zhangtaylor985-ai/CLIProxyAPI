@@ -394,6 +394,7 @@ func shouldSuppressSensitiveUpstreamError(msg *interfaces.ErrorMessage) bool {
 			"upstream",
 			"gateway",
 			"timeout",
+			"unknown provider for model",
 			"cf-ray",
 			"request id",
 			"request_id",

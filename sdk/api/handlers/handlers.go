@@ -207,7 +207,10 @@ func BuildClaudeErrorResponseBody(errText string) []byte {
 
 // BuildClaudeErrorResponseBodyFromMessage converts an error message to a Claude-compatible body.
 func BuildClaudeErrorResponseBodyFromMessage(msg *interfaces.ErrorMessage) []byte {
-	_, errText := errorResponseStatusAndText(msg)
+	status, errText := errorResponseStatusAndText(msg)
+	if sanitized, ok := sanitizeClientErrorText(status, errText); ok {
+		errText = sanitized
+	}
 	return BuildClaudeErrorResponseBody(errText)
 }
 
