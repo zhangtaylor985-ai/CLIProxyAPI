@@ -1,0 +1,4 @@
+interface:
+  display_name: "CLIProxyAPI Mainline Release Flow"
+  short_description: "Merge backend/frontend to main safely"
+  default_prompt: "Use $cliproxyapi-mainline-release-flow to merge validated CLIProxyAPI backend/frontend worktrees back to main, push remote main, sync source worktrees, and prepare deployment."
