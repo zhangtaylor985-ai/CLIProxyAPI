@@ -2,6 +2,8 @@ package middleware
 
 import (
 	"context"
+	"errors"
+	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
@@ -9,6 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/interfaces"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/sessiontrajectory"
 )
 
@@ -30,6 +33,17 @@ func (r *countingResponseWriterRecorder) Record(context.Context, *sessiontraject
 }
 
 func (r *countingResponseWriterRecorder) Close() error { return nil }
+
+type captureResponseWriterRecorder struct {
+	record *sessiontrajectory.CompletedRequest
+}
+
+func (r *captureResponseWriterRecorder) Record(_ context.Context, record *sessiontrajectory.CompletedRequest) error {
+	r.record = record
+	return nil
+}
+
+func (r *captureResponseWriterRecorder) Close() error { return nil }
 
 func TestExtractRequestBodyPrefersOverride(t *testing.T) {
 	gin.SetMode(gin.TestMode)
@@ -127,5 +141,42 @@ func TestResponseWriterFinalizeSkipsRecordWhenAPIKeyPolicyDisablesSessionTraject
 	}
 	if got := enabledRecorder.count.Load(); got != 1 {
 		t.Fatalf("enabled recorder calls = %d, want 1", got)
+	}
+}
+
+func TestResponseWriterFinalizePassesAPIResponseErrorsForCommittedStream(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	recorder := &captureResponseWriterRecorder{}
+	httpRecorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(httpRecorder)
+	c.Request = httptest.NewRequest("POST", "/v1/messages", nil)
+	c.Set("API_RESPONSE_ERROR", []*interfaces.ErrorMessage{
+		{StatusCode: http.StatusInternalServerError, Error: errors.New("stream interrupted")},
+	})
+
+	wrapper := NewResponseWriterWrapper(
+		c.Writer,
+		nil,
+		recorder,
+		&RequestInfo{Method: "POST", URL: "/v1/messages", RequestID: "req-stream-error", Timestamp: time.Now()},
+		c,
+	)
+	c.Status(http.StatusOK)
+
+	if err := wrapper.Finalize(c); err != nil {
+		t.Fatalf("Finalize error = %v", err)
+	}
+	if recorder.record == nil {
+		t.Fatal("expected recorder to receive completed request")
+	}
+	if recorder.record.ResponseStatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want committed %d", recorder.record.ResponseStatusCode, http.StatusOK)
+	}
+	if got := len(recorder.record.APIResponseErrors); got != 1 {
+		t.Fatalf("APIResponseErrors len = %d, want 1", got)
+	}
+	if recorder.record.APIResponseErrors[0].Error.Error() != "stream interrupted" {
+		t.Fatalf("APIResponseErrors[0] = %v", recorder.record.APIResponseErrors[0].Error)
 	}
 }

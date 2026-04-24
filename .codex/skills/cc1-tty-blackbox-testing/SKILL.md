@@ -115,6 +115,32 @@ cat ~/.claude_local/settings.local.json
 
 那么再额外猜测“是不是没走本地”意义不大，先看 debug-file。
 
+### 5. HTTP 200 不等于流式请求完整成功
+
+Claude CLI 里出现这类错误时：
+
+```text
+API Error: {"type":"error","error":{"type":"api_error","message":"stream error: stream ID ...; INTERNAL_ERROR; received from peer"}}
+```
+
+不要只看 `logs/main.log` 的最终状态码。中途断流发生在 SSE 已开始写出之后，服务端访问日志仍可能显示：
+
+- `200 | ... | POST "/v1/messages?beta=true"`
+- session trajectory 的 `status=success`
+
+这时继续查 session trajectory 里的结构化异常信号：
+
+- `response_json.stop_reason` 仍为 `null`
+- `usage.input_tokens/output_tokens/total_tokens` 全是 0
+- `response_json.content` 停在最后一个进度块，例如 `Searching the web.`
+- 客户端 JSONL 里有 `isApiErrorMessage=true` 或 synthetic assistant error
+
+结论口径：
+
+- `logs/main.log` 主要用于定位 request id、时间窗、来源 IP、耗时和路由账号。
+- 真正判断是否中途断流，优先依赖客户端 session JSONL、debug-file、session trajectory PG。
+- 如果 PG 记录为 success 但 `stop_reason=null` 且客户端 JSONL 有 API Error，应按“观测链路漏标的流式失败”处理，不要按成功请求归档。
+
 ## Standard Workflow
 
 ### Step 1. 确认客户端配置
@@ -209,6 +235,37 @@ rg -n "/v1/messages\\?beta=true| 408 | 500 " logs/main.log -S | tail -n 80
 ```
 
 如果需要更精确的原始请求样本，再看 request log 目录。
+
+### Step 6. 查 session trajectory PG
+
+如果用户给的是客户端 JSONL 或粘贴的报错片段，先从 JSONL 里拿到原始 session id、报错 timestamp，再回 PG 查对应 request：
+
+```bash
+set -a; . ./.env; set +a
+psql "$SESSION_TRAJECTORY_PG_DSN" -P pager=off -c "
+select request_id, session_id, source, call_type, provider, model, status,
+       started_at, ended_at, duration_ms,
+       input_tokens, output_tokens, total_tokens,
+       left(coalesce(error_json::text,''),500) as err
+from session_trajectory_requests
+where started_at between '<start-utc>' and '<end-utc>'
+order by started_at;
+"
+```
+
+针对 `stream ID ... INTERNAL_ERROR`，再检查候选请求的响应是否完整：
+
+```bash
+psql "$SESSION_TRAJECTORY_PG_DSN" -P pager=off -c "
+select request_id,
+       response_json->>'stop_reason' as stop_reason,
+       response_json->'usage' as usage,
+       pg_column_size(response_json) as response_bytes,
+       pg_column_size(normalized_json) as normalized_bytes
+from session_trajectory_requests
+where request_id='<request-id>';
+"
+```
 
 ## Known Good Signals
 

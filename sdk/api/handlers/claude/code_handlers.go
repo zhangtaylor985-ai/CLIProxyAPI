@@ -302,6 +302,7 @@ func (h *ClaudeCodeAPIHandler) forwardClaudeStream(c *gin.Context, flusher http.
 				return
 			}
 			errMsg = h.sanitizeClientError(c, errMsg)
+			handlers.AppendAPIResponseError(c, errMsg)
 			status := http.StatusInternalServerError
 			if errMsg.StatusCode > 0 {
 				status = errMsg.StatusCode

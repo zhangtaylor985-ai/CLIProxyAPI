@@ -2436,19 +2436,26 @@ func (h *BaseAPIHandler) writeErrorResponseBody(c *gin.Context, msg *interfaces.
 }
 
 func (h *BaseAPIHandler) LoggingAPIResponseError(ctx context.Context, err *interfaces.ErrorMessage) {
-	if h.Cfg.RequestLog {
-		if ginContext, ok := ctx.Value("gin").(*gin.Context); ok {
-			if apiResponseErrors, isExist := ginContext.Get("API_RESPONSE_ERROR"); isExist {
-				if slicesAPIResponseError, isOk := apiResponseErrors.([]*interfaces.ErrorMessage); isOk {
-					slicesAPIResponseError = append(slicesAPIResponseError, err)
-					ginContext.Set("API_RESPONSE_ERROR", slicesAPIResponseError)
-				}
-			} else {
-				// Create new response data entry
-				ginContext.Set("API_RESPONSE_ERROR", []*interfaces.ErrorMessage{err})
-			}
+	if ctx == nil {
+		return
+	}
+	if ginContext, ok := ctx.Value("gin").(*gin.Context); ok {
+		AppendAPIResponseError(ginContext, err)
+	}
+}
+
+// AppendAPIResponseError records a terminal upstream error for request logging and session trajectory.
+func AppendAPIResponseError(c *gin.Context, err *interfaces.ErrorMessage) {
+	if c == nil || err == nil {
+		return
+	}
+	if apiResponseErrors, exists := c.Get("API_RESPONSE_ERROR"); exists {
+		if existing, ok := apiResponseErrors.([]*interfaces.ErrorMessage); ok {
+			c.Set("API_RESPONSE_ERROR", append(existing, err))
+			return
 		}
 	}
+	c.Set("API_RESPONSE_ERROR", []*interfaces.ErrorMessage{err})
 }
 
 // APIHandlerCancelFunc is a function type for canceling an API handler's context.

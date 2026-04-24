@@ -90,6 +90,18 @@ func TestForwardClaudeStreamTerminalError_UsesClaudeErrorEvent(t *testing.T) {
 	if strings.Contains(body, `"server_error"`) {
 		t.Fatalf("expected Claude error payload, got OpenAI error body: %q", body)
 	}
+
+	recorded, ok := c.Get("API_RESPONSE_ERROR")
+	if !ok {
+		t.Fatal("expected terminal stream error to be recorded in gin context")
+	}
+	errors, ok := recorded.([]*interfaces.ErrorMessage)
+	if !ok || len(errors) != 1 {
+		t.Fatalf("recorded errors = %#v, want one ErrorMessage", recorded)
+	}
+	if errors[0].Error == nil || errors[0].Error.Error() != "unexpected EOF" {
+		t.Fatalf("recorded error = %v, want unexpected EOF", errors[0].Error)
+	}
 }
 
 func TestForwardClaudeStreamTerminalError_DoesNotRewriteCommittedStatus(t *testing.T) {
@@ -141,5 +153,48 @@ func TestForwardClaudeStreamTerminalError_DoesNotRewriteCommittedStatus(t *testi
 	body := recorder.Body.String()
 	if !strings.Contains(body, `event: message_start`) || !strings.Contains(body, `event: error`) {
 		t.Fatalf("expected initial chunk followed by Claude SSE error event, got: %q", body)
+	}
+}
+
+func TestForwardClaudeStreamTerminalError_RecordsSanitizedError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	base := handlers.NewBaseAPIHandlers(&sdkconfig.SDKConfig{}, nil)
+	h := NewClaudeCodeAPIHandler(base)
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	flusher, ok := c.Writer.(http.Flusher)
+	if !ok {
+		t.Fatalf("expected gin writer to implement http.Flusher")
+	}
+
+	data := make(chan []byte)
+	errs := make(chan *interfaces.ErrorMessage, 1)
+	errs <- &interfaces.ErrorMessage{
+		StatusCode: http.StatusInternalServerError,
+		Error:      errors.New("upstream service unavailable cf-ray abc123"),
+	}
+	close(errs)
+
+	h.forwardClaudeStream(c, flusher, func(error) {}, data, errs)
+
+	recorded, ok := c.Get("API_RESPONSE_ERROR")
+	if !ok {
+		t.Fatal("expected terminal stream error to be recorded in gin context")
+	}
+	errors, ok := recorded.([]*interfaces.ErrorMessage)
+	if !ok || len(errors) != 1 {
+		t.Fatalf("recorded errors = %#v, want one ErrorMessage", recorded)
+	}
+	if errors[0].StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("recorded status = %d, want %d", errors[0].StatusCode, http.StatusServiceUnavailable)
+	}
+	if got := errors[0].Error.Error(); got != "upstream model temporarily unavailable, please retry later" {
+		t.Fatalf("recorded error = %q", got)
+	}
+	if strings.Contains(fmt.Sprint(recorded), "cf-ray") {
+		t.Fatalf("recorded error was not sanitized: %#v", recorded)
 	}
 }
