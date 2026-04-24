@@ -146,6 +146,11 @@ func TestQueryAPIKeyInsightsFiltersInvalidKeys(t *testing.T) {
 		"model_routing_rules",
 		"daily_limits",
 		"recent_events",
+		"source",
+		"auth_index",
+		"id_token",
+		"account",
+		"email",
 		"api_key\":\"k-valid",
 	} {
 		if strings.Contains(response, forbidden) {
