@@ -1,0 +1,261 @@
+#!/usr/bin/env python3
+
+import atexit
+import shlex
+import subprocess
+import sys
+import time
+import uuid
+from pathlib import Path
+
+
+def count_fixed_matches(needle: str, file_path: Path) -> int:
+    if not file_path.exists():
+        return 0
+    return file_path.read_text(encoding="utf-8", errors="ignore").count(needle)
+
+
+def read_text_from_offset(file_path: Path, offset: int) -> str:
+    if not file_path.exists():
+        return ""
+    with file_path.open("rb") as handle:
+        handle.seek(offset)
+        return handle.read().decode("utf-8", errors="ignore")
+
+
+def file_size_safe(file_path: Path) -> int:
+    if not file_path.exists():
+        return 0
+    return file_path.stat().st_size
+
+
+def tmux(*args: str, capture_output: bool = False) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["tmux", *args],
+        text=True,
+        capture_output=capture_output,
+        check=False,
+    )
+
+
+def session_exists(session_name: str) -> bool:
+    return tmux("has-session", "-t", session_name).returncode == 0
+
+
+def capture_pane(session_name: str, transcript: Path) -> str:
+    if not session_exists(session_name):
+        return ""
+    result = tmux("capture-pane", "-pt", session_name, "-S", "-50000", "-J", capture_output=True)
+    transcript.write_text(result.stdout or "", encoding="utf-8")
+    return result.stdout or ""
+
+
+def wait_for_count_increase(
+    needle: str,
+    file_path: Path,
+    baseline: int,
+    label: str,
+    timeout_seconds: int,
+    exit_code: int,
+) -> int:
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        current = count_fixed_matches(needle, file_path)
+        if current > baseline:
+            return current
+        time.sleep(1)
+    raise SystemExitWithMessage(exit_code, f"timeout waiting for {label}")
+
+
+def wait_for_needle_after_offset(
+    needle: str,
+    file_path: Path,
+    offset: int,
+    label: str,
+    timeout_seconds: int,
+    exit_code: int,
+) -> int:
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        appended = read_text_from_offset(file_path, offset)
+        if needle in appended:
+            return file_size_safe(file_path)
+        time.sleep(1)
+    raise SystemExitWithMessage(exit_code, f"timeout waiting for {label}")
+
+
+def wait_for_file_quiet(
+    file_path: Path,
+    quiet_seconds: int,
+    timeout_seconds: int,
+    label: str,
+    exit_code: int,
+) -> None:
+    deadline = time.time() + timeout_seconds
+    last_size = file_size_safe(file_path)
+    stable_since = time.time()
+
+    while time.time() < deadline:
+        time.sleep(1)
+        current_size = file_size_safe(file_path)
+        if current_size != last_size:
+            last_size = current_size
+            stable_since = time.time()
+            continue
+        if time.time() - stable_since >= quiet_seconds:
+            return
+
+    raise SystemExitWithMessage(exit_code, f"timeout waiting for quiet {label}")
+
+
+class SystemExitWithMessage(Exception):
+    def __init__(self, code: int, message: str):
+        self.code = code
+        self.message = message
+        super().__init__(message)
+
+
+def wait_for_startup_ready(debug_log: Path, session_name: str, transcript: Path) -> None:
+    startup_baseline = count_fixed_matches("Hook SessionStart:startup (SessionStart) success:", debug_log)
+    if startup_baseline < 1:
+        wait_for_count_increase(
+            "Hook SessionStart:startup (SessionStart) success:",
+            debug_log,
+            startup_baseline,
+            "startup hook",
+            180,
+            76,
+        )
+
+    wait_for_file_quiet(debug_log, 4, 180, "startup debug log", 77)
+
+    deadline = time.time() + 60
+    prompt_seen = False
+    while time.time() < deadline:
+        pane = capture_pane(session_name, transcript)
+        if "</persisted-output>" in pane or "bypass permissions on" in pane or "❯" in pane:
+            prompt_seen = True
+            break
+        time.sleep(1)
+
+    if not prompt_seen:
+        raise SystemExitWithMessage(78, "timeout waiting for stable startup prompt")
+
+    # The first interactive turn is sensitive to cold-start UI/plugin work.
+    time.sleep(12)
+    capture_pane(session_name, transcript)
+
+
+def wait_for_turn_complete(
+    debug_log: Path,
+    session_name: str,
+    transcript: Path,
+    stage: str,
+    turn_offset: int,
+) -> None:
+    request_offset = wait_for_needle_after_offset(
+        "[API REQUEST] /v1/messages",
+        debug_log,
+        turn_offset,
+        f"{stage} api request",
+        180,
+        73,
+    )
+    stream_offset = wait_for_needle_after_offset(
+        "Stream started - received first chunk",
+        debug_log,
+        request_offset,
+        f"{stage} first stream chunk",
+        300,
+        74,
+    )
+    wait_for_needle_after_offset(
+        "Hook Stop (Stop) success",
+        debug_log,
+        stream_offset,
+        f"{stage} stop hook",
+        900,
+        75,
+    )
+    time.sleep(1.2)
+    capture_pane(session_name, transcript)
+
+
+def send_prompt(session_name: str, prompt: str) -> None:
+    tmux("send-keys", "-t", session_name, "-l", prompt)
+    time.sleep(0.25)
+    tmux("send-keys", "-t", session_name, "Enter")
+
+
+def build_tmux_command(repo_root: Path, debug_log: Path) -> str:
+    inner = (
+        f"cd {shlex.quote(str(repo_root))} && "
+        "export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 DISABLE_AUTOUPDATER=1 && "
+        f"cc1 --debug-file {shlex.quote(str(debug_log))}"
+    )
+    return f"zsh -ic {shlex.quote(inner)}"
+
+
+def main() -> int:
+    if len(sys.argv) < 5:
+        print(
+            "usage: cc1_tty_regression.expect <repo_root> <debug_log> <transcript> <prompt1> [prompt2 ...]",
+            file=sys.stderr,
+        )
+        return 64
+
+    repo_root = Path(sys.argv[1]).resolve()
+    debug_log = Path(sys.argv[2]).resolve()
+    transcript = Path(sys.argv[3]).resolve()
+    prompts = sys.argv[4:]
+
+    debug_log.parent.mkdir(parents=True, exist_ok=True)
+    transcript.parent.mkdir(parents=True, exist_ok=True)
+    if debug_log.exists():
+        debug_log.unlink()
+    if transcript.exists():
+        transcript.unlink()
+
+    session_name = f"cc1-regression-{uuid.uuid4().hex[:10]}"
+
+    def cleanup() -> None:
+        capture_pane(session_name, transcript)
+        if session_exists(session_name):
+            tmux("kill-session", "-t", session_name)
+
+    atexit.register(cleanup)
+
+    result = tmux("new-session", "-d", "-s", session_name, build_tmux_command(repo_root, debug_log))
+    if result.returncode != 0:
+        print("failed to create tmux session", file=sys.stderr)
+        return 69
+
+    tmux("set-option", "-t", session_name, "history-limit", "50000")
+
+    try:
+        wait_for_startup_ready(debug_log, session_name, transcript)
+
+        for turn, prompt in enumerate(prompts, start=1):
+            turn_offset = file_size_safe(debug_log)
+
+            send_prompt(session_name, prompt)
+            wait_for_turn_complete(
+                debug_log,
+                session_name,
+                transcript,
+                f"turn-{turn}",
+                turn_offset,
+            )
+
+        tmux("send-keys", "-t", session_name, "C-d")
+        time.sleep(1)
+        capture_pane(session_name, transcript)
+        return 0
+    except SystemExitWithMessage as exc:
+        capture_pane(session_name, transcript)
+        print(exc.message, file=sys.stderr)
+        return exc.code
+
+
+if __name__ == "__main__":
+    sys.exit(main())

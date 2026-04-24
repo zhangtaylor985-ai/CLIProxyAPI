@@ -122,6 +122,51 @@
   - 第 292 行：`Agent` 工具结果内含 `API Error: Failed to parse JSON`
   - 第 284-285 / 293-295 / 320-322 行：底层真实系统错误是 `500 auth_not_found: no auth available`
 
+## 2026-04-22 新增样本 1fac0114
+
+- 用户新增样本：
+  - `/Users/taylor/Downloads/1fac0114-f300-4118-8555-9e6ad812f2ca.jsonl`
+- 该样本的重要性在于：它进一步证明线上并不只是 `claude-mem`，而是“多 hook 叠加态”：
+  - `SessionStart` 有纯文本 caveman mode hook 输出
+  - `SessionStart` 同时还有 `claude-mem` hook 输出
+  - 还叠加了 `cmux claude-hook ...` 这一层自定义 hook
+- 样本中的关键现象：
+  - 第 2 行：纯文本 caveman mode 输出直接进入 `hook_success.content/stdout`
+  - 第 3 行：`claude-mem` 返回 JSON 形式的 `hookSpecificOutput`
+  - 第 4 / 238 / 249 行：`cmux claude-hook ...` 返回 `OK`
+  - 第 243-247 行：存在异步 hook 回写 attachment
+  - 第 251 行：最终 assistant synthetic error 为 `API Error: Failed to parse JSON`
+- 这个样本说明：
+  - 线上用户的失败场景很可能发生在“代理兼容链路 + 本地多 hook/custom wrapper”叠加态
+  - 不能再把所有 `Failed to parse JSON` 都简单归因到单一代理响应格式问题
+  - 需要把“本地 hooks 输出形状、异步 hook attachment、工具回合状态机”纳入同一证据链分析
+
+## 2026-04-22 本地 claude2 + claude-mem 新回归
+
+- 已明确改用 `claude2` 作为 `cc1` 真正二进制，不再把 `~/.cac/bin/claude` 当主入口。
+- 已在 `~/.claude_local` 下真实安装并启用：
+  - `claude-mem@thedotmack`
+  - `bun` 已加入执行路径，`plugin:claude-mem:mcp-search` 可以正常连接
+- 本地当前通过样本：
+  - `~/.claude_local/projects/-Users-taylor-code-tools-CLIProxyAPI-ori/b66dbc92-c994-476c-890d-d09248f69af4.jsonl`
+- 已通过的真实链路：
+  - 第 1 轮：`Reply with exactly TTY_MEM_OK`
+  - 第 2 轮：`What was my previous instruction? Reply with exactly TTY_MEM_PREV`
+  - 第 3 轮已进入工具回合：
+    - `Review the recent changes in sdk/api/handlers/openai/openai_responses_handlers.go for regressions only. Be concise.`
+    - 已正常出现 `TaskCreate` 的 `tool_use/tool_result`
+    - `PostToolUse:TaskCreate` hook 也返回了合法 `{}` JSON
+- 当前这条本地 `claude2 + claude-mem + 本地代理` 路径下，尚未再现：
+  - `API Error: Failed to parse JSON`
+  - `Unexpected end of JSON input`
+  - `undefined is not an object (reading 'speed' / 'content' / 'input_tokens')`
+- 当前判断更新为：
+  - 纯 `claude2 + ~/.claude_local + claude-mem + CLIProxyAPI` 主干路径，至少在短多轮和工具起步阶段已明显稳定
+  - 线上残余报错更像需要额外叠加：
+    - 用户自己的 `cmux` / caveman / 其他 hooks
+    - 旧版本客户端（线上样本里仍出现 `2.1.112`）
+    - 更长的工具往返或异步 hook 回写链路
+
 ## 建议下一步
 
 - 再补一轮真实 `cc1` 同 PTY 继续追问黑盒，覆盖：
@@ -146,3 +191,63 @@
 - 结论：
   - “屏幕上看见了”不等于“客户端已经提交了”
   - 黑盒调试的 source of truth 仍是 `session jsonl + --debug-file + server log`
+
+## 2026-04-22 下午追加收敛
+
+- 本地真实 `claude2 + ~/.claude_local + claude-mem + CLIProxyAPI` 回归继续推进后，第三轮 review 没有在“工具刚起步”时中断，而是继续健康进入第二段文件读取：
+  - `2026-04-22T10:01:43Z`：继续发起 `/v1/messages`，读取 `sdk/api/handlers/openai/openai_responses_handlers_stream_test.go`
+  - `2026-04-22T10:02:48Z`：再次发起 `/v1/messages`，读取 `sdk/api/handlers/openai/openai_responses_handlers_stream_error_test.go`
+- 到这一步仍未出现：
+  - `API Error: Failed to parse JSON`
+  - `Unexpected end of JSON input`
+  - `undefined is not an object`
+- 这说明当前主干路径相比之前已经明显稳定，不再是“第三轮复杂工具调用很容易就炸”的状态。
+
+## 2026-04-22 新样本进一步收敛
+
+- 线上样本 `1fac0114-f300-4118-8555-9e6ad812f2ca.jsonl` 的失败轮前，出现了高密度本地 hook 活动：
+  - 全文件共有 `50` 条 `async_hook_response`
+  - 失败轮前直接相邻的是 `Stop` / `PreToolUse:Edit` / `PreToolUse:TaskUpdate` 等异步 hook attachment
+  - 随后才是 `UserPromptSubmit` 成功，再落 `<synthetic>` 的 `API Error: Failed to parse JSON`
+- 同一文件客户端版本是 `2.1.112`，而本地当前稳定回归使用的是 `2.1.114`。
+- 失败前一个正常 assistant（第 `236` 行）仍有完整 `usage.speed=standard`；失败 assistant（第 `251` 行）是 CLI 合成的 `<synthetic>` 消息，`speed`/`iterations` 等为 `null`。这与用户截图里后续继续冒出 `Cannot read properties of undefined (reading 'speed')` 的次生 UI 错误是一致的。
+
+## 当前判断更新
+
+- 现在更接近的结论不是“代理主通路仍然稳定复现 parse JSON”，而是：
+  - 主干代理链路在本地真实 `claude2` 路径下已明显稳定
+  - 线上残留问题更像旧版客户端、额外自定义 hook 栈、异步 hook 回写和长工具轮次叠加后的组合问题
+- 如果要继续逼近线上同类报错，下一步优先级应是：
+  - 在本地显式模拟 `cmux` / caveman / 高频 async hook 负载
+  - 而不是继续只拿“纯 `claude-mem` 主路径”做回归
+
+## 2026-04-22 async hook 显式模拟结果
+
+- 为了更接近线上 `1fac0114` 这类样本，临时在 `~/.claude_local/settings.json` 注入了最小 async hooks：
+  - `UserPromptSubmit`
+  - `PreToolUse(Read|Grep|Bash|Edit|TaskUpdate|TaskCreate)`
+  - `Stop`
+- hook 命令统一采用：
+  - 第一行输出 `{"async":true}`
+  - 短暂 `sleep`
+  - 再输出 `{}` 完成
+- 新本地 session：
+  - `~/.claude_local/projects/-Users-taylor-code-tools-CLIProxyAPI-ori/f036f546-b984-4e5d-b8c2-7730d8628652.jsonl`
+  - debug log: `/tmp/claude2-asynchooks-53841.log`
+- 结果：
+  - 第 1 轮简单 prompt 正常成功，`UserPromptSubmit` 与 `Stop` 都被背景化为 `async_hook_response`
+  - 第 2 轮 review prompt 正常继续，先后出现：
+    - `UserPromptSubmit` async attachment
+    - 两条 `PreToolUse:Bash` async attachment
+    - 多次正常 `/v1/messages` 请求
+    - 正常 `assistant` 文本与 `tool_use/tool_result`
+  - 到当前观测点仍未出现：
+    - `API Error: Failed to parse JSON`
+    - `Unexpected end of JSON input`
+    - `undefined is not an object`
+- 结论：
+  - “存在大量 async_hook_response attachment”本身，不足以在当前 `2.1.114 + 代理修复版` 环境下复现线上报错
+  - 线上残留更像还依赖：
+    - 更复杂的自定义 hook 实现（例如 `cmux` / caveman）
+    - 或旧版客户端 `2.1.112`
+    - 或两者叠加

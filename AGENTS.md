@@ -12,6 +12,8 @@
 
 # Git 工作流
 
+- 新需求默认使用独立 Git worktree 承载，并在该 worktree 内创建 `codex/<任务名>` feature branch；只有很小的只读检查或用户明确要求在当前目录处理时，才直接使用当前工作区。
+- 创建新 worktree 前先检查当前仓库状态与现有 worktree，选择清晰目录名，避免复用已有任务目录；完成后在对应 worktree 内提交、测试、合并或推送。
 - push 到 `main` 前，必须先 `git fetch origin main` 并确认本地是否落后；如落后，先在最新 `origin/main` 基底上 rebase / pull 并完成必要测试，再 push。
 - 当前仓库经常存在未提交和未跟踪的并行工作；push / pull / rebase 前必须保护现场，可用 `git stash push -u` 或临时 worktree。只 stage 本次任务相关文件，不要覆盖、删除、丢弃或顺手提交无关改动。
 - 若 `stash apply` 因远端新增同名文件导致 untracked 文件无法恢复，必须逐个比较 stash 内容与当前文件；确认内容一致后才可删除临时 stash，否则保留 stash 并向用户说明冲突文件。
@@ -85,3 +87,81 @@
 - `releases/` 目录用于记录已满足阶段验收标准的版本结论、验证范围、剩余风险与回滚说明。
 - AI Gateway / 上层 AI 对话轨迹整理默认按 `session_id` 归并完整会话；单次交互落为一个 JSON 文件，格式定义见 `docs/requirements/ai-gateway-session-trajectory-format_CN.md`。
 - Session trajectory 的 PG schema 初始化脚本：`go run ./scripts/migrate_session_trajectory_pg`；默认读取当前仓库 `.env` 导出的共享 PG DSN / schema。
+
+
+<claude-mem-context>
+# Memory Context
+
+# [CLIProxyAPI-ori] recent context, 2026-04-24 10:21am GMT+8
+
+Legend: 🎯session 🔴bugfix 🟣feature 🔄refactor ✅change 🔵discovery ⚖️decision
+Format: ID TIME TYPE TITLE
+Fetch details: get_observations([IDs]) | Search: mem-search skill
+
+Stats: 50 obs (21,089t read) | 1,491,595t work | 99% savings
+
+### Apr 22, 2026
+S41 Local Memory Hit Liveness Probe — "Reply with exactly LOCAL_HIT" (Apr 22 at 5:56 PM)
+S80 User Requested Bug Registry + Daily Cron for Claude Code "Failed to parse JSON" Debugging Workflow (Apr 22 at 6:31 PM)
+S93 Daily TTY Health Check — Claude Code cc1 session responded DAILY_TTY_OK to ping (Apr 22 at 8:42 PM)
+S101 Daily TTY Regression Probe: cc1 Session Responded DAILY_TTY_OK (Apr 22 at 9:05 PM)
+S143 Daily TTY Regression Liveness Probe — cc1 Session Responded DAILY_TTY_OK (Apr 22 at 9:11 PM)
+227 9:34p 🔵 Smoke Test Still Hangs: "bypass permissions on" Pattern Broken by ANSI Escape Codes Between Words
+228 9:36p ⚖️ TTY Regression Scripts Excluded from Stable Baseline; Docs Retained
+247 9:47p 🔵 Exa Code Context Tool Unavailable: Credits Limit Exceeded
+249 9:48p 🔵 cc1 Marketplace Cache Miss Root Cause: Stale /Users/zhangbo Path in Plugin Config
+250 9:50p 🔴 cc1_tty_regression.expect: Startup Detection Rewritten to ANSI-Safe + Debug-Log Verified
+251 " 🔴 run_cc1_daily_regression.sh: awk Filter Direction Fixed + Hook Stop Threshold Raised to 3
+S158 Inspect working tree changes and run 3 specific Go translator tests in CLIProxyAPI-ori (Apr 22 at 10:05 PM)
+255 10:11p 🔵 CLIProxyAPI-ori Working Tree State: Doc Updates + Untracked Regression Scripts
+S159 Daily TTY Regression Liveness Probe — cc1 Session Responded DAILY_TTY_OK (Apr 22 at 10:12 PM)
+256 10:17p 🔵 Daily TTY Regression Liveness Probe — cc1 Session Responded DAILY_TTY_OK
+S161 CLIProxyAPI Codex/Claude Translator: All 3 Regression Tests Pass (Apr 22 at 10:18 PM)
+258 10:19p 🔵 CLIProxyAPI Codex/Claude Translator: All 3 Regression Tests Pass
+S196 Daily TTY health check + initiate Claude translator test run in CLIProxyAPI-ori (Apr 22 at 10:19 PM)
+263 11:42p 🔵 API Key `created_at` Storage Architecture in CLIProxyAPI-ori
+264 11:43p ✅ API Key `created_at` Updated to 2026-03-24 in PostgreSQL
+### Apr 23, 2026
+368 10:33a 🔵 cc1 Daily Regression Script: Structure, Prompts, and PASS/FAIL Criteria
+369 " 🔵 cc1-tty-blackbox-testing Skill: Critical Pitfalls for TTY Evidence Interpretation
+370 " 🔵 CLIProxyAPI-ori Repo: Untracked Regression Infrastructure Files Not Yet Committed
+372 10:34a ✅ cc1 Daily Regression Run 2026-04-23T103302 Started Successfully
+374 10:35a 🔵 cc1 Regression Run 2026-04-23T103302: Prompt 1 Passed, Prompt 2 In Progress
+376 10:36a 🔵 Expect Driver (Session 67459) Exited While cc1 Process Still Running — Possible Premature TTY Handoff
+377 10:38a 🔵 cc1 Regression 2026-04-23T103302: Prompt 2 Complete, Prompt 3 Now Streaming — No Errors Detected
+S199 Daily TTY check + CLIProxyAPI-ori Claude translator regression test run (Apr 23 at 10:39 AM)
+378 10:39a ✅ cc1 Daily Regression 2026-04-23T103302: PASS — All 5 Target Error Classes Absent, Automation Memory Written
+381 4:54p 🔵 JSON Parse Error Multi-Root-Cause Analysis: Production Users Still Reporting After Partial Fixes
+382 4:56p 🔵 Production User Session 582c04dc: 4 Synthetic Parse Errors Pinpointed to Large Parallel Context Moments
+383 " 🔵 Production PostgreSQL: session_trajectory Tables Confirmed Live in cliproxy_business DB
+386 5:03p ✅ cc1 (claude2) Settings: claude-mem and Hooks Removed from ~/.claude_local/settings.json
+387 5:06p ✅ cc1 (claude2) ~/.claude_local/settings.json: claude-mem Removed, No Hooks Were Present
+388 5:11p 🟣 CLIProxyAPI Session Recording: Global and Per-Key Disable Toggles
+390 5:12p 🔵 CLIProxyAPI Session Trajectory Toggle Architecture: Global and Per-Key Extension Points
+394 5:16p ⚖️ CLIProxyAPI Session Recording: Two-Level Disable Toggle Architecture
+395 " 🟣 CLIProxyAPI Per-API-Key Session Trajectory Disable: Backend + Frontend Types
+448 5:29p ⚖️ CLIProxyAPI: Production Regression Test Initiated for Per-API-Key Session Trajectory Disable
+452 5:30p 🔵 CLIProxyAPI: JSON Parse Errors Recurring in Production Despite Prior Fix
+453 5:31p 🔴 CLIProxyAPI: Fix "avoid rewriting committed claude stream status" Landed on origin/main
+454 " 🟣 CLIProxyAPI Management Center: Session Trajectory Toggle UI Added to Policy Editor
+455 " 🟣 CLIProxyAPI: SessionTrajectoryDisabled Added to Paginated List Lite View (api_key_records_list.go)
+456 " ✅ CLIProxyAPI config.example.yaml: session-trajectory-disabled Documented
+457 " 🟣 CLIProxyAPI Production Regression Passed: Per-API-Key Session Trajectory Disable Feature Production-Ready
+458 5:33p 🟣 CLIProxyAPI: End-to-End Finalize() Test Added for Per-API-Key Session Trajectory Disable
+459 " 🔴 CLIProxyAPI: Mid-Stream Status Override Causing JSON Parse Errors — Root Cause and Fix Confirmed
+460 " 🔵 CLIProxyAPI: OpenAI/Gemini Handlers Still Lack c.Writer.Written() Guard in WriteTerminalError
+461 5:34p 🔵 CLIProxyAPI: Full Test Suite Passes on Commit d432bbef — Fix Verified Green
+463 5:36p 🔵 CLIProxyAPI: SessionTrajectoryDisabled Persists via policy_json JSONB Column — No Schema Migration Required
+466 5:40p 🟣 CLIProxyAPI: New Skill `cliproxyapi-production-regression` Created as Production Release Decision Framework
+473 5:47p ✅ CLIProxyAPI: SESSION_TRAJECTORY_PG_DSN Configured in Local .env
+476 5:49p 🔵 CLIProxyAPI Local Dev: No Native Postgres — Docker via OrbStack Required
+477 " 🟣 CLIProxyAPI Local Dev: Docker Container cliproxy-postgres-local Created with postgres:16
+479 5:51p 🔵 CLIProxyAPI Local Dev: Port 5432 Already Occupied by docker-db-1 (postgres:17.6)
+480 " 🟣 CLIProxyAPI: Local cliproxy_session_live Database Created with Full Schema
+481 " ✅ CLIProxyAPI Triage Skill: DSN Fallback Chain and Schema-Variable psql Queries
+517 8:38p 🔵 CLIProxyAPI Billing Time Zone: Daily Limits Use UTC+8, Storage Timestamps Use UTC
+518 8:39p 🔵 CLIProxyAPI Billing Time Zone Full Audit: All Quota Enforcement Uses UTC+8 Day Boundaries
+532 8:46p 🔵 CLIProxyAPI: JSON Parse Errors Still Occurring in Production Despite Prior Fix
+
+Access 1492k tokens of past work via get_observations([IDs]) or mem-search skill.
+</claude-mem-context>
