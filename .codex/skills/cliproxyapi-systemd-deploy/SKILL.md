@@ -49,6 +49,22 @@ description: Use when the user asks to pull the latest CLIProxyAPI code, rebuild
 
 ## Standard Workflow
 
+优先使用仓库脚本执行标准部署：
+
+```bash
+bash scripts/deploy_systemd.sh
+```
+
+脚本会执行：
+
+- 检查工作区必须干净
+- `git fetch origin main` 并只接受 fast-forward
+- 重新编译 `bin/cliproxyapi`
+- 重启 `cliproxyapi.service`
+- 检查 systemd 状态、本地 HTTP 探测和最近 journal
+
+若需要手工拆分步骤，按下面流程执行。
+
 1. 先看本地 git 现场。
 
 ```bash
