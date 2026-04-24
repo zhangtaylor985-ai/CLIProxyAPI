@@ -157,3 +157,76 @@ func TestCodexExecuteStream_ReturnsErrorWhenStreamEndsBeforeCompleted(t *testing
 		t.Fatalf("terminal error = %v, want missing response.completed", last.Err)
 	}
 }
+
+func TestCodexExecuteStream_AcceptsResponseDoneAsCompleted(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/responses" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_done\",\"model\":\"gpt-5.5\",\"status\":\"in_progress\"}}\n\n"))
+		_, _ = w.Write([]byte("data: {\"type\":\"response.content_part.added\"}\n\n"))
+		_, _ = w.Write([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}\n\n"))
+		_, _ = w.Write([]byte("data: {\"type\":\"response.content_part.done\"}\n\n"))
+		_, _ = w.Write([]byte("data: {\"type\":\"response.done\",\"response\":{\"id\":\"resp_done\",\"model\":\"gpt-5.5\",\"status\":\"completed\",\"usage\":{\"input_tokens\":2,\"output_tokens\":3,\"total_tokens\":5}}}\n\n"))
+	}))
+	defer srv.Close()
+
+	cfg := &config.Config{
+		CodexKey: []config.CodexKey{
+			{
+				APIKey:  "test-key",
+				BaseURL: srv.URL,
+			},
+		},
+	}
+	exec := NewCodexExecutor(cfg)
+	auth := &cliproxyauth.Auth{
+		Attributes: map[string]string{
+			"api_key":  "test-key",
+			"base_url": srv.URL,
+		},
+	}
+	req := cliproxyexecutor.Request{
+		Model:   "gpt-5.5",
+		Payload: []byte(`{"stream":true,"model":"gpt-5.5","messages":[{"role":"user","content":"hi"}]}`),
+	}
+	opts := cliproxyexecutor.Options{SourceFormat: sdktranslator.FromString("claude")}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	result, err := exec.ExecuteStream(ctx, auth, req, opts)
+	if err != nil {
+		t.Fatalf("ExecuteStream error: %v", err)
+	}
+
+	var out strings.Builder
+	for chunk := range result.Chunks {
+		if chunk.Err != nil {
+			t.Fatalf("unexpected terminal error: %v", chunk.Err)
+		}
+		out.Write(chunk.Payload)
+	}
+	got := out.String()
+	for _, want := range []string{
+		"\"type\":\"response.created\"",
+		"\"type\":\"response.output_text.delta\"",
+		"\"delta\":\"ok\"",
+		"\"type\":\"response.completed\"",
+		"\"input_tokens\":2",
+		"\"output_tokens\":3",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("translated stream missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "\"type\":\"response.done\"") {
+		t.Fatalf("response.done was not normalized:\n%s", got)
+	}
+}

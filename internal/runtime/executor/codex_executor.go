@@ -168,23 +168,27 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 	appendAPIResponseChunk(ctx, e.cfg, data)
 
 	lines := bytes.Split(data, []byte("\n"))
+	normalizedLines := make([][]byte, 0, len(lines))
 	completed := false
 	for _, line := range lines {
-		if !bytes.HasPrefix(line, dataTag) {
+		line = normalizeCodexSSECompletionLine(line)
+		normalizedLines = append(normalizedLines, line)
+		data, ok := codexSSEData(line)
+		if !ok {
 			continue
 		}
 
-		line = bytes.TrimSpace(line[5:])
-		if gjson.GetBytes(line, "type").String() != "response.completed" {
+		if !isCodexCompletionEvent(data) {
 			continue
 		}
 		completed = true
 
-		if detail, ok := parseCodexUsage(line); ok {
+		if detail, ok := parseCodexUsage(data); ok {
 			reporter.publish(ctx, detail)
 		}
 	}
 	if completed {
+		data = bytes.Join(normalizedLines, []byte("\n"))
 		var param any
 		out := sdktranslator.TranslateNonStream(ctx, to, from, req.Model, originalPayload, body, data, &param)
 		resp = cliproxyexecutor.Response{Payload: out, Headers: httpResp.Header.Clone()}
@@ -380,16 +384,13 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 		var param any
 		sawCompleted := false
 		for scanner.Scan() {
-			line := scanner.Bytes()
+			line := normalizeCodexSSECompletionLine(scanner.Bytes())
 			appendAPIResponseChunk(ctx, e.cfg, line)
 
-			if bytes.HasPrefix(line, dataTag) {
-				data := bytes.TrimSpace(line[5:])
-				if gjson.GetBytes(data, "type").String() == "response.completed" {
-					sawCompleted = true
-					if detail, ok := parseCodexUsage(data); ok {
-						reporter.publish(ctx, detail)
-					}
+			if data, ok := codexSSEData(line); ok && isCodexCompletionEvent(data) {
+				sawCompleted = true
+				if detail, ok := parseCodexUsage(data); ok {
+					reporter.publish(ctx, detail)
 				}
 			}
 
@@ -415,6 +416,35 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 		}
 	}()
 	return &cliproxyexecutor.StreamResult{Headers: httpResp.Header.Clone(), Chunks: out}, nil
+}
+
+func codexSSEData(line []byte) ([]byte, bool) {
+	trimmed := bytes.TrimSpace(line)
+	if !bytes.HasPrefix(trimmed, dataTag) {
+		return nil, false
+	}
+	return bytes.TrimSpace(trimmed[len(dataTag):]), true
+}
+
+func isCodexCompletionEvent(payload []byte) bool {
+	eventType := strings.TrimSpace(gjson.GetBytes(payload, "type").String())
+	return eventType == "response.completed" || eventType == "response.done"
+}
+
+func normalizeCodexSSECompletionLine(line []byte) []byte {
+	data, ok := codexSSEData(line)
+	if !ok {
+		return bytes.Clone(line)
+	}
+	normalized := normalizeCodexCompletionPayload(data)
+	if bytes.Equal(normalized, data) {
+		return bytes.Clone(line)
+	}
+	out := make([]byte, 0, len(dataTag)+1+len(normalized))
+	out = append(out, dataTag...)
+	out = append(out, ' ')
+	out = append(out, normalized...)
+	return out
 }
 
 func (e *CodexExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {

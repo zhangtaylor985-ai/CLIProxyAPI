@@ -989,6 +989,10 @@ func parseCodexWebsocketErrorHeaders(payload []byte) http.Header {
 }
 
 func normalizeCodexWebsocketCompletion(payload []byte) []byte {
+	return normalizeCodexCompletionPayload(payload)
+}
+
+func normalizeCodexCompletionPayload(payload []byte) []byte {
 	if strings.TrimSpace(gjson.GetBytes(payload, "type").String()) == "response.done" {
 		updated, err := sjson.SetBytes(payload, "type", "response.completed")
 		if err == nil && len(updated) > 0 {

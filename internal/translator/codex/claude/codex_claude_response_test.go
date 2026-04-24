@@ -308,6 +308,27 @@ func TestConvertCodexResponseToClaude_ResponseCompletedClosesPendingToolBlock(t 
 	}
 }
 
+func TestConvertCodexResponseToClaude_ResponseDoneActsAsCompleted(t *testing.T) {
+	done := []byte(`data: {"type":"response.done","response":{"id":"resp_123","model":"gpt-5.5","usage":{"input_tokens":12,"output_tokens":4}}}`)
+
+	var param any
+	out := ConvertCodexResponseToClaude(claudeCLICtx(), "gpt-5.5", nil, nil, done, &param)
+	if len(out) != 1 {
+		t.Fatalf("expected 1 done output chunk, got %d", len(out))
+	}
+	chunk := string(out[0])
+	for _, want := range []string{
+		"event: message_delta",
+		`"input_tokens":12`,
+		`"output_tokens":4`,
+		"event: message_stop",
+	} {
+		if !strings.Contains(chunk, want) {
+			t.Fatalf("expected response.done to behave like completed and include %q, got %q", want, chunk)
+		}
+	}
+}
+
 func TestConvertCodexResponseToClaude_OutputItemDoneMessageFallsBackToTextEvents(t *testing.T) {
 	var param any
 	chunks := [][]byte{
@@ -402,6 +423,21 @@ func TestConvertCodexResponseToClaudeNonStream_WebSearchCallBecomesTextBlock(t *
 	}
 	if !strings.Contains(text, "\"query\":\"2026 张雪峰 去世 怎么死的\"") {
 		t.Fatalf("expected query text in synthetic tool call, got %q", text)
+	}
+}
+
+func TestConvertCodexResponseToClaudeNonStream_ResponseDoneActsAsCompleted(t *testing.T) {
+	raw := []byte(`{"type":"response.done","response":{"id":"resp_1","model":"gpt-5.5","usage":{"input_tokens":10,"output_tokens":20},"output":[{"type":"message","content":[{"type":"output_text","text":"done"}]}]}}`)
+
+	out := ConvertCodexResponseToClaudeNonStream(claudeCLICtx(), "gpt-5.5", nil, nil, raw, nil)
+	if got := gjson.GetBytes(out, "usage.input_tokens").Int(); got != 10 {
+		t.Fatalf("usage.input_tokens = %d, want 10; out=%s", got, string(out))
+	}
+	if got := gjson.GetBytes(out, "usage.output_tokens").Int(); got != 20 {
+		t.Fatalf("usage.output_tokens = %d, want 20; out=%s", got, string(out))
+	}
+	if got := gjson.GetBytes(out, "content.0.text").String(); got != "done" {
+		t.Fatalf("content.0.text = %q, want done; out=%s", got, string(out))
 	}
 }
 

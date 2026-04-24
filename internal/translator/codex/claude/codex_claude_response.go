@@ -74,6 +74,9 @@ func ConvertCodexResponseToClaude(ctx context.Context, _ string, originalRequest
 	rootResult := gjson.ParseBytes(rawJSON)
 	typeResult := rootResult.Get("type")
 	typeStr := typeResult.String()
+	if typeStr == "response.done" {
+		typeStr = "response.completed"
+	}
 	clientKind := gptinclaude.DetectClientKind(ctx)
 	var template []byte
 	if typeStr == "response.created" {
@@ -344,7 +347,8 @@ func ConvertCodexResponseToClaudeNonStream(ctx context.Context, _ string, origin
 	clientKind := gptinclaude.DetectClientKind(ctx)
 
 	rootResult := gjson.ParseBytes(rawJSON)
-	if rootResult.Get("type").String() != "response.completed" {
+	typeStr := rootResult.Get("type").String()
+	if typeStr != "response.completed" && typeStr != "response.done" {
 		return []byte{}
 	}
 

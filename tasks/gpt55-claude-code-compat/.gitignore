@@ -1,0 +1,6 @@
+artifacts/
+*.debug.log
+*.stdout.log
+*.stderr.log
+*.transcript
+*.raw.log
