@@ -773,6 +773,12 @@ func writeResponsesWebsocketError(conn *websocket.Conn, errMsg *interfaces.Error
 		}
 	}
 
+	if sanitized, ok := handlers.SanitizeClientErrorText(status, errText); ok {
+		errText = sanitized
+		status = http.StatusServiceUnavailable
+	} else {
+		status = handlers.ClientErrorStatusForResponse(status, errText)
+	}
 	body := handlers.BuildErrorResponseBody(status, errText)
 	payload := []byte(`{}`)
 	var errSet error

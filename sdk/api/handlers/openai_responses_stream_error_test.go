@@ -57,7 +57,30 @@ func TestBuildOpenAIResponsesStreamErrorChunkSanitizesUnknownProviderLeak(t *tes
 	if err := json.Unmarshal(chunk, &payload); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if payload["message"] != "upstream model temporarily unavailable, please retry later" {
+	if payload["message"] != GenericSensitiveClientErrorMessage {
 		t.Fatalf("message = %v", payload["message"])
 	}
+	if payload["code"] != "internal_server_error" {
+		t.Fatalf("code = %v", payload["code"])
+	}
+	assertNoClientInternalLeak(t, chunk)
+}
+
+func TestBuildOpenAIResponsesStreamErrorChunkSanitizesCodexAuthLeak(t *testing.T) {
+	chunk := BuildOpenAIResponsesStreamErrorChunk(
+		http.StatusForbidden,
+		`{"error":{"message":"Codex Provider API rejected auth file for gpt-5.5","type":"authentication_error","code":"codex_auth_file_failed"}}`,
+		0,
+	)
+	var payload map[string]any
+	if err := json.Unmarshal(chunk, &payload); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if payload["message"] != GenericSensitiveClientErrorMessage {
+		t.Fatalf("message = %v", payload["message"])
+	}
+	if payload["code"] != "internal_server_error" {
+		t.Fatalf("code = %v", payload["code"])
+	}
+	assertNoClientInternalLeak(t, chunk)
 }

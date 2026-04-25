@@ -344,7 +344,7 @@ func (h *ClaudeCodeAPIHandler) sanitizeClientError(c *gin.Context, msg *interfac
 
 	sanitized := *msg
 	sanitized.StatusCode = http.StatusServiceUnavailable
-	sanitized.Error = fmt.Errorf("upstream model temporarily unavailable, please retry later")
+	sanitized.Error = errors.New(handlers.GenericSensitiveClientErrorMessage)
 	return &sanitized
 }
 
@@ -377,6 +377,9 @@ func shouldSuppressSensitiveUpstreamError(msg *interfaces.ErrorMessage) bool {
 
 	raw := strings.TrimSpace(msg.Error.Error())
 	status := msg.StatusCode
+	if status <= 0 {
+		status = http.StatusInternalServerError
+	}
 	embedded := extractEmbeddedJSON(raw)
 	envelopeMsg, envelopeType, envelopeCode := extractErrorEnvelopeFields(embedded)
 	combined := strings.ToLower(strings.TrimSpace(strings.Join([]string{
@@ -385,6 +388,9 @@ func shouldSuppressSensitiveUpstreamError(msg *interfaces.ErrorMessage) bool {
 		envelopeType,
 		envelopeCode,
 	}, " ")))
+	if _, ok := handlers.SanitizeClientErrorText(status, combined); ok {
+		return true
+	}
 
 	switch {
 	case status >= http.StatusInternalServerError:

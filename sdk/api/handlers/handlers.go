@@ -53,6 +53,57 @@ type ErrorDetail struct {
 	Code string `json:"code,omitempty"`
 }
 
+// GenericSensitiveClientErrorMessage is the only client-visible text used when
+// an upstream/internal provider failure might expose routing or credential details.
+const GenericSensitiveClientErrorMessage = "service temporarily unavailable, please retry later"
+
+var clientSensitiveErrorMarkers = []string{
+	"unknown provider",
+	"codex",
+	"chatgpt",
+	"gpt-",
+	"gpt_",
+	" gpt",
+	"\"gpt",
+	"openai",
+	"open1.codes",
+	"api.anthropic.com",
+	"provider",
+	"auth file",
+	"auth-file",
+	"auth_file",
+	"authfile",
+	"auth dir",
+	"auth-dir",
+	"auth_dir",
+	"auth_index",
+	"auth index",
+	"credential",
+	"oauth",
+	"id_token",
+	"access token",
+	"refresh token",
+	"invalid_api_key",
+	"provider_session",
+	"provider session",
+	"sk-",
+	"@gmail.com",
+	"@outlook.com",
+	"@hotmail.com",
+	"@icloud.com",
+}
+
+var clientUpstreamErrorMarkers = []string{
+	"upstream",
+	"gateway",
+	"timeout",
+	"service unavailable",
+	"temporarily unavailable",
+	"cf-ray",
+	"request id",
+	"request_id",
+}
+
 type claudeErrorDetail struct {
 	Type    string `json:"type"`
 	Message string `json:"message"`
@@ -126,7 +177,8 @@ func WithExecutionSessionID(ctx context.Context, sessionID string) context.Conte
 }
 
 // BuildErrorResponseBody builds an OpenAI-compatible JSON error response body.
-// If errText is already valid JSON, it is returned as-is to preserve upstream error payloads.
+// If errText is already valid JSON, it is returned as-is only after the same
+// client-facing leak checks used by generated error payloads.
 func BuildErrorResponseBody(status int, errText string) []byte {
 	if status <= 0 {
 		status = http.StatusInternalServerError
@@ -134,8 +186,10 @@ func BuildErrorResponseBody(status int, errText string) []byte {
 	if strings.TrimSpace(errText) == "" {
 		errText = http.StatusText(status)
 	}
+	payloadStatus := status
 	if sanitized, ok := sanitizeClientErrorText(status, errText); ok {
 		errText = sanitized
+		payloadStatus = http.StatusServiceUnavailable
 	}
 
 	trimmed := strings.TrimSpace(errText)
@@ -145,7 +199,7 @@ func BuildErrorResponseBody(status int, errText string) []byte {
 
 	errType := "invalid_request_error"
 	var code string
-	switch status {
+	switch payloadStatus {
 	case http.StatusUnauthorized:
 		errType = "authentication_error"
 		code = "invalid_api_key"
@@ -159,7 +213,7 @@ func BuildErrorResponseBody(status int, errText string) []byte {
 		errType = "invalid_request_error"
 		code = "model_not_found"
 	default:
-		if status >= http.StatusInternalServerError {
+		if payloadStatus >= http.StatusInternalServerError {
 			errType = "server_error"
 			code = "internal_server_error"
 		}
@@ -214,12 +268,30 @@ func BuildClaudeErrorResponseBodyFromMessage(msg *interfaces.ErrorMessage) []byt
 	return BuildClaudeErrorResponseBody(errText)
 }
 
+// ClientErrorStatusForResponse hides internal upstream auth/routing failures as
+// temporary service failures instead of exposing provider-specific status codes.
+func ClientErrorStatusForResponse(status int, errText string) int {
+	if status <= 0 {
+		status = http.StatusInternalServerError
+	}
+	if _, ok := sanitizeClientErrorText(status, errText); ok {
+		return http.StatusServiceUnavailable
+	}
+	return status
+}
+
+// SanitizeClientErrorText returns a generic client-facing message when raw
+// error text contains internal routing, provider, credential, or account details.
+func SanitizeClientErrorText(status int, errText string) (string, bool) {
+	return sanitizeClientErrorText(status, errText)
+}
+
 func sanitizeClientErrorText(status int, errText string) (string, bool) {
 	raw := strings.TrimSpace(errText)
 	if raw == "" {
 		return "", false
 	}
-	if status < http.StatusBadGateway {
+	if status < http.StatusBadRequest {
 		return "", false
 	}
 
@@ -227,10 +299,27 @@ func sanitizeClientErrorText(status int, errText string) (string, bool) {
 		raw,
 		extractErrorMessage(raw),
 	}, " ")))
-	if strings.Contains(combined, "unknown provider for model") {
-		return "upstream model temporarily unavailable, please retry later", true
+	if containsAnyString(combined, clientSensitiveErrorMarkers...) {
+		return GenericSensitiveClientErrorMessage, true
+	}
+	if status >= http.StatusInternalServerError && containsAnyString(combined, clientUpstreamErrorMarkers...) {
+		return GenericSensitiveClientErrorMessage, true
 	}
 	return "", false
+}
+
+func containsAnyString(haystack string, needles ...string) bool {
+	haystack = strings.ToLower(strings.TrimSpace(haystack))
+	if haystack == "" {
+		return false
+	}
+	for _, needle := range needles {
+		needle = strings.ToLower(strings.TrimSpace(needle))
+		if needle != "" && strings.Contains(haystack, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 // StreamingKeepAliveInterval returns the SSE keep-alive interval for this server.
@@ -2375,7 +2464,7 @@ func replaceHeader(dst http.Header, src http.Header) {
 // WriteErrorResponse writes an error message to the response writer using the HTTP status embedded in the message.
 func (h *BaseAPIHandler) WriteErrorResponse(c *gin.Context, msg *interfaces.ErrorMessage) {
 	status, errText := errorResponseStatusAndText(msg)
-	h.writeErrorResponseBody(c, msg, status, errText, BuildErrorResponseBody(status, errText))
+	h.writeErrorResponseBody(c, msg, ClientErrorStatusForResponse(status, errText), errText, BuildErrorResponseBody(status, errText))
 }
 
 // WriteErrorResponseBody writes an error response using the supplied JSON body while preserving
@@ -2385,7 +2474,7 @@ func (h *BaseAPIHandler) WriteErrorResponseBody(c *gin.Context, msg *interfaces.
 	if len(bytes.TrimSpace(body)) == 0 {
 		body = BuildErrorResponseBody(status, errText)
 	}
-	h.writeErrorResponseBody(c, msg, status, errText, body)
+	h.writeErrorResponseBody(c, msg, ClientErrorStatusForResponse(status, errText), errText, body)
 }
 
 func errorResponseStatusAndText(msg *interfaces.ErrorMessage) (int, string) {

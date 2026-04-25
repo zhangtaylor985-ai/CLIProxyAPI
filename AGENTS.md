@@ -12,10 +12,10 @@
 
 # 用户侧黑盒守则
 
-- 面向普通用户、客户自助查询页、公开查询接口和客户端错误响应时，必须对内部 GPT / Codex 路由、目标模型和供应账号身份黑盒；不得返回或展示 `gpt-*`、`chatgpt-*`、内部 target family、model routing、fallback target、provider model usage、credential source、`auth_index`、供应账号邮箱等信息。
+- 面向普通用户、客户自助查询页、公开查询接口和客户端错误响应时，必须对内部 GPT / Codex 路由、目标模型、供应账号身份和上游凭据细节黑盒；不得返回或展示 `gpt-*`、`chatgpt-*`、内部 target family、model routing、fallback target、provider model usage、credential source、`Codex Provider API`、`auth file`、`auth_index`、供应账号邮箱等信息。
 - `usage` / 客户自助用量查询 / API Key Insights 与 Claude Code API（含 `/v1/messages`、流式事件、count_tokens、客户端错误）全部按用户侧处理；只有 `Admin` / `/v0/management/*` 管理端才允许展示内部模型、路由、账号与运维明细。
 - 用户侧接口只返回用户需要理解的聚合账单、额度、Token、状态与趋势；模型级拆分、路由策略、真实上游模型名只允许出现在已认证的管理端运维界面中。
-- 新增或修改用户侧 API / UI 前，先检查响应 JSON、错误文本、前端表格和浏览器 Network 面板，确认没有泄露内部 GPT 模型或路由细节。
+- 新增或修改用户侧 API / UI 前，先检查响应 JSON、错误文本、前端表格和浏览器 Network 面板，确认没有泄露内部 GPT 模型、Codex / provider / auth file 文案或路由细节。
 
 # Git 工作流
 

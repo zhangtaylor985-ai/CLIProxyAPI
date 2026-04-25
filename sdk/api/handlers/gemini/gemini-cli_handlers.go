@@ -103,12 +103,9 @@ func (h *GeminiCLIAPIHandler) CLIHandler(c *gin.Context) {
 			}()
 			bodyBytes, _ := io.ReadAll(resp.Body)
 
-			c.JSON(http.StatusBadRequest, handlers.ErrorResponse{
-				Error: handlers.ErrorDetail{
-					Message: string(bodyBytes),
-					Type:    "invalid_request_error",
-				},
-			})
+			status := handlers.ClientErrorStatusForResponse(resp.StatusCode, string(bodyBytes))
+			body := handlers.BuildErrorResponseBody(status, string(bodyBytes))
+			c.Data(status, "application/json", body)
 			return
 		}
 
@@ -221,7 +218,7 @@ func (h *GeminiCLIAPIHandler) forwardCLIStream(c *gin.Context, flusher http.Flus
 			if errMsg.Error != nil && errMsg.Error.Error() != "" {
 				errText = errMsg.Error.Error()
 			}
-			body := handlers.BuildErrorResponseBody(status, errText)
+			body := handlers.BuildErrorResponseBody(handlers.ClientErrorStatusForResponse(status, errText), errText)
 			if alt == "" {
 				_, _ = fmt.Fprintf(c.Writer, "event: error\ndata: %s\n\n", string(body))
 			} else {

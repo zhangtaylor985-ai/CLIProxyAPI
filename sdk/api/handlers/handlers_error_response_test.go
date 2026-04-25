@@ -75,9 +75,10 @@ func TestBuildErrorResponseBody_SanitizesUnknownProviderLeak(t *testing.T) {
 	if err := json.Unmarshal(body, &payload); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if payload.Error.Message != "upstream model temporarily unavailable, please retry later" {
+	if payload.Error.Message != GenericSensitiveClientErrorMessage {
 		t.Fatalf("message = %q", payload.Error.Message)
 	}
+	assertNoClientInternalLeak(t, body)
 }
 
 func TestBuildErrorResponseBody_SanitizesUnknownProviderLeakFromJSON(t *testing.T) {
@@ -86,9 +87,74 @@ func TestBuildErrorResponseBody_SanitizesUnknownProviderLeakFromJSON(t *testing.
 	if err := json.Unmarshal(body, &payload); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if payload.Error.Message != "upstream model temporarily unavailable, please retry later" {
+	if payload.Error.Message != GenericSensitiveClientErrorMessage {
 		t.Fatalf("message = %q", payload.Error.Message)
 	}
+	assertNoClientInternalLeak(t, body)
+}
+
+func TestBuildErrorResponseBody_SanitizesCodexAuthLeakFromJSON(t *testing.T) {
+	body := BuildErrorResponseBody(
+		http.StatusForbidden,
+		`{"error":{"message":"Codex Provider API rejected auth file codex-account.json for gpt-5.5","type":"authentication_error","code":"codex_auth_file_failed"}}`,
+	)
+	var payload ErrorResponse
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if payload.Error.Message != GenericSensitiveClientErrorMessage {
+		t.Fatalf("message = %q", payload.Error.Message)
+	}
+	if payload.Error.Type != "server_error" || payload.Error.Code != "internal_server_error" {
+		t.Fatalf("error shape = %#v, want generic server error", payload.Error)
+	}
+	assertNoClientInternalLeak(t, body)
+}
+
+func TestBuildErrorResponseBody_PreservesBenignBudgetError(t *testing.T) {
+	body := BuildErrorResponseBody(http.StatusTooManyRequests, "daily budget exceeded")
+	var payload ErrorResponse
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if payload.Error.Message != "daily budget exceeded" {
+		t.Fatalf("message = %q", payload.Error.Message)
+	}
+}
+
+func TestClientErrorStatusForResponse_SanitizesInternalAuthStatus(t *testing.T) {
+	got := ClientErrorStatusForResponse(
+		http.StatusForbidden,
+		`{"error":{"message":"Codex Provider API rejected auth file for gpt-5.5"}}`,
+	)
+	if got != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", got, http.StatusServiceUnavailable)
+	}
+}
+
+func TestWriteErrorResponse_SanitizesSensitiveStatusAndBody(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+
+	handler := NewBaseAPIHandlers(nil, nil)
+	handler.WriteErrorResponse(c, &interfaces.ErrorMessage{
+		StatusCode: http.StatusForbidden,
+		Error:      errors.New(`{"error":{"message":"Codex Provider API rejected auth file for gpt-5.5","type":"authentication_error","code":"codex_auth_file_failed"}}`),
+	})
+
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusServiceUnavailable)
+	}
+	var payload ErrorResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if payload.Error.Message != GenericSensitiveClientErrorMessage {
+		t.Fatalf("message = %q", payload.Error.Message)
+	}
+	assertNoClientInternalLeak(t, recorder.Body.Bytes())
 }
 
 func TestBuildClaudeErrorResponseBodyFromMessage_SanitizesUnknownProviderLeak(t *testing.T) {
@@ -100,10 +166,34 @@ func TestBuildClaudeErrorResponseBodyFromMessage_SanitizesUnknownProviderLeak(t 
 	if err := json.Unmarshal(body, &payload); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if payload.Error.Message != "upstream model temporarily unavailable, please retry later" {
+	if payload.Error.Message != GenericSensitiveClientErrorMessage {
 		t.Fatalf("message = %q", payload.Error.Message)
 	}
-	if strings.Contains(strings.ToLower(string(body)), "gpt") {
-		t.Fatalf("Claude error body leaked internal model: %s", string(body))
+	assertNoClientInternalLeak(t, body)
+}
+
+func assertNoClientInternalLeak(t *testing.T, body []byte) {
+	t.Helper()
+	lower := strings.ToLower(string(body))
+	for _, forbidden := range []string{
+		"codex",
+		"gpt",
+		"chatgpt",
+		"openai",
+		"provider",
+		"auth",
+		"credential",
+		"oauth",
+		"id_token",
+		"access token",
+		"refresh token",
+		"api_key",
+		"sk-",
+		"@gmail.com",
+		"@outlook.com",
+	} {
+		if strings.Contains(lower, forbidden) {
+			t.Fatalf("client error body leaked %q: %s", forbidden, string(body))
+		}
 	}
 }

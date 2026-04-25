@@ -81,12 +81,38 @@ func TestWriteClientError_SanitizesUnknownProviderModelLeak(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if payload.Error.Message != "upstream model temporarily unavailable, please retry later" {
+	if payload.Error.Message != handlers.GenericSensitiveClientErrorMessage {
 		t.Fatalf("error.message = %q", payload.Error.Message)
 	}
-	if strings.Contains(strings.ToLower(recorder.Body.String()), "gpt") {
-		t.Fatalf("Claude client error leaked internal model: %q", recorder.Body.String())
+	assertNoClaudeClientInternalLeak(t, recorder.Body.String())
+}
+
+func TestWriteClientError_SanitizesCodexAuthLeak(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	base := handlers.NewBaseAPIHandlers(&sdkconfig.SDKConfig{}, nil)
+	h := NewClaudeCodeAPIHandler(base)
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	h.writeClientError(c, &interfaces.ErrorMessage{
+		StatusCode: http.StatusForbidden,
+		Error:      errors.New(`{"error":{"message":"Codex Provider API rejected auth file for gpt-5.5","type":"authentication_error","code":"codex_auth_file_failed"}}`),
+	})
+
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusServiceUnavailable)
 	}
+
+	var payload claudeErrorPayload
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if payload.Error.Message != handlers.GenericSensitiveClientErrorMessage {
+		t.Fatalf("error.message = %q", payload.Error.Message)
+	}
+	assertNoClaudeClientInternalLeak(t, recorder.Body.String())
 }
 
 func TestForwardClaudeStreamTerminalError_UsesClaudeErrorEvent(t *testing.T) {
@@ -221,10 +247,36 @@ func TestForwardClaudeStreamTerminalError_RecordsSanitizedError(t *testing.T) {
 	if errors[0].StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("recorded status = %d, want %d", errors[0].StatusCode, http.StatusServiceUnavailable)
 	}
-	if got := errors[0].Error.Error(); got != "upstream model temporarily unavailable, please retry later" {
+	if got := errors[0].Error.Error(); got != handlers.GenericSensitiveClientErrorMessage {
 		t.Fatalf("recorded error = %q", got)
 	}
 	if strings.Contains(fmt.Sprint(recorded), "cf-ray") {
 		t.Fatalf("recorded error was not sanitized: %#v", recorded)
+	}
+}
+
+func assertNoClaudeClientInternalLeak(t *testing.T, body string) {
+	t.Helper()
+	lower := strings.ToLower(body)
+	for _, forbidden := range []string{
+		"codex",
+		"gpt",
+		"chatgpt",
+		"openai",
+		"provider",
+		"auth",
+		"credential",
+		"oauth",
+		"id_token",
+		"access token",
+		"refresh token",
+		"api_key",
+		"sk-",
+		"@gmail.com",
+		"@outlook.com",
+	} {
+		if strings.Contains(lower, forbidden) {
+			t.Fatalf("Claude client error leaked %q: %s", forbidden, body)
+		}
 	}
 }

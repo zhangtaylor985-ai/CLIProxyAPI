@@ -90,8 +90,9 @@ func BuildOpenAIResponsesStreamErrorChunk(status int, errText string, sequenceNu
 			}
 		}
 	}
-	if sanitized, ok := sanitizeClientErrorText(status, message); ok {
+	if sanitized, ok := sanitizeClientErrorText(status, strings.TrimSpace(message+" "+code)); ok {
 		message = sanitized
+		code = openAIResponsesStreamErrorCode(http.StatusServiceUnavailable)
 	}
 
 	if strings.TrimSpace(code) == "" {
