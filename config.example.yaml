@@ -31,6 +31,13 @@ remote-management:
 # Authentication directory (supports ~ for home directory)
 auth-dir: "~/.cli-proxy-api"
 
+# Optional default headers for OAuth-backed Codex requests. Keep Version current
+# when ChatGPT/Codex introduces model gates such as GPT-5.5.
+codex-header-defaults:
+  user-agent: ""
+  version: "0.125.0"
+  beta-features: ""
+
 # API keys for authentication
 api-keys:
   - "your-api-key-1"

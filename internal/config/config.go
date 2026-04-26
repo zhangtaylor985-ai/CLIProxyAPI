@@ -104,7 +104,7 @@ type Config struct {
 	// These are used as fallbacks when the client does not send its own headers.
 	ClaudeHeaderDefaults ClaudeHeaderDefaults `yaml:"claude-header-defaults" json:"claude-header-defaults"`
 
-	// CodexHeaderDefaults configures default websocket headers for Codex requests.
+	// CodexHeaderDefaults configures default headers for Codex requests.
 	CodexHeaderDefaults CodexHeaderDefaults `yaml:"codex-header-defaults" json:"codex-header-defaults"`
 
 	// OpenAICompatibility defines OpenAI API compatibility configurations for external providers.
@@ -181,9 +181,10 @@ type ClaudeHeaderDefaults struct {
 	StabilizeDeviceProfile *bool  `yaml:"stabilize-device-profile,omitempty" json:"stabilize-device-profile,omitempty"`
 }
 
-// CodexHeaderDefaults configures default websocket header values injected into Codex requests.
+// CodexHeaderDefaults configures default header values injected into Codex requests.
 type CodexHeaderDefaults struct {
 	UserAgent    string `yaml:"user-agent" json:"user-agent"`
+	Version      string `yaml:"version" json:"version"`
 	BetaFeatures string `yaml:"beta-features" json:"beta-features"`
 }
 
@@ -768,6 +769,7 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 	cfg.ClaudeHeaderDefaults.Arch = strings.TrimSpace(cfg.ClaudeHeaderDefaults.Arch)
 	cfg.ClaudeHeaderDefaults.Timeout = strings.TrimSpace(cfg.ClaudeHeaderDefaults.Timeout)
 	cfg.CodexHeaderDefaults.UserAgent = strings.TrimSpace(cfg.CodexHeaderDefaults.UserAgent)
+	cfg.CodexHeaderDefaults.Version = strings.TrimSpace(cfg.CodexHeaderDefaults.Version)
 	cfg.CodexHeaderDefaults.BetaFeatures = strings.TrimSpace(cfg.CodexHeaderDefaults.BetaFeatures)
 
 	cfg.Pprof.Addr = strings.TrimSpace(cfg.Pprof.Addr)
