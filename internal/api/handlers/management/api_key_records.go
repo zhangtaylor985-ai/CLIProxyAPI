@@ -360,9 +360,13 @@ func (h *Handler) UpdateAPIKeyRecord(c *gin.Context) {
 		return
 	}
 	afterPolicy := h.cfg.FindAPIKeyPolicy(newKey)
-	if tokenPackageChanged(beforeTokenUSD, beforeTokenStartedAt, afterPolicy) {
-		h.notifyAPIKeyManagementAction(c, "api_key_token_package_updated", newKey, h.cfg.EffectiveAPIKeyPolicy(newKey))
+	action := "api_key_updated"
+	if newKey != currentKey {
+		action = "api_key_rekeyed"
+	} else if tokenPackageChanged(beforeTokenUSD, beforeTokenStartedAt, afterPolicy) {
+		action = "api_key_token_package_updated"
 	}
+	h.notifyAPIKeyManagementAction(c, action, newKey, h.cfg.EffectiveAPIKeyPolicy(newKey))
 }
 
 func (h *Handler) DeleteAPIKeyRecord(c *gin.Context) {
@@ -1280,10 +1284,18 @@ func (h *Handler) notifyAPIKeyManagementAction(c *gin.Context, action, apiKey st
 		return
 	}
 	group, _ := h.resolveNotificationGroup(c.Request.Context(), policyEntry)
+	principal := managementPrincipalFromContext(c)
+	role := string(managementRole(c))
+	authSource := ""
+	if principal != nil {
+		authSource = strings.TrimSpace(principal.AuthSource)
+	}
 	event := alerting.ManagementEvent{
 		Action:            action,
 		Username:          managementUsername(c),
-		APIKey:            strings.TrimSpace(apiKey),
+		Role:              role,
+		AuthSource:        authSource,
+		APIKey:            util.HideAPIKey(strings.TrimSpace(apiKey)),
 		APIKeyName:        "",
 		GroupID:           "",
 		GroupName:         "",

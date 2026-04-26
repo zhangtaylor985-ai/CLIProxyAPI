@@ -50,6 +50,7 @@ type runtimeConfig struct {
 	token               string
 	providerChatID      string
 	errorChatID         string
+	opsChatID           string
 	sendRecovery        bool
 	recoveryMinCooldown time.Duration
 	requestTimeout      time.Duration
@@ -95,6 +96,8 @@ type ProviderEvent struct {
 type ManagementEvent struct {
 	Action            string
 	Username          string
+	Role              string
+	AuthSource        string
 	APIKey            string
 	APIKeyName        string
 	GroupID           string
@@ -158,8 +161,9 @@ func newRuntimeConfig(cfg *internalconfig.Config) runtimeConfig {
 	tg := cfg.Notifications.Telegram
 	out.enabled = tg.Enabled
 	out.token = resolveTelegramBotToken(strings.TrimSpace(tg.BotToken))
-	out.providerChatID = strings.TrimSpace(tg.ProviderChatID)
-	out.errorChatID = strings.TrimSpace(tg.ErrorLogChatID)
+	out.providerChatID = firstNonEmpty(strings.TrimSpace(tg.ProviderChatID), lookupEnvTrimmed("TELEGRAM_PROVIDER_CHAT_ID", "TG_PROVIDER_CHAT_ID"))
+	out.errorChatID = firstNonEmpty(strings.TrimSpace(tg.ErrorLogChatID), lookupEnvTrimmed("TELEGRAM_ERROR_LOG_CHAT_ID", "TG_ERROR_LOG_CHAT_ID"))
+	out.opsChatID = firstNonEmpty(strings.TrimSpace(tg.OpsChatID), lookupEnvTrimmed("TELEGRAM_OPS_CHAT_ID", "TG_OPS_CHAT_ID"))
 	out.sendRecovery = tg.SendRecovery
 	if tg.RecoveryMinCooldownSeconds > 0 {
 		out.recoveryMinCooldown = time.Duration(tg.RecoveryMinCooldownSeconds) * time.Second
@@ -182,6 +186,26 @@ func newRuntimeConfig(cfg *internalconfig.Config) runtimeConfig {
 	client := &http.Client{Timeout: out.requestTimeout}
 	out.httpClient = util.SetProxy(&cfg.SDKConfig, client)
 	return out
+}
+
+func lookupEnvTrimmed(keys ...string) string {
+	for _, key := range keys {
+		if value, ok := os.LookupEnv(key); ok {
+			if trimmed := strings.TrimSpace(value); trimmed != "" {
+				return trimmed
+			}
+		}
+	}
+	return ""
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 func resolveTelegramBotToken(configToken string) string {
@@ -281,6 +305,10 @@ func (n *notifier) notifyErrorEntry(entry *log.Entry) {
 		n.mu.Unlock()
 		return
 	}
+	if isNoisyRequestLogEntry(entry, message) {
+		n.mu.Unlock()
+		return
+	}
 	fingerprint := errorFingerprint(entry, message)
 	suppressed, send := allowNotification(n.errorState, fingerprint, cfg.errorBackoff, time.Now())
 	n.mu.Unlock()
@@ -295,14 +323,14 @@ func (n *notifier) notifyErrorEntry(entry *log.Entry) {
 func (n *notifier) notifyManagement(event ManagementEvent) {
 	n.mu.Lock()
 	cfg := n.cfg
-	if !cfg.enabled || cfg.token == "" || cfg.providerChatID == "" {
+	if !cfg.enabled || cfg.token == "" || cfg.opsChatID == "" {
 		n.mu.Unlock()
 		return
 	}
 	n.mu.Unlock()
 
 	text := formatManagementEvent(event)
-	go n.dispatch(cfg, cfg.providerChatID, text)
+	go n.dispatch(cfg, cfg.opsChatID, text)
 }
 
 func allowNotification(states map[string]*suppressionState, fingerprint string, backoff []time.Duration, now time.Time) (int, bool) {
@@ -391,6 +419,12 @@ func normalizeLogMessage(entry *log.Entry) string {
 			message = strings.TrimSpace(message + " | error=" + errText)
 		}
 	}
+	if errValue, ok := entry.Data["api_error"]; ok && errValue != nil {
+		errText := strings.TrimSpace(fmt.Sprint(errValue))
+		if errText != "" && !strings.Contains(message, errText) {
+			message = strings.TrimSpace(message + " | api_error=" + errText)
+		}
+	}
 	return strings.Join(strings.Fields(message), " ")
 }
 
@@ -408,6 +442,28 @@ func shouldExcludeErrorMessage(message string, patterns []string) bool {
 		}
 	}
 	return false
+}
+
+func isNoisyRequestLogEntry(entry *log.Entry, message string) bool {
+	if entry == nil || entry.Caller == nil {
+		return false
+	}
+	if filepath.Base(entry.Caller.File) != "gin_logger.go" {
+		return false
+	}
+	if _, ok := entry.Data["api_error"]; ok {
+		return false
+	}
+	trimmed := strings.TrimSpace(message)
+	if !strings.Contains(trimmed, "|") {
+		return false
+	}
+	fields := strings.Split(trimmed, "|")
+	if len(fields) < 4 {
+		return false
+	}
+	status := strings.TrimSpace(fields[0])
+	return status == "500" || status == "502" || status == "503" || status == "504"
 }
 
 func formatProviderEvent(event ProviderEvent, suppressed int) string {
@@ -504,6 +560,12 @@ func formatManagementEvent(event ManagementEvent) string {
 	}
 	if username := strings.TrimSpace(event.Username); username != "" {
 		builder.WriteString("Username: " + username + "\n")
+	}
+	if role := strings.TrimSpace(event.Role); role != "" {
+		builder.WriteString("Role: " + role + "\n")
+	}
+	if source := strings.TrimSpace(event.AuthSource); source != "" {
+		builder.WriteString("Auth source: " + source + "\n")
 	}
 	if apiKey := strings.TrimSpace(event.APIKey); apiKey != "" {
 		builder.WriteString("API Key: " + apiKey + "\n")

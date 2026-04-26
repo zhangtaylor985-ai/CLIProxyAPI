@@ -690,9 +690,6 @@ func (s *Service) Run(ctx context.Context) error {
 		interval := 15 * time.Minute
 		s.coreManager.StartAutoRefresh(context.Background(), interval)
 		log.Infof("core auth auto-refresh started (interval=%s)", interval)
-		probeInterval := 2 * time.Minute
-		s.coreManager.StartProviderHealthProbing(context.Background(), probeInterval)
-		log.Infof("core auth provider health probing started (interval=%s)", probeInterval)
 	}
 
 	select {
@@ -730,7 +727,6 @@ func (s *Service) Shutdown(ctx context.Context) error {
 		}
 		if s.coreManager != nil {
 			s.coreManager.StopAutoRefresh()
-			s.coreManager.StopProviderHealthProbing()
 		}
 		if s.watcher != nil {
 			if err := s.watcher.Stop(); err != nil {

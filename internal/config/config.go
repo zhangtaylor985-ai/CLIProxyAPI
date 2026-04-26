@@ -145,6 +145,7 @@ type TelegramNotificationsConfig struct {
 	BotToken                   string                      `yaml:"bot-token,omitempty" json:"-"`
 	ProviderChatID             string                      `yaml:"provider-chat-id,omitempty" json:"provider-chat-id,omitempty"`
 	ErrorLogChatID             string                      `yaml:"error-log-chat-id,omitempty" json:"error-log-chat-id,omitempty"`
+	OpsChatID                  string                      `yaml:"ops-chat-id,omitempty" json:"ops-chat-id,omitempty"`
 	SendRecovery               bool                        `yaml:"send-recovery,omitempty" json:"send-recovery,omitempty"`
 	RecoveryMinCooldownSeconds int                         `yaml:"recovery-min-cooldown-seconds,omitempty" json:"recovery-min-cooldown-seconds,omitempty"`
 	RequestTimeoutSeconds      int                         `yaml:"request-timeout-seconds,omitempty" json:"request-timeout-seconds,omitempty"`
@@ -770,6 +771,7 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 	cfg.Notifications.Telegram.BotToken = strings.TrimSpace(cfg.Notifications.Telegram.BotToken)
 	cfg.Notifications.Telegram.ProviderChatID = strings.TrimSpace(cfg.Notifications.Telegram.ProviderChatID)
 	cfg.Notifications.Telegram.ErrorLogChatID = strings.TrimSpace(cfg.Notifications.Telegram.ErrorLogChatID)
+	cfg.Notifications.Telegram.OpsChatID = strings.TrimSpace(cfg.Notifications.Telegram.OpsChatID)
 	cfg.Notifications.Telegram.ErrorLog.MinLevel = strings.TrimSpace(cfg.Notifications.Telegram.ErrorLog.MinLevel)
 	if len(cfg.Notifications.Telegram.Provider.Backoff) > 0 {
 		clean := cfg.Notifications.Telegram.Provider.Backoff[:0]

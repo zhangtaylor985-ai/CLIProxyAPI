@@ -527,12 +527,6 @@ func (h *Handler) buildAuthHealthSummary(auth *coreauth.Auth) gin.H {
 			return time.Time{}
 		}
 		updatedAt := state.UpdatedAt
-		if state.Health.LastProbeAt.After(updatedAt) {
-			updatedAt = state.Health.LastProbeAt
-		}
-		if state.Health.LastCanaryAt.After(updatedAt) {
-			updatedAt = state.Health.LastCanaryAt
-		}
 		if state.Health.LastSwitchAt.After(updatedAt) {
 			updatedAt = state.Health.LastSwitchAt
 		}
@@ -546,9 +540,6 @@ func (h *Handler) buildAuthHealthSummary(auth *coreauth.Auth) gin.H {
 		rank := 0
 		if state.Unavailable && strings.EqualFold(strings.TrimSpace(state.StatusMessage), "provider degraded") {
 			rank += 100
-		}
-		if !state.Health.LastProbeAt.IsZero() {
-			rank += 10
 		}
 		if !state.Health.LastSwitchAt.IsZero() {
 			rank += 5
@@ -568,7 +559,6 @@ func (h *Handler) buildAuthHealthSummary(auth *coreauth.Auth) gin.H {
 		"status_message":     strings.TrimSpace(state.StatusMessage),
 		"unavailable":        state.Unavailable,
 		"degraded":           state.Unavailable && strings.EqualFold(strings.TrimSpace(state.StatusMessage), "provider degraded"),
-		"last_probe_slow":    state.Health.LastProbeSlow,
 		"last_switch_target": strings.TrimSpace(state.Health.LastSwitchToAuthIndex),
 	}
 	if !state.NextRetryAfter.IsZero() {
@@ -579,27 +569,6 @@ func (h *Handler) buildAuthHealthSummary(auth *coreauth.Auth) gin.H {
 	}
 	if state.Health.LastCompletedMs > 0 {
 		summary["last_completed_ms"] = state.Health.LastCompletedMs
-	}
-	if !state.Health.LastProbeAt.IsZero() {
-		summary["last_probe_at"] = state.Health.LastProbeAt
-		summary["last_probe_latency_ms"] = state.Health.LastProbeLatencyMs
-	}
-	if state.Health.LastProbeError != "" {
-		summary["last_probe_error"] = state.Health.LastProbeError
-	}
-	if state.Health.ConsecutiveSlowProbes > 0 {
-		summary["consecutive_slow_probes"] = state.Health.ConsecutiveSlowProbes
-	}
-	if !state.Health.LastCanaryAt.IsZero() {
-		summary["last_canary_at"] = state.Health.LastCanaryAt
-		summary["last_canary_latency_ms"] = state.Health.LastCanaryLatencyMs
-		summary["last_canary_slow"] = state.Health.LastCanarySlow
-	}
-	if state.Health.LastCanaryError != "" {
-		summary["last_canary_error"] = state.Health.LastCanaryError
-	}
-	if state.Health.ConsecutiveSlowCanaries > 0 {
-		summary["consecutive_slow_canaries"] = state.Health.ConsecutiveSlowCanaries
 	}
 	if state.Health.BackoffLevel > 0 {
 		summary["backoff_level"] = state.Health.BackoffLevel

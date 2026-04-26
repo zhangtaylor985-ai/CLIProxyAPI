@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -18,10 +19,28 @@ func TestNewRuntimeConfigResolvesEnvToken(t *testing.T) {
 	cfg.Notifications.Telegram.Enabled = true
 	cfg.Notifications.Telegram.ProviderChatID = "provider-chat"
 	cfg.Notifications.Telegram.ErrorLogChatID = "error-chat"
+	cfg.Notifications.Telegram.OpsChatID = "ops-chat"
 
 	runtimeCfg := newRuntimeConfig(cfg)
 	if runtimeCfg.token != "env-token" {
 		t.Fatalf("expected env token fallback, got %q", runtimeCfg.token)
+	}
+}
+
+func TestNewRuntimeConfigResolvesEnvChatRoutes(t *testing.T) {
+	t.Setenv("TELEGRAM_PROVIDER_CHAT_ID", "provider-env")
+	t.Setenv("TELEGRAM_ERROR_LOG_CHAT_ID", "error-env")
+	t.Setenv("TELEGRAM_OPS_CHAT_ID", "ops-env")
+
+	runtimeCfg := newRuntimeConfig(&internalconfig.Config{})
+	if runtimeCfg.providerChatID != "provider-env" {
+		t.Fatalf("provider chat = %q", runtimeCfg.providerChatID)
+	}
+	if runtimeCfg.errorChatID != "error-env" {
+		t.Fatalf("error chat = %q", runtimeCfg.errorChatID)
+	}
+	if runtimeCfg.opsChatID != "ops-env" {
+		t.Fatalf("ops chat = %q", runtimeCfg.opsChatID)
 	}
 }
 
@@ -83,6 +102,35 @@ func TestNotifyErrorEntryExcludesNoisyMessages(t *testing.T) {
 	case <-sent:
 	case <-time.After(time.Second):
 		t.Fatal("expected actionable error log alert to be sent")
+	}
+}
+
+func TestNotifyErrorEntrySuppressesEmptyGinServerErrorLine(t *testing.T) {
+	sent := make(chan string, 1)
+	n := newNotifier()
+	n.sendTelegram = func(_ context.Context, _ *http.Client, _, _, text string) error {
+		sent <- text
+		return nil
+	}
+	n.cfg = runtimeConfig{
+		enabled:       true,
+		token:         "token",
+		errorChatID:   "chat-id",
+		errorBackoff:  []time.Duration{time.Millisecond},
+		errorMinLevel: log.ErrorLevel,
+		httpClient:    &http.Client{},
+	}
+
+	entry := log.NewEntry(log.New())
+	entry.Level = log.ErrorLevel
+	entry.Message = `500 | 220ms | 127.0.0.1 | POST "/v1/messages?beta=true"`
+	entry.Caller = &runtime.Frame{File: "/app/internal/logging/gin_logger.go", Line: 89}
+
+	n.notifyErrorEntry(entry)
+	select {
+	case msg := <-sent:
+		t.Fatalf("expected empty gin request line to be ignored, got alert %q", msg)
+	case <-time.After(100 * time.Millisecond):
 	}
 }
 
@@ -194,6 +242,8 @@ func TestFormatManagementEventIncludesCustomGroupDetails(t *testing.T) {
 	text := formatManagementEvent(ManagementEvent{
 		Action:            "api_key_created",
 		Username:          "user_01",
+		Role:              "staff",
+		AuthSource:        "session",
 		APIKey:            "sk-test",
 		APIKeyName:        "Key A",
 		GroupID:           "team-alpha",
@@ -208,6 +258,8 @@ func TestFormatManagementEventIncludesCustomGroupDetails(t *testing.T) {
 	expected := []string{
 		"Action: api_key_created",
 		"Username: user_01",
+		"Role: staff",
+		"Auth source: session",
 		"API Key: sk-test",
 		"Key name: Key A",
 		"Account group: Team Alpha (team-alpha)",
@@ -231,10 +283,10 @@ func TestNotifyManagementSendsTelegram(t *testing.T) {
 		return nil
 	}
 	n.cfg = runtimeConfig{
-		enabled:        true,
-		token:          "token",
-		providerChatID: "chat-id",
-		httpClient:     &http.Client{},
+		enabled:    true,
+		token:      "token",
+		opsChatID:  "chat-id",
+		httpClient: &http.Client{},
 	}
 
 	n.notifyManagement(ManagementEvent{

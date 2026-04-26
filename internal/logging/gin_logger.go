@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/interfaces"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 	log "github.com/sirupsen/logrus"
 )
@@ -73,6 +74,13 @@ func GinLogrusLogger() gin.HandlerFunc {
 		clientIP := c.ClientIP()
 		method := c.Request.Method
 		errorMessage := c.Errors.ByType(gin.ErrorTypePrivate).String()
+		apiErrorMessage := apiResponseErrorSummary(c)
+		if apiErrorMessage != "" {
+			if errorMessage != "" {
+				errorMessage += " | "
+			}
+			errorMessage += apiErrorMessage
+		}
 
 		if requestID == "" {
 			requestID = "--------"
@@ -83,6 +91,9 @@ func GinLogrusLogger() gin.HandlerFunc {
 		}
 
 		entry := log.WithField("request_id", requestID)
+		if apiErrorMessage != "" {
+			entry = entry.WithField("api_error", apiErrorMessage)
+		}
 
 		switch {
 		case statusCode >= http.StatusInternalServerError:
@@ -93,6 +104,41 @@ func GinLogrusLogger() gin.HandlerFunc {
 			entry.Info(logLine)
 		}
 	}
+}
+
+func apiResponseErrorSummary(c *gin.Context) string {
+	if c == nil {
+		return ""
+	}
+	raw, exists := c.Get("API_RESPONSE_ERROR")
+	if !exists || raw == nil {
+		return ""
+	}
+	var parts []string
+	switch values := raw.(type) {
+	case []*interfaces.ErrorMessage:
+		for _, value := range values {
+			if value == nil || value.Error == nil {
+				continue
+			}
+			if text := strings.TrimSpace(value.Error.Error()); text != "" {
+				parts = append(parts, text)
+			}
+		}
+	case []interfaces.ErrorMessage:
+		for i := range values {
+			if values[i].Error == nil {
+				continue
+			}
+			if text := strings.TrimSpace(values[i].Error.Error()); text != "" {
+				parts = append(parts, text)
+			}
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "api_response_error=" + strings.Join(parts, " | ")
 }
 
 // isAIAPIPath checks if the given path is an AI API endpoint that should have request ID tracking.

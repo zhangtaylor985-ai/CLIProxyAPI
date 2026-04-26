@@ -3,10 +3,13 @@ package executor
 import (
 	"context"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/alerting"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/proxyutil"
 	log "github.com/sirupsen/logrus"
@@ -44,13 +47,14 @@ func newProxyAwareHTTPClient(ctx context.Context, cfg *config.Config, auth *clip
 
 	// If we have a proxy URL configured, set up the transport
 	if proxyURL != "" {
-		transport := buildProxyTransport(proxyURL)
-		if transport != nil {
+		transport, errBuild := buildProxyTransport(proxyURL)
+		if errBuild == nil && transport != nil {
 			httpClient.Transport = transport
 			return httpClient
 		}
 		// If proxy setup failed, log and fall through to context RoundTripper
 		log.Debugf("failed to setup proxy from URL: %s, falling back to context transport", proxyURL)
+		notifyProxyUnavailable(auth, proxyURL, errBuild)
 	}
 
 	// Priority 3: Use RoundTripper from context (typically from RoundTripperFor)
@@ -69,11 +73,43 @@ func newProxyAwareHTTPClient(ctx context.Context, cfg *config.Config, auth *clip
 //
 // Returns:
 //   - *http.Transport: A configured transport, or nil if the proxy URL is invalid
-func buildProxyTransport(proxyURL string) *http.Transport {
+func buildProxyTransport(proxyURL string) (*http.Transport, error) {
 	transport, _, errBuild := proxyutil.BuildHTTPTransport(proxyURL)
 	if errBuild != nil {
 		log.Errorf("%v", errBuild)
-		return nil
+		return nil, errBuild
 	}
-	return transport
+	return transport, nil
+}
+
+func notifyProxyUnavailable(auth *cliproxyauth.Auth, proxyURL string, err error) {
+	message := "proxy setup failed"
+	if err != nil {
+		message = err.Error()
+	}
+	event := alerting.ProviderEvent{
+		Kind:         "proxy_unavailable",
+		ErrorCode:    "proxy_unavailable",
+		ErrorMessage: message,
+		BaseURL:      redactProxyURL(proxyURL),
+	}
+	if auth != nil {
+		event.Provider = strings.TrimSpace(auth.Provider)
+		event.AuthID = strings.TrimSpace(auth.ID)
+		event.AuthIndex = auth.EnsureIndex()
+		if auth.Attributes != nil {
+			if apiKey := strings.TrimSpace(auth.Attributes["api_key"]); apiKey != "" {
+				event.MaskedAPIKey = util.HideAPIKey(apiKey)
+			}
+		}
+	}
+	alerting.NotifyProviderEvent(event)
+}
+
+func redactProxyURL(raw string) string {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return "<redacted>"
+	}
+	return parsed.Scheme + "://" + parsed.Host
 }

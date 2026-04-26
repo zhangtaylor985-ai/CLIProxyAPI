@@ -711,6 +711,7 @@ func newProxyAwareWebsocketDialer(cfg *config.Config, auth *cliproxyauth.Auth) *
 	setting, errParse := proxyutil.Parse(proxyURL)
 	if errParse != nil {
 		log.Errorf("codex websockets executor: %v", errParse)
+		notifyProxyUnavailable(auth, proxyURL, errParse)
 		return dialer
 	}
 
@@ -734,6 +735,7 @@ func newProxyAwareWebsocketDialer(cfg *config.Config, auth *cliproxyauth.Auth) *
 		socksDialer, errSOCKS5 := proxy.SOCKS5("tcp", setting.URL.Host, proxyAuth, proxy.Direct)
 		if errSOCKS5 != nil {
 			log.Errorf("codex websockets executor: create SOCKS5 dialer failed: %v", errSOCKS5)
+			notifyProxyUnavailable(auth, proxyURL, errSOCKS5)
 			return dialer
 		}
 		dialer.Proxy = nil
@@ -744,6 +746,7 @@ func newProxyAwareWebsocketDialer(cfg *config.Config, auth *cliproxyauth.Auth) *
 		dialer.Proxy = http.ProxyURL(setting.URL)
 	default:
 		log.Errorf("codex websockets executor: unsupported proxy scheme: %s", setting.URL.Scheme)
+		notifyProxyUnavailable(auth, proxyURL, fmt.Errorf("unsupported proxy scheme: %s", setting.URL.Scheme))
 	}
 
 	return dialer

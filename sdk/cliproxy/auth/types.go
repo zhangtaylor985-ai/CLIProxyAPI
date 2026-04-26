@@ -121,26 +121,6 @@ type ProviderHealthState struct {
 	SlowStarts int `json:"slow_starts,omitempty"`
 	// SlowCompletions counts observed slow completion events when no first-activity metric exists.
 	SlowCompletions int `json:"slow_completions,omitempty"`
-	// LastProbeAt records when the latest active health probe finished.
-	LastProbeAt time.Time `json:"last_probe_at,omitempty"`
-	// LastProbeLatencyMs stores the latest active health probe latency.
-	LastProbeLatencyMs int64 `json:"last_probe_latency_ms,omitempty"`
-	// LastProbeSlow indicates whether the latest active health probe was considered slow.
-	LastProbeSlow bool `json:"last_probe_slow,omitempty"`
-	// LastProbeError stores the latest active health probe error message.
-	LastProbeError string `json:"last_probe_error,omitempty"`
-	// ConsecutiveSlowProbes counts the current streak of slow probes.
-	ConsecutiveSlowProbes int `json:"consecutive_slow_probes,omitempty"`
-	// LastCanaryAt records when the latest fixed-prompt canary finished.
-	LastCanaryAt time.Time `json:"last_canary_at,omitempty"`
-	// LastCanaryLatencyMs stores the latest canary completion latency.
-	LastCanaryLatencyMs int64 `json:"last_canary_latency_ms,omitempty"`
-	// LastCanarySlow indicates whether the latest canary was considered slow.
-	LastCanarySlow bool `json:"last_canary_slow,omitempty"`
-	// LastCanaryError stores the latest canary error message.
-	LastCanaryError string `json:"last_canary_error,omitempty"`
-	// ConsecutiveSlowCanaries counts the current streak of slow canaries.
-	ConsecutiveSlowCanaries int `json:"consecutive_slow_canaries,omitempty"`
 	// LastSwitchAt records when traffic was last switched away from this auth/model.
 	LastSwitchAt time.Time `json:"last_switch_at,omitempty"`
 	// LastSwitchToProvider records the provider selected after a failover.

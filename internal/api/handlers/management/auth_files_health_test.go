@@ -54,14 +54,6 @@ func TestBuildAuthFileEntryIncludesHealthSummaryAndSwitchIdentity(t *testing.T) 
 				Health: coreauth.ProviderHealthState{
 					LastFirstActivityMs:   31_000,
 					LastCompletedMs:       92_000,
-					LastProbeAt:           now.Add(-2 * time.Minute),
-					LastProbeLatencyMs:    95_000,
-					LastProbeSlow:         true,
-					LastProbeError:        "408 probe timeout",
-					ConsecutiveSlowProbes: 2,
-					LastCanaryAt:          now.Add(-30 * time.Second),
-					LastCanaryLatencyMs:   88_000,
-					LastCanarySlow:        false,
 					BackoffLevel:          3,
 					LastSwitchAt:          now.Add(-1 * time.Minute),
 					LastSwitchToProvider:  "claude",
@@ -94,15 +86,6 @@ func TestBuildAuthFileEntryIncludesHealthSummaryAndSwitchIdentity(t *testing.T) 
 	}
 	if got := summary["degraded"]; got != true {
 		t.Fatalf("summary.degraded = %v, want true", got)
-	}
-	if got := summary["last_probe_latency_ms"]; got != int64(95_000) {
-		t.Fatalf("summary.last_probe_latency_ms = %v", got)
-	}
-	if got := summary["last_canary_latency_ms"]; got != int64(88_000) {
-		t.Fatalf("summary.last_canary_latency_ms = %v", got)
-	}
-	if got := summary["last_canary_slow"]; got != false {
-		t.Fatalf("summary.last_canary_slow = %v", got)
 	}
 	if got := summary["last_switch_to_auth_index"]; got != target.EnsureIndex() {
 		t.Fatalf("summary.last_switch_to_auth_index = %v", got)
