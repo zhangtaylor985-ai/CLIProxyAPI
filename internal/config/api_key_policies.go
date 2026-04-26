@@ -46,6 +46,14 @@ type APIKeyPolicy struct {
 	// It is not persisted to config.yaml.
 	Disabled bool `yaml:"-" json:"disabled,omitempty"`
 
+	// OwnerUsername records the management user that owns this client API key.
+	// It is stored in the external API key config store, not config.yaml.
+	OwnerUsername string `yaml:"-" json:"owner_username,omitempty"`
+
+	// OwnerRole records the management role at creation time ("admin" or "staff").
+	// It is stored in the external API key config store, not config.yaml.
+	OwnerRole string `yaml:"-" json:"owner_role,omitempty"`
+
 	// GroupID binds the API key to a managed account group stored in Postgres.
 	// When set, daily/weekly base budgets are resolved from that group.
 	GroupID string `yaml:"group-id,omitempty" json:"group-id,omitempty"`
@@ -770,6 +778,15 @@ func (cfg *Config) SanitizeAPIKeyPolicies() {
 			entry.ExpiresAt = expiresAt.Format(time.RFC3339)
 		} else {
 			entry.ExpiresAt = ""
+		}
+		entry.OwnerUsername = strings.TrimSpace(entry.OwnerUsername)
+		switch strings.ToLower(strings.TrimSpace(entry.OwnerRole)) {
+		case "staff":
+			entry.OwnerRole = "staff"
+		case "admin":
+			entry.OwnerRole = "admin"
+		default:
+			entry.OwnerRole = ""
 		}
 
 		key := entry.APIKey

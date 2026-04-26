@@ -67,7 +67,7 @@ func TestPersistAPIKeyConfigUsesStoreAndCallback(t *testing.T) {
 				APIKeys: []string{"key-1"},
 			},
 			APIKeyPolicies: []config.APIKeyPolicy{
-				{APIKey: "key-1", DailyBudgetUSD: 12},
+				{APIKey: "key-1", DailyBudgetUSD: 12, OwnerUsername: "user_01", OwnerRole: "staff"},
 			},
 		},
 		apiKeyConfigStore: store,
@@ -90,6 +90,9 @@ func TestPersistAPIKeyConfigUsesStoreAndCallback(t *testing.T) {
 	}
 	if got := store.state.Records[0].Policy.DailyBudgetUSD; got != 12 {
 		t.Fatalf("unexpected stored policy daily budget: %v", got)
+	}
+	if got := store.state.Records[0].OwnerUsername; got != "user_01" {
+		t.Fatalf("unexpected stored owner username: %q", got)
 	}
 }
 
@@ -140,7 +143,7 @@ func TestPersistAPIKeyRecordUsesRowStoreAndCallback(t *testing.T) {
 				APIKeys: []string{"key-1"},
 			},
 			APIKeyPolicies: []config.APIKeyPolicy{
-				{APIKey: "key-1", DailyBudgetUSD: 12, CreatedAt: "2026-04-06T13:00:00Z"},
+				{APIKey: "key-1", DailyBudgetUSD: 12, CreatedAt: "2026-04-06T13:00:00Z", OwnerUsername: "user_01", OwnerRole: "staff"},
 			},
 		},
 		apiKeyConfigStore: store,
@@ -166,6 +169,9 @@ func TestPersistAPIKeyRecordUsesRowStoreAndCallback(t *testing.T) {
 	}
 	if got := store.savedRecord.Policy.DailyBudgetUSD; got != 12 {
 		t.Fatalf("unexpected stored policy daily budget: %v", got)
+	}
+	if store.savedRecord.OwnerUsername != "user_01" || store.savedRecord.OwnerRole != "staff" {
+		t.Fatalf("unexpected stored owner: %#v", store.savedRecord)
 	}
 }
 

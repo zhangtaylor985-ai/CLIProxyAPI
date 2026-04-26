@@ -115,8 +115,8 @@ func (s *PostgresStore) SaveState(ctx context.Context, state State) error {
 
 	if len(normalized.Records) > 0 {
 		stmt, err := tx.PrepareContext(ctx, fmt.Sprintf(`
-				INSERT INTO %s (api_key, policy_json, created_at, expires_at, disabled, updated_at)
-				VALUES ($1, $2, $3, $4, $5, NOW())
+				INSERT INTO %s (api_key, policy_json, created_at, expires_at, disabled, owner_username, owner_role, updated_at)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
 			`, s.table))
 		if err != nil {
 			return fmt.Errorf("api key config store: prepare insert: %w", err)
@@ -135,6 +135,8 @@ func (s *PostgresStore) SaveState(ctx context.Context, state State) error {
 				record.CreatedAt.UTC(),
 				expiresAt,
 				record.Disabled,
+				record.OwnerUsername,
+				record.OwnerRole,
 			); err != nil {
 				return fmt.Errorf("api key config store: insert row %q: %w", record.APIKey, err)
 			}
@@ -170,13 +172,15 @@ func (s *PostgresStore) SaveRecord(ctx context.Context, previousAPIKey string, r
 	}
 
 	if _, err := tx.ExecContext(ctx, fmt.Sprintf(`
-		INSERT INTO %s (api_key, policy_json, created_at, expires_at, disabled, updated_at)
-		VALUES ($1, $2, $3, $4, $5, NOW())
+		INSERT INTO %s (api_key, policy_json, created_at, expires_at, disabled, owner_username, owner_role, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
 		ON CONFLICT (api_key) DO UPDATE SET
 			policy_json = EXCLUDED.policy_json,
 			created_at = EXCLUDED.created_at,
 			expires_at = EXCLUDED.expires_at,
 			disabled = EXCLUDED.disabled,
+			owner_username = EXCLUDED.owner_username,
+			owner_role = EXCLUDED.owner_role,
 			updated_at = NOW()
 	`, s.table),
 		record.APIKey,
@@ -184,6 +188,8 @@ func (s *PostgresStore) SaveRecord(ctx context.Context, previousAPIKey string, r
 		record.CreatedAt.UTC(),
 		expiresAt,
 		record.Disabled,
+		record.OwnerUsername,
+		record.OwnerRole,
 	); err != nil {
 		return fmt.Errorf("api key config store: upsert row %q: %w", record.APIKey, err)
 	}
@@ -230,22 +236,50 @@ func (s *PostgresStore) ensureSchema(ctx context.Context) error {
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			expires_at TIMESTAMPTZ NULL,
 			disabled BOOLEAN NOT NULL DEFAULT FALSE,
+			owner_username TEXT NOT NULL DEFAULT 'legacy_admin',
+			owner_role TEXT NOT NULL DEFAULT 'admin',
 			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		)
 	`, s.table)); err != nil {
 		return fmt.Errorf("api key config store: create table: %w", err)
 	}
 	if _, err := s.db.ExecContext(ctx, fmt.Sprintf(`
+		ALTER TABLE %s
+			ADD COLUMN IF NOT EXISTS owner_username TEXT NOT NULL DEFAULT 'legacy_admin',
+			ADD COLUMN IF NOT EXISTS owner_role TEXT NOT NULL DEFAULT 'admin'
+	`, s.table)); err != nil {
+		return fmt.Errorf("api key config store: add owner columns: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, fmt.Sprintf(`
+		UPDATE %s
+		SET owner_username = 'legacy_admin'
+		WHERE owner_username IS NULL OR btrim(owner_username) = ''
+	`, s.table)); err != nil {
+		return fmt.Errorf("api key config store: backfill owner username: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, fmt.Sprintf(`
+		UPDATE %s
+		SET owner_role = 'admin'
+		WHERE owner_role IS NULL OR btrim(owner_role) = ''
+	`, s.table)); err != nil {
+		return fmt.Errorf("api key config store: backfill owner role: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, fmt.Sprintf(`
 		CREATE INDEX IF NOT EXISTS %s ON %s (disabled, expires_at)
 	`, quoteIdentifier(tableIndexName(s.cfg.Table, "disabled_expires_at_idx")), s.table)); err != nil {
 		return fmt.Errorf("api key config store: create index: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, fmt.Sprintf(`
+		CREATE INDEX IF NOT EXISTS %s ON %s (owner_role, owner_username)
+	`, quoteIdentifier(tableIndexName(s.cfg.Table, "owner_idx")), s.table)); err != nil {
+		return fmt.Errorf("api key config store: create owner index: %w", err)
 	}
 	return nil
 }
 
 func (s *PostgresStore) loadRecords(ctx context.Context) ([]Record, bool, error) {
 	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`
-		SELECT api_key, policy_json, created_at, expires_at, disabled
+		SELECT api_key, policy_json, created_at, expires_at, disabled, owner_username, owner_role
 		FROM %s
 		ORDER BY created_at ASC, api_key ASC
 	`, s.table))
@@ -262,8 +296,10 @@ func (s *PostgresStore) loadRecords(ctx context.Context) ([]Record, bool, error)
 			createdAt time.Time
 			expiresAt sql.NullTime
 			disabled  bool
+			ownerName string
+			ownerRole string
 		)
-		if err := rows.Scan(&apiKey, &rawPolicy, &createdAt, &expiresAt, &disabled); err != nil {
+		if err := rows.Scan(&apiKey, &rawPolicy, &createdAt, &expiresAt, &disabled, &ownerName, &ownerRole); err != nil {
 			return nil, false, fmt.Errorf("api key config store: scan record: %w", err)
 		}
 		policyEntry := config.APIKeyPolicy{}
@@ -275,11 +311,15 @@ func (s *PostgresStore) loadRecords(ctx context.Context) ([]Record, bool, error)
 		policyEntry.APIKey = strings.TrimSpace(apiKey)
 		policyEntry.CreatedAt = createdAt.UTC().Format(time.RFC3339)
 		policyEntry.Disabled = disabled
+		policyEntry.OwnerUsername = strings.TrimSpace(ownerName)
+		policyEntry.OwnerRole = normalizeOwnerRole(ownerRole)
 		record := Record{
-			APIKey:    strings.TrimSpace(apiKey),
-			Policy:    policyEntry,
-			CreatedAt: createdAt.UTC(),
-			Disabled:  disabled,
+			APIKey:        strings.TrimSpace(apiKey),
+			Policy:        policyEntry,
+			CreatedAt:     createdAt.UTC(),
+			Disabled:      disabled,
+			OwnerUsername: strings.TrimSpace(ownerName),
+			OwnerRole:     normalizeOwnerRole(ownerRole),
 		}
 		if expiresAt.Valid {
 			value := expiresAt.Time.UTC()
@@ -325,6 +365,8 @@ func encodePersistedPolicyRecord(record Record) ([]byte, any, error) {
 	policyCopy.CreatedAt = ""
 	policyCopy.ExpiresAt = ""
 	policyCopy.Disabled = false
+	policyCopy.OwnerUsername = ""
+	policyCopy.OwnerRole = ""
 	raw, err := json.Marshal(policyCopy)
 	if err != nil {
 		return nil, nil, err

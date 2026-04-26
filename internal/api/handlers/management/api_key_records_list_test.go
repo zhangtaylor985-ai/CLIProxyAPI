@@ -13,6 +13,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/managementauth"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/policy"
 	sdkconfig "github.com/router-for-me/CLIProxyAPI/v6/sdk/config"
 )
@@ -192,6 +193,55 @@ func TestListAPIKeyRecordsLite_SortByLastUsed(t *testing.T) {
 	gotAsc := collectAPIKeysFromList(ascResp)
 	if len(gotAsc) != 3 || gotAsc[0] != "k-old" || gotAsc[1] != "k-new" || gotAsc[2] != "k-unused" {
 		t.Fatalf("asc sort = %v, want [k-old k-new k-unused]", gotAsc)
+	}
+}
+
+func TestListAPIKeyRecordsLite_FiltersStaffToOwnedKeysAndReturnsOwnerStats(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	handler, cleanup := newAPIKeyRecordsTestHandler(t, &config.Config{
+		SDKConfig: sdkconfig.SDKConfig{APIKeys: []string{"admin-key", "staff-one", "staff-two"}},
+		APIKeyPolicies: []config.APIKeyPolicy{
+			{APIKey: "admin-key", OwnerUsername: "root_admin", OwnerRole: "admin"},
+			{APIKey: "staff-one", OwnerUsername: "user_01", OwnerRole: "staff"},
+			{APIKey: "staff-two", OwnerUsername: "user_02", OwnerRole: "staff"},
+		},
+	})
+	defer cleanup()
+
+	adminResp, status := runListAPIKeyRecords(t, handler, "sort=api_key&order=asc")
+	if status != http.StatusOK {
+		t.Fatalf("admin status = %d", status)
+	}
+	if got := collectAPIKeysFromList(adminResp); len(got) != 3 {
+		t.Fatalf("admin list = %v, want 3 items", got)
+	}
+	if adminResp.OwnershipStats.AdminTotal != 1 {
+		t.Fatalf("admin_total = %d, want 1", adminResp.OwnershipStats.AdminTotal)
+	}
+	if len(adminResp.OwnershipStats.Owners) != 3 {
+		t.Fatalf("owner stats = %+v, want 3 owners", adminResp.OwnershipStats.Owners)
+	}
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/v0/management/api-key-records?sort=api_key&order=asc", nil)
+	setManagementPrincipal(ctx, managementPrincipal{Username: "user_01", Role: managementauth.RoleStaff})
+
+	handler.ListAPIKeyRecordsLite(ctx)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("staff status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	var staffResp apiKeyRecordListResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &staffResp); err != nil {
+		t.Fatalf("unmarshal staff body: %v", err)
+	}
+	if got := collectAPIKeysFromList(staffResp); len(got) != 1 || got[0] != "staff-one" {
+		t.Fatalf("staff list = %v, want [staff-one]", got)
+	}
+	if len(staffResp.OwnershipStats.Owners) != 1 || staffResp.OwnershipStats.Owners[0].Username != "user_01" {
+		t.Fatalf("staff owner stats = %+v, want only user_01", staffResp.OwnershipStats.Owners)
 	}
 }
 

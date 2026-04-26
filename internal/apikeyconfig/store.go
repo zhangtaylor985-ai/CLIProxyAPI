@@ -21,11 +21,13 @@ type Store interface {
 
 // Record captures one API key row from the external store.
 type Record struct {
-	APIKey    string              `json:"api_key"`
-	Policy    config.APIKeyPolicy `json:"policy"`
-	CreatedAt time.Time           `json:"created_at"`
-	ExpiresAt *time.Time          `json:"expires_at,omitempty"`
-	Disabled  bool                `json:"disabled"`
+	APIKey        string              `json:"api_key"`
+	Policy        config.APIKeyPolicy `json:"policy"`
+	CreatedAt     time.Time           `json:"created_at"`
+	ExpiresAt     *time.Time          `json:"expires_at,omitempty"`
+	Disabled      bool                `json:"disabled"`
+	OwnerUsername string              `json:"owner_username"`
+	OwnerRole     string              `json:"owner_role"`
 }
 
 // State captures API key records persisted outside config.yaml.
@@ -206,15 +208,19 @@ func clonePolicies(policies []config.APIKeyPolicy) []config.APIKeyPolicy {
 func defaultStoredPolicy(apiKey string) config.APIKeyPolicy {
 	return config.APIKeyPolicy{
 		APIKey:         strings.TrimSpace(apiKey),
+		OwnerUsername:  "legacy_admin",
+		OwnerRole:      "admin",
 		ExcludedModels: config.BuildExcludedModelFamilies(true, false, nil),
 	}
 }
 
 func policyToRecord(policy config.APIKeyPolicy) Record {
 	record := Record{
-		APIKey:   strings.TrimSpace(policy.APIKey),
-		Policy:   policy,
-		Disabled: policy.Disabled,
+		APIKey:        strings.TrimSpace(policy.APIKey),
+		Policy:        policy,
+		Disabled:      policy.Disabled,
+		OwnerUsername: strings.TrimSpace(policy.OwnerUsername),
+		OwnerRole:     normalizeOwnerRole(policy.OwnerRole),
 	}
 	if createdAt, ok := policy.CreatedTime(); ok {
 		record.CreatedAt = createdAt
@@ -250,6 +256,22 @@ func normalizeRecords(records []Record) []Record {
 		seen[record.APIKey] = struct{}{}
 		record.Policy.APIKey = record.APIKey
 		record.Policy.Disabled = record.Disabled
+		record.OwnerUsername = strings.TrimSpace(record.OwnerUsername)
+		if record.OwnerUsername == "" {
+			record.OwnerUsername = strings.TrimSpace(record.Policy.OwnerUsername)
+		}
+		record.OwnerRole = normalizeOwnerRole(record.OwnerRole)
+		if record.OwnerRole == "" {
+			record.OwnerRole = normalizeOwnerRole(record.Policy.OwnerRole)
+		}
+		if record.OwnerUsername == "" {
+			record.OwnerUsername = "legacy_admin"
+		}
+		if record.OwnerRole == "" {
+			record.OwnerRole = "admin"
+		}
+		record.Policy.OwnerUsername = record.OwnerUsername
+		record.Policy.OwnerRole = record.OwnerRole
 		if record.CreatedAt.IsZero() {
 			if createdAt, ok := record.Policy.CreatedTime(); ok {
 				record.CreatedAt = createdAt
@@ -276,6 +298,8 @@ func normalizeRecords(records []Record) []Record {
 		record.Policy.APIKey = record.APIKey
 		record.Policy.CreatedAt = record.CreatedAt.UTC().Format(time.RFC3339)
 		record.Policy.Disabled = record.Disabled
+		record.Policy.OwnerUsername = record.OwnerUsername
+		record.Policy.OwnerRole = record.OwnerRole
 		if record.ExpiresAt != nil {
 			record.Policy.ExpiresAt = record.ExpiresAt.UTC().Format(time.RFC3339)
 		} else {
@@ -309,6 +333,8 @@ func statePolicies(records []Record) []config.APIKeyPolicy {
 		entry.APIKey = record.APIKey
 		entry.CreatedAt = record.CreatedAt.UTC().Format(time.RFC3339)
 		entry.Disabled = record.Disabled
+		entry.OwnerUsername = strings.TrimSpace(record.OwnerUsername)
+		entry.OwnerRole = normalizeOwnerRole(record.OwnerRole)
 		if record.ExpiresAt != nil {
 			entry.ExpiresAt = record.ExpiresAt.UTC().Format(time.RFC3339)
 		} else {
@@ -351,4 +377,15 @@ func legacyStateToRecords(keys []string, policies []config.APIKeyPolicy) []Recor
 		records = append(records, policyToRecord(entry))
 	}
 	return normalizeRecords(records)
+}
+
+func normalizeOwnerRole(role string) string {
+	switch strings.ToLower(strings.TrimSpace(role)) {
+	case "staff":
+		return "staff"
+	case "admin":
+		return "admin"
+	default:
+		return ""
+	}
 }
