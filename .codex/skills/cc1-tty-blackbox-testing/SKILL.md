@@ -187,6 +187,36 @@ rg -n "/v1/messages\\?beta=true| 408 | 500 " logs/main.log -S | tail -n 40
 
 这一步通过后，才能继续 TTY。
 
+#### GPT-5.5 专项 API Key
+
+当需要验证“某个 API Key 的 Claude 模型是否真实路由到 GPT-5.5”时，使用本地 `.env` 中的 `GPT55_REGRESSION_API_KEY`，不要把明文 key 写进 AGENTS、skill、任务文档或提交记录。
+
+推荐最小口径：
+
+```bash
+set -a; source /Users/taylor/code/tools/CLIProxyAPI-ori/.env; set +a
+test -n "$GPT55_REGRESSION_API_KEY"
+
+ANTHROPIC_BASE_URL=http://127.0.0.1:53841 \
+ANTHROPIC_AUTH_TOKEN="$GPT55_REGRESSION_API_KEY" \
+CLAUDE_CONFIG_DIR=/tmp/claude-gpt55-regression-config \
+~/.local/bin/claude2 \
+  --debug-file /tmp/claude-gpt55-regression.log \
+  --dangerously-skip-permissions \
+  --disallowedTools Bash \
+  --model claude-opus-4-6 \
+  -p 'Do not use tools. Reply with exactly GPT55_HIT and nothing else.'
+```
+
+验收证据必须同时看：
+
+- 客户端输出包含 `GPT55_HIT`
+- debug-file 有 `ANTHROPIC_BASE_URL=http://127.0.0.1:53841` 与 `[API REQUEST] /v1/messages`
+- 服务端日志显示该请求路由到 `gpt-5.5`
+- session JSONL 没有 `isApiErrorMessage`、`API Error`、`undefined is not an object`
+
+如果返回 `用户额度不足` 或 `auth_unavailable: no auth available`，这是业务额度或供应账号可用性阻断，不等同于 GPT-5.5 协议兼容失败；先记录阻断原因，再换可用测试 key 或恢复供应账号后重测。
+
 ### Step 4. 再跑真实 TTY
 
 ```bash
