@@ -165,12 +165,12 @@ func (h *ClaudeCodeAPIHandler) handleNonStreamingResponse(c *gin.Context, rawJSO
 	c.Header("Content-Type", "application/json")
 	alt := h.GetAlt(c)
 	cliCtx, cliCancel := h.GetContextWithCancel(h, c, context.Background())
-	stopKeepAlive := h.StartNonStreamingKeepAlive(c, cliCtx)
 
 	modelName := gjson.GetBytes(rawJSON, "model").String()
 
+	// Claude Code treats any non-streaming body bytes as the final JSON response,
+	// so body keep-alives would commit HTTP 200 before an upstream error can be returned.
 	resp, upstreamHeaders, errMsg := h.ExecuteWithAuthManager(cliCtx, h.HandlerType(), modelName, rawJSON, alt)
-	stopKeepAlive()
 	if errMsg != nil {
 		h.writeClientError(c, errMsg)
 		cliCancel(errMsg.Error)
