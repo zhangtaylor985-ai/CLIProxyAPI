@@ -8,12 +8,27 @@ import (
 	"testing"
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
-	_ "github.com/router-for-me/CLIProxyAPI/v6/internal/translator"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v6/sdk/translator"
 	"github.com/tidwall/gjson"
 )
+
+func completedCodexSSEPayload(t *testing.T, raw []byte) []byte {
+	t.Helper()
+	for _, line := range bytes.Split(raw, []byte("\n")) {
+		payload := bytes.TrimSpace(line)
+		if !bytes.HasPrefix(payload, []byte("data:")) {
+			continue
+		}
+		data := bytes.TrimSpace(payload[5:])
+		if gjson.GetBytes(data, "type").String() == "response.completed" {
+			return append([]byte(nil), data...)
+		}
+	}
+	t.Fatalf("missing response.completed chunk: %s", raw)
+	return nil
+}
 
 func TestCodexExecutorExecute_EmptyStreamCompletionOutputUsesOutputItemDone(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -40,7 +55,8 @@ func TestCodexExecutorExecute_EmptyStreamCompletionOutputUsesOutputItemDone(t *t
 		t.Fatalf("Execute error: %v", err)
 	}
 
-	gotContent := gjson.GetBytes(resp.Payload, "choices.0.message.content").String()
+	completed := completedCodexSSEPayload(t, resp.Payload)
+	gotContent := gjson.GetBytes(completed, "response.output.0.content.0.text").String()
 	if gotContent != "ok" {
 		t.Fatalf("choices.0.message.content = %q, want %q; payload=%s", gotContent, "ok", string(resp.Payload))
 	}
