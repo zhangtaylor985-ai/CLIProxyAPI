@@ -16,6 +16,8 @@ func TestStateFromConfigAndApplyToConfig(t *testing.T) {
 				APIKey:         "key-1",
 				ExcludedModels: []string{"claude-*"},
 				DailyLimits:    map[string]int{"claude-opus-4-6": 5},
+				OwnerUsername:  "user_01",
+				OwnerRole:      "staff",
 			},
 		},
 	}
@@ -26,6 +28,12 @@ func TestStateFromConfigAndApplyToConfig(t *testing.T) {
 	}
 	if got := state.Records[1].Policy.ExcludedModels; len(got) == 0 || got[0] != "gpt-*" {
 		t.Fatalf("expected default GPT exclusions for key-2, got %#v", got)
+	}
+	if state.Records[0].OwnerUsername != "user_01" || state.Records[0].OwnerRole != "staff" {
+		t.Fatalf("expected explicit owner to be preserved, got %#v", state.Records[0])
+	}
+	if state.Records[1].OwnerUsername != "legacy_admin" || state.Records[1].OwnerRole != "admin" {
+		t.Fatalf("expected legacy owner defaults for key-2, got %#v", state.Records[1])
 	}
 
 	target := &config.Config{
@@ -43,6 +51,9 @@ func TestStateFromConfigAndApplyToConfig(t *testing.T) {
 	}
 	if len(target.APIKeyPolicies) != 2 || target.APIKeyPolicies[0].APIKey != "key-1" || target.APIKeyPolicies[1].APIKey != "key-2" {
 		t.Fatalf("unexpected target policies: %#v", target.APIKeyPolicies)
+	}
+	if target.APIKeyPolicies[0].OwnerUsername != "user_01" || target.APIKeyPolicies[0].OwnerRole != "staff" {
+		t.Fatalf("unexpected target owner: %#v", target.APIKeyPolicies[0])
 	}
 
 	state.Records[0].Policy.ExcludedModels[0] = "changed"

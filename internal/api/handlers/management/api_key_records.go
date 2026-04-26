@@ -15,6 +15,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/apikeygroup"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/billing"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/managementauth"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/policy"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 )
@@ -26,6 +27,8 @@ type apiKeyPolicyView struct {
 	CreatedAt                 string                    `json:"created_at"`
 	ExpiresAt                 string                    `json:"expires_at"`
 	Disabled                  bool                      `json:"disabled"`
+	OwnerUsername             string                    `json:"owner_username"`
+	OwnerRole                 string                    `json:"owner_role"`
 	GroupID                   string                    `json:"group_id"`
 	GroupName                 string                    `json:"group_name"`
 	AllowClaudeFamily         bool                      `json:"allow_claude_family"`
@@ -136,6 +139,8 @@ type apiKeyRecordSummaryView struct {
 	CreatedAt                 string                 `json:"created_at"`
 	ExpiresAt                 string                 `json:"expires_at"`
 	Disabled                  bool                   `json:"disabled"`
+	OwnerUsername             string                 `json:"owner_username"`
+	OwnerRole                 string                 `json:"owner_role"`
 	GroupID                   string                 `json:"group_id"`
 	GroupName                 string                 `json:"group_name"`
 	Registered                bool                   `json:"registered"`
@@ -211,6 +216,10 @@ func (h *Handler) GetAPIKeyRecord(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid api key"})
 		return
 	}
+	if !h.canManageAPIKey(c, apiKey) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "api key not found"})
+		return
+	}
 
 	now := time.Now().In(policy.ChinaLocation())
 	var detail apiKeyRecordDetailView
@@ -243,7 +252,7 @@ func (h *Handler) ListAPIKeyRecordEvents(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid api key"})
 		return
 	}
-	if !h.apiKeyExists(apiKey) {
+	if !h.apiKeyExists(apiKey) || !h.canManageAPIKey(c, apiKey) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "api key not found"})
 		return
 	}
@@ -290,8 +299,12 @@ func (h *Handler) CreateAPIKeyRecord(c *gin.Context) {
 	if isEmptyPolicyView(policyView) {
 		policyView = defaultAPIKeyPolicyView(apiKey)
 	}
-	if !body.ClearPolicy {
-		upsertAPIKeyPolicy(&h.cfg.APIKeyPolicies, viewToPolicy(apiKey, policyView))
+	if body.ClearPolicy {
+		upsertAPIKeyPolicy(&h.cfg.APIKeyPolicies, defaultOwnedAPIKeyPolicy(apiKey, managementUsername(c), string(managementRole(c))))
+	} else {
+		policyEntry := viewToPolicy(apiKey, policyView)
+		stampPolicyOwner(&policyEntry, managementUsername(c), string(managementRole(c)))
+		upsertAPIKeyPolicy(&h.cfg.APIKeyPolicies, policyEntry)
 	}
 	h.cfg.SanitizeAPIKeyPolicies()
 	if !h.persistAPIKeyRecord(c, "", apiKey) {
@@ -337,7 +350,18 @@ func (h *Handler) UpdateAPIKeyRecord(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "api key not found"})
 		return
 	}
+	if !h.canManageAPIKey(c, currentKey) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "api key not found"})
+		return
+	}
 
+	ownerUsername, ownerRole := h.apiKeyOwner(currentKey)
+	if ownerUsername == "" {
+		ownerUsername = managementUsername(c)
+	}
+	if ownerRole == "" {
+		ownerRole = string(managementRole(c))
+	}
 	for i, key := range h.cfg.APIKeys {
 		if strings.TrimSpace(key) == currentKey {
 			h.cfg.APIKeys[i] = newKey
@@ -347,12 +371,16 @@ func (h *Handler) UpdateAPIKeyRecord(c *gin.Context) {
 
 	if existing := h.cfg.FindAPIKeyPolicy(currentKey); existing != nil {
 		existing.APIKey = newKey
+		stampPolicyOwner(existing, ownerUsername, ownerRole)
 	}
 	if body.ClearPolicy {
 		removeAPIKeyPolicy(&h.cfg.APIKeyPolicies, newKey)
 		removeAPIKeyPolicy(&h.cfg.APIKeyPolicies, currentKey)
+		upsertAPIKeyPolicy(&h.cfg.APIKeyPolicies, defaultOwnedAPIKeyPolicy(newKey, ownerUsername, ownerRole))
 	} else if !isEmptyPolicyView(body.Policy) {
-		upsertAPIKeyPolicy(&h.cfg.APIKeyPolicies, viewToPolicy(newKey, body.Policy))
+		policyEntry := viewToPolicy(newKey, body.Policy)
+		stampPolicyOwner(&policyEntry, ownerUsername, ownerRole)
+		upsertAPIKeyPolicy(&h.cfg.APIKeyPolicies, policyEntry)
 		removeDuplicatePolicyAlias(&h.cfg.APIKeyPolicies, currentKey, newKey)
 	}
 	h.cfg.SanitizeAPIKeyPolicies()
@@ -378,6 +406,10 @@ func (h *Handler) DeleteAPIKeyRecord(c *gin.Context) {
 	apiKey, err := url.PathUnescape(strings.TrimSpace(c.Param("apiKey")))
 	if err != nil || strings.TrimSpace(apiKey) == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid api key"})
+		return
+	}
+	if !h.canManageAPIKey(c, apiKey) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "api key not found"})
 		return
 	}
 
@@ -639,6 +671,8 @@ func (h *Handler) buildAPIKeySummary(ctx context.Context, apiKey string, now tim
 		Disabled:           false,
 		GroupID:            "",
 		GroupName:          "",
+		OwnerUsername:      "legacy_admin",
+		OwnerRole:          "admin",
 		Registered:         h.apiKeyExists(apiKey),
 		HasExplicitPolicy:  explicitPolicy != nil,
 		LastUsedAt:         lastUsedAt,
@@ -658,6 +692,8 @@ func (h *Handler) buildAPIKeySummary(ctx context.Context, apiKey string, now tim
 		summary.CreatedAt = strings.TrimSpace(effectivePolicy.CreatedAt)
 		summary.ExpiresAt = strings.TrimSpace(effectivePolicy.ExpiresAt)
 		summary.Disabled = effectivePolicy.Disabled
+		summary.OwnerUsername = apiKeyOwnerUsername(effectivePolicy)
+		summary.OwnerRole = apiKeyOwnerRole(effectivePolicy)
 		summary.GroupID = strings.TrimSpace(effectivePolicy.GroupID)
 		summary.DailyLimitCount = len(effectivePolicy.DailyLimits)
 		summary.PolicyFamily = effectivePolicy.ClaudeGPTTargetFamilyOrDefault()
@@ -679,6 +715,8 @@ func (h *Handler) buildAPIKeyPolicyOnlySummary(apiKey string, now time.Time, eff
 		MaskedAPIKey:      util.HideAPIKey(apiKey),
 		Registered:        h.apiKeyExists(apiKey),
 		HasExplicitPolicy: h.cfg != nil && h.cfg.FindAPIKeyPolicy(apiKey) != nil,
+		OwnerUsername:     "legacy_admin",
+		OwnerRole:         "admin",
 		DailyBudget: apiKeyBudgetWindowView{
 			Enabled: false,
 			StartAt: time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, policy.ChinaLocation()),
@@ -699,6 +737,8 @@ func (h *Handler) buildAPIKeyPolicyOnlySummary(apiKey string, now time.Time, eff
 		summary.CreatedAt = strings.TrimSpace(effectivePolicy.CreatedAt)
 		summary.ExpiresAt = strings.TrimSpace(effectivePolicy.ExpiresAt)
 		summary.Disabled = effectivePolicy.Disabled
+		summary.OwnerUsername = apiKeyOwnerUsername(effectivePolicy)
+		summary.OwnerRole = apiKeyOwnerRole(effectivePolicy)
 		summary.GroupID = strings.TrimSpace(effectivePolicy.GroupID)
 		summary.DailyLimitCount = len(effectivePolicy.DailyLimits)
 		summary.PolicyFamily = effectivePolicy.ClaudeGPTTargetFamilyOrDefault()
@@ -1051,6 +1091,8 @@ func policyToView(apiKey string, p *config.APIKeyPolicy, group *apikeygroup.Grou
 	view.CreatedAt = strings.TrimSpace(p.CreatedAt)
 	view.ExpiresAt = strings.TrimSpace(p.ExpiresAt)
 	view.Disabled = p.Disabled
+	view.OwnerUsername = apiKeyOwnerUsername(p)
+	view.OwnerRole = apiKeyOwnerRole(p)
 	view.GroupID = strings.TrimSpace(p.GroupID)
 	if group != nil {
 		view.GroupName = group.Name
@@ -1107,6 +1149,8 @@ func viewToPolicy(apiKey string, view apiKeyPolicyView) config.APIKeyPolicy {
 		CreatedAt:                   strings.TrimSpace(view.CreatedAt),
 		ExpiresAt:                   strings.TrimSpace(view.ExpiresAt),
 		Disabled:                    view.Disabled,
+		OwnerUsername:               strings.TrimSpace(view.OwnerUsername),
+		OwnerRole:                   normalizeAPIKeyOwnerRole(view.OwnerRole),
 		GroupID:                     strings.TrimSpace(view.GroupID),
 		FastMode:                    view.FastMode,
 		SessionTrajectoryDisabled:   view.SessionTrajectoryDisabled,
@@ -1225,7 +1269,18 @@ func defaultAPIKeyPolicyView(apiKey string) apiKeyPolicyView {
 		CodexChannelMode:   "auto",
 		AllowClaudeOpus46:  true,
 		DailyLimits:        map[string]int{},
+		OwnerUsername:      "legacy_admin",
+		OwnerRole:          "admin",
 	}
+}
+
+func defaultOwnedAPIKeyPolicy(apiKey, ownerUsername, ownerRole string) config.APIKeyPolicy {
+	entry := config.APIKeyPolicy{
+		APIKey:         strings.TrimSpace(apiKey),
+		ExcludedModels: config.BuildExcludedModelFamilies(true, false, nil),
+	}
+	stampPolicyOwner(&entry, ownerUsername, ownerRole)
+	return entry
 }
 
 func copyDailyLimits(src map[string]int) map[string]int {
@@ -1277,6 +1332,71 @@ func tokenPackageChanged(previousUSD float64, previousStartedAt string, afterPol
 		nextStartedAt = strings.TrimSpace(afterPolicy.TokenPackageStartedAt)
 	}
 	return previousUSD != nextUSD || strings.TrimSpace(previousStartedAt) != nextStartedAt
+}
+
+func stampPolicyOwner(policyEntry *config.APIKeyPolicy, username, role string) {
+	if policyEntry == nil {
+		return
+	}
+	username = strings.TrimSpace(username)
+	role = normalizeAPIKeyOwnerRole(role)
+	if username == "" {
+		username = "legacy_admin"
+	}
+	if role == "" {
+		role = "admin"
+	}
+	policyEntry.OwnerUsername = username
+	policyEntry.OwnerRole = role
+}
+
+func normalizeAPIKeyOwnerRole(role string) string {
+	switch strings.ToLower(strings.TrimSpace(role)) {
+	case string(managementauth.RoleStaff):
+		return string(managementauth.RoleStaff)
+	case string(managementauth.RoleAdmin):
+		return string(managementauth.RoleAdmin)
+	default:
+		return ""
+	}
+}
+
+func apiKeyOwnerUsername(policyEntry *config.APIKeyPolicy) string {
+	if policyEntry == nil {
+		return "legacy_admin"
+	}
+	if value := strings.TrimSpace(policyEntry.OwnerUsername); value != "" {
+		return value
+	}
+	return "legacy_admin"
+}
+
+func apiKeyOwnerRole(policyEntry *config.APIKeyPolicy) string {
+	if policyEntry == nil {
+		return "admin"
+	}
+	if value := normalizeAPIKeyOwnerRole(policyEntry.OwnerRole); value != "" {
+		return value
+	}
+	return "admin"
+}
+
+func (h *Handler) apiKeyOwner(apiKey string) (string, string) {
+	if h == nil || h.cfg == nil {
+		return "", ""
+	}
+	if policyEntry := h.cfg.EffectiveAPIKeyPolicy(apiKey); policyEntry != nil {
+		return apiKeyOwnerUsername(policyEntry), apiKeyOwnerRole(policyEntry)
+	}
+	return "", ""
+}
+
+func (h *Handler) canManageAPIKey(c *gin.Context, apiKey string) bool {
+	if !managementIsStaff(c) {
+		return true
+	}
+	ownerUsername, ownerRole := h.apiKeyOwner(apiKey)
+	return ownerRole == string(managementauth.RoleStaff) && ownerUsername == managementUsername(c)
 }
 
 func (h *Handler) notifyAPIKeyManagementAction(c *gin.Context, action, apiKey string, policyEntry *config.APIKeyPolicy) {

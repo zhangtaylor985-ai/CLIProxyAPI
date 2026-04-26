@@ -10,6 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/apikeygroup"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/managementauth"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/policy"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 )
@@ -26,6 +27,8 @@ type apiKeyRecordSummaryLiteView struct {
 	CreatedAt                 string     `json:"created_at"`
 	ExpiresAt                 string     `json:"expires_at"`
 	Disabled                  bool       `json:"disabled"`
+	OwnerUsername             string     `json:"owner_username"`
+	OwnerRole                 string     `json:"owner_role"`
 	GroupID                   string     `json:"group_id"`
 	GroupName                 string     `json:"group_name"`
 	Registered                bool       `json:"registered"`
@@ -47,8 +50,20 @@ type apiKeyRecordListPagination struct {
 }
 
 type apiKeyRecordListResponse struct {
-	Items      []apiKeyRecordSummaryLiteView `json:"items"`
-	Pagination apiKeyRecordListPagination    `json:"pagination"`
+	Items          []apiKeyRecordSummaryLiteView `json:"items"`
+	Pagination     apiKeyRecordListPagination    `json:"pagination"`
+	OwnershipStats apiKeyOwnershipStatsView      `json:"ownership_stats"`
+}
+
+type apiKeyOwnerCountView struct {
+	Username string `json:"username"`
+	Role     string `json:"role"`
+	Count    int    `json:"count"`
+}
+
+type apiKeyOwnershipStatsView struct {
+	AdminTotal int                    `json:"admin_total"`
+	Owners     []apiKeyOwnerCountView `json:"owners"`
 }
 
 // apiKeyRecordStatsRequest is the request body for the batch stats endpoint.
@@ -140,7 +155,9 @@ func (h *Handler) ListAPIKeyRecordsLite(c *gin.Context) {
 		return
 	}
 
-	filtered := filterAPIKeyRecordsLite(items, params)
+	accessible := h.filterAPIKeyRecordsForPrincipal(c, items)
+	ownershipStats := buildAPIKeyOwnershipStats(accessible)
+	filtered := filterAPIKeyRecordsLite(accessible, params)
 	sortAPIKeyRecordsLite(filtered, params)
 
 	total := len(filtered)
@@ -177,6 +194,7 @@ func (h *Handler) ListAPIKeyRecordsLite(c *gin.Context) {
 			Total:      total,
 			TotalPages: totalPages,
 		},
+		OwnershipStats: ownershipStats,
 	})
 }
 
@@ -278,11 +296,13 @@ func (h *Handler) buildAPIKeyRecordSummariesLite(ctx context.Context, now time.T
 	result := make([]apiKeyRecordSummaryLiteView, 0, len(keys))
 	for _, apiKey := range keys {
 		view := apiKeyRecordSummaryLiteView{
-			APIKey:       apiKey,
-			MaskedAPIKey: util.HideAPIKey(apiKey),
-			Name:         "",
-			Note:         "",
-			Registered:   h.apiKeyExists(apiKey),
+			APIKey:        apiKey,
+			MaskedAPIKey:  util.HideAPIKey(apiKey),
+			Name:          "",
+			Note:          "",
+			OwnerUsername: "legacy_admin",
+			OwnerRole:     "admin",
+			Registered:    h.apiKeyExists(apiKey),
 		}
 		explicit := h.cfg.FindAPIKeyPolicy(apiKey)
 		view.HasExplicitPolicy = explicit != nil
@@ -293,6 +313,8 @@ func (h *Handler) buildAPIKeyRecordSummariesLite(ctx context.Context, now time.T
 			view.CreatedAt = strings.TrimSpace(effective.CreatedAt)
 			view.ExpiresAt = strings.TrimSpace(effective.ExpiresAt)
 			view.Disabled = effective.Disabled
+			view.OwnerUsername = apiKeyOwnerUsername(effective)
+			view.OwnerRole = apiKeyOwnerRole(effective)
 			view.GroupID = strings.TrimSpace(effective.GroupID)
 			view.DailyLimitCount = len(effective.DailyLimits)
 			view.PolicyFamily = effective.ClaudeGPTTargetFamilyOrDefault()
@@ -356,10 +378,12 @@ func filterAPIKeyRecordsLite(items []apiKeyRecordSummaryLiteView, params apiKeyR
 			maskedLower := strings.ToLower(item.MaskedAPIKey)
 			nameLower := strings.ToLower(strings.TrimSpace(item.Name))
 			noteLower := strings.ToLower(strings.TrimSpace(item.Note))
+			ownerLower := strings.ToLower(strings.TrimSpace(item.OwnerUsername))
 			if !strings.Contains(apiKeyLower, search) &&
 				!strings.Contains(maskedLower, search) &&
 				!strings.Contains(nameLower, search) &&
-				!strings.Contains(noteLower, search) {
+				!strings.Contains(noteLower, search) &&
+				!strings.Contains(ownerLower, search) {
 				continue
 			}
 		}
@@ -432,6 +456,57 @@ func sortAPIKeyRecordsLite(items []apiKeyRecordSummaryLiteView, params apiKeyRec
 			return left.After(*right)
 		})
 	}
+}
+
+func (h *Handler) filterAPIKeyRecordsForPrincipal(c *gin.Context, items []apiKeyRecordSummaryLiteView) []apiKeyRecordSummaryLiteView {
+	if !managementIsStaff(c) {
+		return items
+	}
+	username := managementUsername(c)
+	result := make([]apiKeyRecordSummaryLiteView, 0, len(items))
+	for _, item := range items {
+		if item.OwnerRole == string(managementauth.RoleStaff) && item.OwnerUsername == username {
+			result = append(result, item)
+		}
+	}
+	return result
+}
+
+func buildAPIKeyOwnershipStats(items []apiKeyRecordSummaryLiteView) apiKeyOwnershipStatsView {
+	counts := make(map[string]apiKeyOwnerCountView)
+	stats := apiKeyOwnershipStatsView{}
+	for _, item := range items {
+		role := normalizeAPIKeyOwnerRole(item.OwnerRole)
+		if role == "" {
+			role = string(managementauth.RoleAdmin)
+		}
+		username := strings.TrimSpace(item.OwnerUsername)
+		if username == "" {
+			username = "legacy_admin"
+		}
+		if role == string(managementauth.RoleAdmin) {
+			stats.AdminTotal++
+		}
+		key := role + "\x00" + username
+		count := counts[key]
+		if count.Username == "" {
+			count.Username = username
+			count.Role = role
+		}
+		count.Count++
+		counts[key] = count
+	}
+	stats.Owners = make([]apiKeyOwnerCountView, 0, len(counts))
+	for _, count := range counts {
+		stats.Owners = append(stats.Owners, count)
+	}
+	sort.Slice(stats.Owners, func(i, j int) bool {
+		if stats.Owners[i].Role != stats.Owners[j].Role {
+			return stats.Owners[i].Role < stats.Owners[j].Role
+		}
+		return stats.Owners[i].Username < stats.Owners[j].Username
+	})
+	return stats
 }
 
 // compareStringWithEmptyLast sorts non-empty values first when desc, and keeps

@@ -418,6 +418,8 @@ func TestGetAPIKeyRecord_StaffReceivesPolicyOnlyDetailWithoutBillingStore(t *tes
 				APIKey:                "k-staff",
 				Name:                  "Staff Key",
 				Note:                  "Editable by staff",
+				OwnerUsername:         "user_01",
+				OwnerRole:             "staff",
 				GroupID:               "team-alpha",
 				DailyBudgetUSD:        12.5,
 				WeeklyBudgetUSD:       44.25,
@@ -461,6 +463,9 @@ func TestGetAPIKeyRecord_StaffReceivesPolicyOnlyDetailWithoutBillingStore(t *tes
 	if body.Summary.Name != "Staff Key" || body.Summary.Note != "Editable by staff" {
 		t.Fatalf("unexpected summary metadata: %+v", body.Summary)
 	}
+	if body.Summary.OwnerUsername != "user_01" || body.Summary.OwnerRole != "staff" {
+		t.Fatalf("unexpected owner metadata: %+v", body.Summary)
+	}
 	if body.Summary.Today.CostUSD != 0 || body.CurrentPeriod.CostUSD != 0 {
 		t.Fatalf("staff detail should not include usage totals: %+v", body)
 	}
@@ -472,6 +477,36 @@ func TestGetAPIKeyRecord_StaffReceivesPolicyOnlyDetailWithoutBillingStore(t *tes
 	}
 	if body.Group == nil || body.Group.ID != "team-alpha" {
 		t.Fatalf("expected resolved group, got %+v", body.Group)
+	}
+}
+
+func TestGetAPIKeyRecord_StaffCannotReadUnownedKey(t *testing.T) {
+	t.Parallel()
+	gin.SetMode(gin.TestMode)
+
+	handler, cleanup := newAPIKeyRecordsTestHandler(t, &config.Config{
+		SDKConfig: sdkconfig.SDKConfig{APIKeys: []string{"k-owned", "k-other"}},
+		APIKeyPolicies: []config.APIKeyPolicy{
+			{APIKey: "k-owned", OwnerUsername: "user_01", OwnerRole: "staff"},
+			{APIKey: "k-other", OwnerUsername: "user_02", OwnerRole: "staff"},
+		},
+	})
+	defer cleanup()
+	handler.billingStore = nil
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Params = gin.Params{{Key: "apiKey", Value: "k-other"}}
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/v0/management/api-key-records/k-other", nil)
+	setManagementPrincipal(ctx, managementPrincipal{
+		Username: "user_01",
+		Role:     managementauth.RoleStaff,
+	})
+
+	handler.GetAPIKeyRecord(ctx)
+
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
 	}
 }
 
