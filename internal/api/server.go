@@ -7,6 +7,7 @@ package api
 import (
 	"context"
 	"crypto/subtle"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -1588,6 +1589,13 @@ func AuthMiddleware(manager *sdkaccess.Manager) gin.HandlerFunc {
 		if statusCode >= http.StatusInternalServerError {
 			log.Errorf("authentication middleware error: %v", err)
 		}
-		c.AbortWithStatusJSON(statusCode, gin.H{"error": err.Message})
+		body, marshalErr := json.Marshal(gin.H{"error": err.Message})
+		if marshalErr != nil {
+			body = handlers.BuildErrorResponseBodyWithRequestID(statusCode, err.Message, handlers.GinRequestID(c))
+		} else {
+			body = handlers.AttachRequestIDToErrorBody(body, handlers.GinRequestID(c))
+		}
+		c.Data(statusCode, gin.MIMEJSON, body)
+		c.Abort()
 	}
 }

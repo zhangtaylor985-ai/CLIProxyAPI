@@ -511,6 +511,8 @@ func (s *PostgresStore) ensureSchema(ctx context.Context) error {
 			quoteIdentifier("idx_session_trajectory_requests_session_request_index"), s.table("session_trajectory_requests")),
 		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS %s ON %s (user_id, started_at DESC)`,
 			quoteIdentifier("idx_session_trajectory_requests_user_started_at"), s.table("session_trajectory_requests")),
+		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS %s ON %s (started_at DESC)`,
+			quoteIdentifier("idx_session_trajectory_requests_started_at"), s.table("session_trajectory_requests")),
 		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS %s ON %s (provider_request_id) WHERE provider_request_id IS NOT NULL`,
 			quoteIdentifier("idx_session_trajectory_requests_provider_request"), s.table("session_trajectory_requests")),
 		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS %s ON %s (upstream_log_id) WHERE upstream_log_id IS NOT NULL`,

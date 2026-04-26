@@ -104,7 +104,7 @@ func (h *GeminiCLIAPIHandler) CLIHandler(c *gin.Context) {
 			bodyBytes, _ := io.ReadAll(resp.Body)
 
 			status := handlers.ClientErrorStatusForResponse(resp.StatusCode, string(bodyBytes))
-			body := handlers.BuildErrorResponseBody(status, string(bodyBytes))
+			body := handlers.BuildErrorResponseBodyWithRequestID(status, string(bodyBytes), handlers.GinRequestID(c))
 			c.Data(status, "application/json", body)
 			return
 		}
@@ -218,7 +218,7 @@ func (h *GeminiCLIAPIHandler) forwardCLIStream(c *gin.Context, flusher http.Flus
 			if errMsg.Error != nil && errMsg.Error.Error() != "" {
 				errText = errMsg.Error.Error()
 			}
-			body := handlers.BuildErrorResponseBody(handlers.ClientErrorStatusForResponse(status, errText), errText)
+			body := handlers.BuildErrorResponseBodyWithRequestID(handlers.ClientErrorStatusForResponse(status, errText), errText, handlers.GinRequestID(c))
 			if alt == "" {
 				_, _ = fmt.Fprintf(c.Writer, "event: error\ndata: %s\n\n", string(body))
 			} else {

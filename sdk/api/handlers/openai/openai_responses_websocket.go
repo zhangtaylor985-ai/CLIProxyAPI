@@ -131,7 +131,7 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 		if errMsg != nil {
 			h.LoggingAPIResponseError(context.WithValue(context.Background(), "gin", c), errMsg)
 			markAPIResponseTimestamp(c)
-			errorPayload, errWrite := writeResponsesWebsocketError(conn, errMsg)
+			errorPayload, errWrite := writeResponsesWebsocketError(conn, errMsg, handlers.GinRequestID(c))
 			appendWebsocketEvent(&wsBodyLog, "response", errorPayload)
 			log.Infof(
 				"responses websocket: downstream_out id=%s type=%d event=%s payload=%s",
@@ -627,7 +627,7 @@ func (h *OpenAIResponsesAPIHandler) forwardResponsesWebsocket(
 			if errMsg != nil {
 				h.LoggingAPIResponseError(context.WithValue(context.Background(), "gin", c), errMsg)
 				markAPIResponseTimestamp(c)
-				errorPayload, errWrite := writeResponsesWebsocketError(conn, errMsg)
+				errorPayload, errWrite := writeResponsesWebsocketError(conn, errMsg, handlers.GinRequestID(c))
 				appendWebsocketEvent(wsBodyLog, "response", errorPayload)
 				log.Infof(
 					"responses websocket: downstream_out id=%s type=%d event=%s payload=%s",
@@ -662,7 +662,7 @@ func (h *OpenAIResponsesAPIHandler) forwardResponsesWebsocket(
 					}
 					h.LoggingAPIResponseError(context.WithValue(context.Background(), "gin", c), errMsg)
 					markAPIResponseTimestamp(c)
-					errorPayload, errWrite := writeResponsesWebsocketError(conn, errMsg)
+					errorPayload, errWrite := writeResponsesWebsocketError(conn, errMsg, handlers.GinRequestID(c))
 					appendWebsocketEvent(wsBodyLog, "response", errorPayload)
 					log.Infof(
 						"responses websocket: downstream_out id=%s type=%d event=%s payload=%s",
@@ -760,7 +760,7 @@ func websocketJSONPayloadsFromChunk(chunk []byte) [][]byte {
 	return payloads
 }
 
-func writeResponsesWebsocketError(conn *websocket.Conn, errMsg *interfaces.ErrorMessage) ([]byte, error) {
+func writeResponsesWebsocketError(conn *websocket.Conn, errMsg *interfaces.ErrorMessage, requestID string) ([]byte, error) {
 	status := http.StatusInternalServerError
 	errText := http.StatusText(status)
 	if errMsg != nil {
@@ -779,7 +779,7 @@ func writeResponsesWebsocketError(conn *websocket.Conn, errMsg *interfaces.Error
 	} else {
 		status = handlers.ClientErrorStatusForResponse(status, errText)
 	}
-	body := handlers.BuildErrorResponseBody(status, errText)
+	body := handlers.BuildErrorResponseBodyWithRequestID(status, errText, requestID)
 	payload := []byte(`{}`)
 	var errSet error
 	payload, errSet = sjson.SetBytes(payload, "type", wsEventTypeError)

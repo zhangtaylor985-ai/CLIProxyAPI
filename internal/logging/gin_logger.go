@@ -49,6 +49,10 @@ func GinLogrusLogger() gin.HandlerFunc {
 		if isAIAPIPath(path) {
 			requestID = GenerateRequestID()
 			SetGinRequestID(c, requestID)
+			c.Writer.Header().Set("X-CLIProxy-Request-Id", requestID)
+			if c.Writer.Header().Get("X-Request-Id") == "" {
+				c.Writer.Header().Set("X-Request-Id", requestID)
+			}
 			ctx := WithRequestID(c.Request.Context(), requestID)
 			c.Request = c.Request.WithContext(ctx)
 		}

@@ -11,6 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/interfaces"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/logging"
 	sdkconfig "github.com/router-for-me/CLIProxyAPI/v6/sdk/config"
 )
 
@@ -119,6 +120,43 @@ func TestBuildErrorResponseBody_PreservesBenignBudgetError(t *testing.T) {
 	}
 	if payload.Error.Message != "daily budget exceeded" {
 		t.Fatalf("message = %q", payload.Error.Message)
+	}
+}
+
+func TestAttachRequestIDToErrorBody(t *testing.T) {
+	body := AttachRequestIDToErrorBody([]byte(`{"error":{"message":"bad","type":"invalid_request_error"}}`), "abc123ef")
+
+	var payload ErrorResponse
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if payload.RequestID != "abc123ef" {
+		t.Fatalf("request_id = %q, want abc123ef", payload.RequestID)
+	}
+	if payload.Error.Message != "bad" {
+		t.Fatalf("message = %q, want bad", payload.Error.Message)
+	}
+}
+
+func TestWriteErrorResponse_AttachesLocalRequestID(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	logging.SetGinRequestID(c, "deadbeef")
+
+	handler := NewBaseAPIHandlers(nil, nil)
+	handler.WriteErrorResponse(c, &interfaces.ErrorMessage{
+		StatusCode: http.StatusBadRequest,
+		Error:      errors.New("bad request"),
+	})
+
+	var payload ErrorResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if payload.RequestID != "deadbeef" {
+		t.Fatalf("request_id = %q, want deadbeef", payload.RequestID)
 	}
 }
 

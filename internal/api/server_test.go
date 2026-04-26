@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -16,6 +17,14 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 	sdkconfig "github.com/router-for-me/CLIProxyAPI/v6/sdk/config"
 )
+
+type rejectingAccessProvider struct{}
+
+func (rejectingAccessProvider) Identifier() string { return "rejecting-test" }
+
+func (rejectingAccessProvider) Authenticate(context.Context, *http.Request) (*sdkaccess.Result, *sdkaccess.AuthError) {
+	return nil, sdkaccess.NewInvalidCredentialError()
+}
 
 func newTestServer(t *testing.T) *Server {
 	t.Helper()
@@ -126,6 +135,38 @@ func TestHealthzRouteDoesNotRequireAPIKey(t *testing.T) {
 	for _, want := range []string{`"status":"ok"`, `"service":"cliproxyapi"`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("healthz response missing %q: %s", want, body)
+		}
+	}
+}
+
+func TestAuthMiddleware_AttachesRequestIDToAuthErrors(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	manager := sdkaccess.NewManager()
+	manager.SetProviders([]sdkaccess.Provider{rejectingAccessProvider{}})
+
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		internallogging.SetGinRequestID(c, "req-auth-test")
+		c.Next()
+	})
+	router.Use(AuthMiddleware(manager))
+	router.GET("/v1/messages", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/messages", nil)
+	req.Header.Set("Authorization", "Bearer bad-key")
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("unexpected status code: got %d want %d; body=%s", rr.Code, http.StatusUnauthorized, rr.Body.String())
+	}
+	body := rr.Body.String()
+	for _, want := range []string{`"error":"Invalid API key"`, `"request_id":"req-auth-test"`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("auth error response missing %q: %s", want, body)
 		}
 	}
 }

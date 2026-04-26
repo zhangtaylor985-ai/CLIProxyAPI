@@ -16,6 +16,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/logging"
 	internalutil "github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/api/handlers"
 	log "github.com/sirupsen/logrus"
@@ -77,7 +78,7 @@ func APIKeyUpstreamProxyMiddleware(getConfig func() *config.Config) gin.HandlerF
 		proxyHandler, err := newAPIKeyUpstreamReverseProxy(upstreamBase, cfg)
 		if err != nil {
 			log.WithError(err).Warnf("api key upstream proxy: invalid upstream-base-url for key %s", hideAPIKeySafe(apiKey))
-			body := handlers.BuildErrorResponseBody(http.StatusBadGateway, "invalid upstream-base-url")
+			body := handlers.BuildErrorResponseBodyWithRequestID(http.StatusBadGateway, "invalid upstream-base-url", handlers.GinRequestID(c))
 			c.Abort()
 			c.Data(http.StatusBadGateway, "application/json", body)
 			return
@@ -170,9 +171,13 @@ func newAPIKeyUpstreamReverseProxy(upstreamBaseURL string, cfg *config.Config) (
 		}
 	}
 
-	errorHandler := func(rw http.ResponseWriter, _ *http.Request, err error) {
+	errorHandler := func(rw http.ResponseWriter, r *http.Request, err error) {
 		log.WithError(err).Warnf("api key upstream proxy: upstream request failed (%s)", upstreamBaseURL)
-		body := handlers.BuildErrorResponseBody(http.StatusBadGateway, "upstream proxy error")
+		requestID := ""
+		if r != nil {
+			requestID = logging.GetRequestID(r.Context())
+		}
+		body := handlers.BuildErrorResponseBodyWithRequestID(http.StatusBadGateway, "upstream proxy error", requestID)
 		rw.Header().Set("Content-Type", "application/json")
 		rw.WriteHeader(http.StatusBadGateway)
 		_, _ = rw.Write(body)

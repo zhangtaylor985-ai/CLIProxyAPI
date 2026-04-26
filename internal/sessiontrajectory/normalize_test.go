@@ -75,6 +75,23 @@ func TestExtractProviderSessionIDFromStructuredMetadataUserID(t *testing.T) {
 	}
 }
 
+func TestNormalizeCompletedRequestExtractsEmbeddedProviderRequestIDFromErrorMessage(t *testing.T) {
+	normalized, _, _, _, err := normalizeCompletedRequest(&CompletedRequest{
+		RequestURL:   "/v1/chat/completions",
+		RequestBody:  []byte(`{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":"hi"}]}`),
+		ResponseBody: []byte(`{"error":{"type":"invalid_request_error","message":"thinking is enabled but reasoning_content is missing in assistant tool call message at index 6 (request id: 20260426085751352687748KdidbVim)"},"type":"error"}`),
+	})
+	if err != nil {
+		t.Fatalf("normalizeCompletedRequest: %v", err)
+	}
+	if normalized == nil {
+		t.Fatal("expected normalized conversation")
+	}
+	if normalized.ProviderRequestID != "20260426085751352687748KdidbVim" {
+		t.Fatalf("provider request id = %q", normalized.ProviderRequestID)
+	}
+}
+
 func TestNormalizeCompletedRequestCompactsAnthropicStreamResponse(t *testing.T) {
 	response := []byte("event: message_start\n" +
 		"data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"gpt-5.4\",\"content\":[],\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":12,\"output_tokens\":0}}}\n\n" +

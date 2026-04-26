@@ -14,6 +14,7 @@ import (
 )
 
 var compositeSessionPattern = regexp.MustCompile(`(^|[^A-Za-z0-9])session[_:-]([A-Za-z0-9][A-Za-z0-9._-]*)([^A-Za-z0-9._-]|$)`)
+var embeddedRequestIDPattern = regexp.MustCompile(`(?i)\brequest[_ -]?id\b\s*[:=]\s*([A-Za-z0-9][A-Za-z0-9._:-]{5,})`)
 
 type usageSummary struct {
 	InputTokens     int64 `json:"input_tokens"`
@@ -74,7 +75,7 @@ func normalizeCompletedRequest(record *CompletedRequest) (*normalizedConversatio
 		CanonicalModelFamily: canonicalModelFamily(strings.TrimSpace(firstNonEmptyJSON(requestRoot, responseRoot, "model", "response.model", "message.model"))),
 		UserAgent:            strings.TrimSpace(firstHeader(record.RequestHeaders, "User-Agent")),
 		ProviderSessionID:    extractProviderSessionID(requestRoot, responseRoot),
-		ProviderRequestID:    strings.TrimSpace(firstNonEmptyJSON(responseRoot, requestRoot, "id", "request_id", "response.id", "message.id")),
+		ProviderRequestID:    extractProviderRequestID(requestRoot, responseRoot),
 		UpstreamLogID:        strings.TrimSpace(firstNonEmptyHeader(record.ResponseHeaders, "X-Request-Id", "Request-Id", "Openai-Request-Id")),
 		System:               cloneJSON(system),
 		Tools:                cloneJSON(tools),
@@ -97,6 +98,30 @@ func normalizeCompletedRequest(record *CompletedRequest) (*normalizedConversatio
 		return nil, requestJSON, responseJSON, nil, err
 	}
 	return result, requestJSON, responseJSON, normalizedJSON, nil
+}
+
+func extractProviderRequestID(requestRoot, responseRoot gjson.Result) string {
+	if id := strings.TrimSpace(firstNonEmptyJSON(responseRoot, requestRoot, "id", "request_id", "response.id", "message.id")); id != "" {
+		return id
+	}
+	for _, path := range []string{"error.message", "message", "error"} {
+		if id := extractEmbeddedRequestID(responseRoot.Get(path).String()); id != "" {
+			return id
+		}
+	}
+	return ""
+}
+
+func extractEmbeddedRequestID(text string) string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ""
+	}
+	match := embeddedRequestIDPattern.FindStringSubmatch(text)
+	if len(match) < 2 {
+		return ""
+	}
+	return strings.Trim(strings.TrimSpace(match[1]), ".,;)")
 }
 
 func pickPrimaryJSON(values ...[]byte) []byte {

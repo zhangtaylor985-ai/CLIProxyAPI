@@ -80,14 +80,14 @@ func APIKeyPolicyMiddleware(getConfig func() *config.Config, limiter policy.Dail
 		policyEntry := cfg.EffectiveAPIKeyPolicy(apiKey)
 		if policyEntry != nil {
 			if policyEntry.IsDisabledAt(time.Now()) {
-				body := handlers.BuildErrorResponseBody(http.StatusForbidden, "api key disabled or expired")
+				body := buildPolicyErrorResponseBody(c, http.StatusForbidden, "api key disabled or expired")
 				c.Abort()
 				c.Data(http.StatusForbidden, "application/json", body)
 				return
 			}
 			resolved, _, errResolve := apikeygroup.ApplyGroupBudget(c.Request.Context(), groupStore, policyEntry)
 			if errResolve != nil {
-				body := handlers.BuildErrorResponseBody(http.StatusInternalServerError, errResolve.Error())
+				body := buildPolicyErrorResponseBody(c, http.StatusInternalServerError, errResolve.Error())
 				c.Abort()
 				c.Data(http.StatusInternalServerError, "application/json", body)
 				return
@@ -98,7 +98,7 @@ func APIKeyPolicyMiddleware(getConfig func() *config.Config, limiter policy.Dail
 			c.Set(apiKeyPolicyContextKey, policyEntry)
 		}
 		if policyEntry != nil && policyEntry.ClaudeCodeOnlyEnabled() && !clientidentity.IsClaudeCodeRequest(c.Request) {
-			body := handlers.BuildErrorResponseBody(http.StatusForbidden, "api key is restricted to Claude Code clients")
+			body := buildPolicyErrorResponseBody(c, http.StatusForbidden, "api key is restricted to Claude Code clients")
 			c.Abort()
 			c.Data(http.StatusForbidden, "application/json", body)
 			return
@@ -151,7 +151,7 @@ func APIKeyPolicyMiddleware(getConfig func() *config.Config, limiter policy.Dail
 		if cfg.ClaudeToGPTRoutingEnabled && policyEntry != nil && policyEntry.ClaudeModelsEnabled() && policyEntry.ClaudeUsageLimitEnabled() && policy.IsClaudeModel(effectiveModel) {
 			exceeded, errExceeded := claudeUsageLimitExceeded(c.Request.Context(), costReader, apiKey, policyEntry)
 			if errExceeded != nil {
-				body := handlers.BuildErrorResponseBody(http.StatusInternalServerError, errExceeded.Error())
+				body := buildPolicyErrorResponseBody(c, http.StatusInternalServerError, errExceeded.Error())
 				c.Abort()
 				c.Data(http.StatusInternalServerError, "application/json", body)
 				return
@@ -163,7 +163,7 @@ func APIKeyPolicyMiddleware(getConfig func() *config.Config, limiter policy.Dail
 				if policyEntry != nil {
 					policyEntry, _, errExceeded = apikeygroup.ApplyGroupBudget(c.Request.Context(), groupStore, policyEntry)
 					if errExceeded != nil {
-						body := handlers.BuildErrorResponseBody(http.StatusInternalServerError, errExceeded.Error())
+						body := buildPolicyErrorResponseBody(c, http.StatusInternalServerError, errExceeded.Error())
 						c.Abort()
 						c.Data(http.StatusInternalServerError, "application/json", body)
 						return
@@ -219,7 +219,7 @@ func APIKeyPolicyMiddleware(getConfig func() *config.Config, limiter policy.Dail
 				}
 			}
 			if denied {
-				body := handlers.BuildErrorResponseBody(http.StatusForbidden, "model access denied by api key policy")
+				body := buildPolicyErrorResponseBody(c, http.StatusForbidden, "model access denied by api key policy")
 				c.Abort()
 				c.Data(http.StatusForbidden, "application/json", body)
 				return
@@ -232,25 +232,25 @@ func APIKeyPolicyMiddleware(getConfig func() *config.Config, limiter policy.Dail
 		budgetState := billing.BudgetReplayState{}
 		if spendConstrained {
 			if costReader == nil {
-				body := handlers.BuildErrorResponseBody(http.StatusInternalServerError, "billing store unavailable")
+				body := buildPolicyErrorResponseBody(c, http.StatusInternalServerError, "billing store unavailable")
 				c.Abort()
 				c.Data(http.StatusInternalServerError, "application/json", body)
 				return
 			}
 			resolver, ok := costReader.(priceResolver)
 			if !ok {
-				body := handlers.BuildErrorResponseBody(http.StatusInternalServerError, "billing price resolver unavailable")
+				body := buildPolicyErrorResponseBody(c, http.StatusInternalServerError, "billing price resolver unavailable")
 				c.Abort()
 				c.Data(http.StatusInternalServerError, "application/json", body)
 				return
 			}
 			if _, source, _, errPrice := resolver.ResolvePriceMicro(c.Request.Context(), budgetModel); errPrice != nil {
-				body := handlers.BuildErrorResponseBody(http.StatusInternalServerError, errPrice.Error())
+				body := buildPolicyErrorResponseBody(c, http.StatusInternalServerError, errPrice.Error())
 				c.Abort()
 				c.Data(http.StatusInternalServerError, "application/json", body)
 				return
 			} else if source == "missing" {
-				body := handlers.BuildErrorResponseBody(http.StatusServiceUnavailable, "budgeted model price unavailable")
+				body := buildPolicyErrorResponseBody(c, http.StatusServiceUnavailable, "budgeted model price unavailable")
 				c.Abort()
 				c.Data(http.StatusServiceUnavailable, "application/json", body)
 				return
@@ -258,14 +258,14 @@ func APIKeyPolicyMiddleware(getConfig func() *config.Config, limiter policy.Dail
 			if hasTokenPackage {
 				store, ok := costReader.(billing.UsageEventReader)
 				if !ok {
-					body := handlers.BuildErrorResponseBody(http.StatusInternalServerError, "billing store unavailable")
+					body := buildPolicyErrorResponseBody(c, http.StatusInternalServerError, "billing store unavailable")
 					c.Abort()
 					c.Data(http.StatusInternalServerError, "application/json", body)
 					return
 				}
 				budgetState, err = billing.ComputeBudgetReplayState(c.Request.Context(), store, apiKey, requestNow, policyEntry)
 				if err != nil {
-					body := handlers.BuildErrorResponseBody(http.StatusInternalServerError, err.Error())
+					body := buildPolicyErrorResponseBody(c, http.StatusInternalServerError, err.Error())
 					c.Abort()
 					c.Data(http.StatusInternalServerError, "application/json", body)
 					return
@@ -281,7 +281,7 @@ func APIKeyPolicyMiddleware(getConfig func() *config.Config, limiter policy.Dail
 			case policyEntry.WeeklyBudgetUSD > 0 && budgetState.WeeklyRemainingMicro <= 0:
 				message = "weekly budget exceeded"
 			}
-			body := handlers.BuildErrorResponseBody(http.StatusTooManyRequests, message)
+			body := buildPolicyErrorResponseBody(c, http.StatusTooManyRequests, message)
 			c.Abort()
 			c.Data(http.StatusTooManyRequests, "application/json", body)
 			return
@@ -289,14 +289,14 @@ func APIKeyPolicyMiddleware(getConfig func() *config.Config, limiter policy.Dail
 		if hasBaseBudgets && !hasTokenPackage && policyEntry.DailyBudgetUSD > 0 {
 			spentMicro, errSpent := costReader.GetDailyCostMicroUSD(c.Request.Context(), apiKey, policy.DayKeyChina(requestNow))
 			if errSpent != nil {
-				body := handlers.BuildErrorResponseBody(http.StatusInternalServerError, errSpent.Error())
+				body := buildPolicyErrorResponseBody(c, http.StatusInternalServerError, errSpent.Error())
 				c.Abort()
 				c.Data(http.StatusInternalServerError, "application/json", body)
 				return
 			}
 			budgetMicro := int64(math.Round(policyEntry.DailyBudgetUSD * 1_000_000))
 			if budgetMicro > 0 && spentMicro >= budgetMicro {
-				body := handlers.BuildErrorResponseBody(http.StatusTooManyRequests, "daily budget exceeded")
+				body := buildPolicyErrorResponseBody(c, http.StatusTooManyRequests, "daily budget exceeded")
 				c.Abort()
 				c.Data(http.StatusTooManyRequests, "application/json", body)
 				return
@@ -305,28 +305,28 @@ func APIKeyPolicyMiddleware(getConfig func() *config.Config, limiter policy.Dail
 		if hasBaseBudgets && !hasTokenPackage && policyEntry.WeeklyBudgetUSD > 0 {
 			start, end, errBounds := policyEntry.WeeklyBudgetBounds(requestNow)
 			if errBounds != nil {
-				body := handlers.BuildErrorResponseBody(http.StatusInternalServerError, errBounds.Error())
+				body := buildPolicyErrorResponseBody(c, http.StatusInternalServerError, errBounds.Error())
 				c.Abort()
 				c.Data(http.StatusInternalServerError, "application/json", body)
 				return
 			}
 			spentMicro, errSpent := costReader.GetCostMicroUSDByTimeRange(c.Request.Context(), apiKey, start, end)
 			if errSpent != nil {
-				body := handlers.BuildErrorResponseBody(http.StatusInternalServerError, errSpent.Error())
+				body := buildPolicyErrorResponseBody(c, http.StatusInternalServerError, errSpent.Error())
 				c.Abort()
 				c.Data(http.StatusInternalServerError, "application/json", body)
 				return
 			}
 			budgetMicro := int64(math.Round(policyEntry.WeeklyBudgetUSD * 1_000_000))
 			if budgetMicro > 0 && spentMicro >= budgetMicro {
-				body := handlers.BuildErrorResponseBody(http.StatusTooManyRequests, "weekly budget exceeded")
+				body := buildPolicyErrorResponseBody(c, http.StatusTooManyRequests, "weekly budget exceeded")
 				c.Abort()
 				c.Data(http.StatusTooManyRequests, "application/json", body)
 				return
 			}
 		}
 		if !hasBaseBudgets && hasTokenPackage && budgetState.PackageRemainingMicro <= 0 {
-			body := handlers.BuildErrorResponseBody(http.StatusTooManyRequests, "token package exhausted")
+			body := buildPolicyErrorResponseBody(c, http.StatusTooManyRequests, "token package exhausted")
 			c.Abort()
 			c.Data(http.StatusTooManyRequests, "application/json", body)
 			return
@@ -338,7 +338,7 @@ func APIKeyPolicyMiddleware(getConfig func() *config.Config, limiter policy.Dail
 			limit, limitKey := resolveDailyLimit(policyEntry, modelKey)
 			if limit > 0 {
 				if limiter == nil {
-					body := handlers.BuildErrorResponseBody(http.StatusInternalServerError, "daily limiter unavailable")
+					body := buildPolicyErrorResponseBody(c, http.StatusInternalServerError, "daily limiter unavailable")
 					c.Abort()
 					c.Data(http.StatusInternalServerError, "application/json", body)
 					return
@@ -346,13 +346,13 @@ func APIKeyPolicyMiddleware(getConfig func() *config.Config, limiter policy.Dail
 				dayKey := policy.DayKeyChina(requestNow)
 				_, allowed, errConsume := limiter.Consume(c.Request.Context(), apiKey, limitKey, dayKey, limit)
 				if errConsume != nil {
-					body := handlers.BuildErrorResponseBody(http.StatusInternalServerError, errConsume.Error())
+					body := buildPolicyErrorResponseBody(c, http.StatusInternalServerError, errConsume.Error())
 					c.Abort()
 					c.Data(http.StatusInternalServerError, "application/json", body)
 					return
 				}
 				if !allowed {
-					body := handlers.BuildErrorResponseBody(http.StatusTooManyRequests, "daily model limit exceeded")
+					body := buildPolicyErrorResponseBody(c, http.StatusTooManyRequests, "daily model limit exceeded")
 					c.Abort()
 					c.Data(http.StatusTooManyRequests, "application/json", body)
 					return
@@ -594,4 +594,8 @@ func dayBoundsChina(now time.Time) (time.Time, time.Time) {
 	local := now.In(policy.ChinaLocation())
 	start := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, policy.ChinaLocation())
 	return start, start.AddDate(0, 0, 1)
+}
+
+func buildPolicyErrorResponseBody(c *gin.Context, status int, message string) []byte {
+	return handlers.BuildErrorResponseBodyWithRequestID(status, message, handlers.GinRequestID(c))
 }

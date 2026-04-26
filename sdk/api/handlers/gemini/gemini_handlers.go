@@ -331,7 +331,7 @@ func (h *GeminiAPIHandler) forwardGeminiStream(c *gin.Context, flusher http.Flus
 			if errMsg.Error != nil && errMsg.Error.Error() != "" {
 				errText = errMsg.Error.Error()
 			}
-			body := handlers.BuildErrorResponseBody(handlers.ClientErrorStatusForResponse(status, errText), errText)
+			body := handlers.BuildErrorResponseBodyWithRequestID(handlers.ClientErrorStatusForResponse(status, errText), errText, handlers.GinRequestID(c))
 			if alt == "" {
 				_, _ = fmt.Fprintf(c.Writer, "event: error\ndata: %s\n\n", string(body))
 			} else {

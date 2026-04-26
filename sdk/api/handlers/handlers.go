@@ -38,6 +38,9 @@ import (
 type ErrorResponse struct {
 	// Error contains detailed information about the error that occurred.
 	Error ErrorDetail `json:"error"`
+
+	// RequestID is the local proxy request id operators can use for lookup.
+	RequestID string `json:"request_id,omitempty"`
 }
 
 // ErrorDetail provides specific information about an error that occurred.
@@ -230,6 +233,48 @@ func BuildErrorResponseBody(status int, errText string) []byte {
 		return []byte(fmt.Sprintf(`{"error":{"message":%q,"type":"server_error","code":"internal_server_error"}}`, errText))
 	}
 	return payload
+}
+
+// BuildErrorResponseBodyWithRequestID builds an OpenAI-compatible error body
+// and attaches the local proxy request id when available.
+func BuildErrorResponseBodyWithRequestID(status int, errText string, requestID string) []byte {
+	return AttachRequestIDToErrorBody(BuildErrorResponseBody(status, errText), requestID)
+}
+
+// AttachRequestIDToErrorBody adds a top-level request_id field to JSON error
+// responses. Invalid/non-object payloads are returned unchanged.
+func AttachRequestIDToErrorBody(body []byte, requestID string) []byte {
+	requestID = strings.TrimSpace(requestID)
+	if requestID == "" {
+		return body
+	}
+	trimmed := bytes.TrimSpace(body)
+	if len(trimmed) == 0 || !json.Valid(trimmed) {
+		return body
+	}
+	root := gjson.ParseBytes(trimmed)
+	if !root.IsObject() || strings.TrimSpace(root.Get("request_id").String()) != "" {
+		return body
+	}
+	updated, err := sjson.SetBytes(trimmed, "request_id", requestID)
+	if err != nil {
+		return body
+	}
+	return updated
+}
+
+// GinRequestID returns the local proxy request id attached by logging middleware.
+func GinRequestID(c *gin.Context) string {
+	if c == nil {
+		return ""
+	}
+	if requestID := logging.GetGinRequestID(c); requestID != "" {
+		return requestID
+	}
+	if c.Request != nil {
+		return logging.GetRequestID(c.Request.Context())
+	}
+	return ""
 }
 
 // BuildClaudeErrorResponseBody builds a Claude-compatible JSON error response body.
@@ -2503,6 +2548,8 @@ func (h *BaseAPIHandler) writeErrorResponseBody(c *gin.Context, msg *interfaces.
 			}
 		}
 	}
+	body = AttachRequestIDToErrorBody(body, GinRequestID(c))
+
 	// Append first to preserve upstream response logs, then drop duplicate payloads if already recorded.
 	var previous []byte
 	if existing, exists := c.Get("API_RESPONSE"); exists {
