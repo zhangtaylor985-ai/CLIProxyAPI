@@ -26,6 +26,10 @@ const (
 	apiKeyPolicyContextKey = "apiKeyPolicy"
 	claudeOpus1MHeaderName = "X-CPA-CLAUDE-1M"
 	claudeOpus1MBetaName   = "context-1m-2025-08-07"
+
+	claudeBaseContextLimitTokens        = 200000
+	claudePromptTooLongEstimateDivisor  = 3
+	claudePromptTooLongErrorContentType = "application/json"
 )
 
 func modelSupportsPriorityServiceTier(model string) bool {
@@ -120,14 +124,18 @@ func APIKeyPolicyMiddleware(getConfig func() *config.Config, limiter policy.Dail
 			c.Next()
 			return
 		}
-		c.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+		replaceRequestBody(c, bodyBytes)
 
 		if !allowClaudeOpus1M {
 			filteredBody := stripClaudeOpus1MBetaFromBody(bodyBytes)
 			if !bytes.Equal(filteredBody, bodyBytes) {
 				bodyBytes = filteredBody
-				c.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
-				c.Request.ContentLength = int64(len(bodyBytes))
+				replaceRequestBody(c, bodyBytes)
+			}
+			rewrittenBody := rewriteClaudeOpus1MModelInBody(bodyBytes)
+			if !bytes.Equal(rewrittenBody, bodyBytes) {
+				bodyBytes = rewrittenBody
+				replaceRequestBody(c, bodyBytes)
 			}
 		}
 
@@ -135,6 +143,19 @@ func APIKeyPolicyMiddleware(getConfig func() *config.Config, limiter policy.Dail
 		if model == "" {
 			c.Next()
 			return
+		}
+		if !allowClaudeOpus1M && shouldEnforceClaudeBaseContextLimit(c.Request, model) {
+			estimatedTokens := estimateClaudeRequestTokens(bodyBytes)
+			if estimatedTokens > claudeBaseContextLimitTokens {
+				body := buildClaudePolicyErrorResponseBody(
+					c,
+					"invalid_request_error",
+					fmt.Sprintf("Prompt is too long: %d tokens > %d maximum", estimatedTokens, claudeBaseContextLimitTokens),
+				)
+				c.Abort()
+				c.Data(http.StatusBadRequest, claudePromptTooLongErrorContentType, body)
+				return
+			}
 		}
 
 		requestNow := time.Now()
@@ -195,8 +216,7 @@ func APIKeyPolicyMiddleware(getConfig func() *config.Config, limiter policy.Dail
 		if policyEntry != nil && policyEntry.FastModeEnabled() && modelSupportsPriorityServiceTier(budgetModel) {
 			if updated, errSet := sjson.SetBytes(bodyBytes, "service_tier", "priority"); errSet == nil {
 				bodyBytes = updated
-				c.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
-				c.Request.ContentLength = int64(len(bodyBytes))
+				replaceRequestBody(c, bodyBytes)
 				requesttrace.UpsertAPIKeyPolicyTraceOnGin(c, func(trace *requesttrace.APIKeyPolicyTrace) {
 					trace.APIKey = apiKey
 					trace.FastModeEnabled = true
@@ -364,13 +384,20 @@ func APIKeyPolicyMiddleware(getConfig func() *config.Config, limiter policy.Dail
 		if effectiveModel != model {
 			modified, errSet := sjson.SetBytes(bodyBytes, "model", effectiveModel)
 			if errSet == nil {
-				c.Request.Body = io.NopCloser(bytes.NewBuffer(modified))
-				c.Request.ContentLength = int64(len(modified))
+				replaceRequestBody(c, modified)
 			}
 		}
 
 		c.Next()
 	}
+}
+
+func replaceRequestBody(c *gin.Context, body []byte) {
+	if c == nil || c.Request == nil {
+		return
+	}
+	c.Request.Body = io.NopCloser(bytes.NewBuffer(body))
+	c.Request.ContentLength = int64(len(body))
 }
 
 func stripClaudeOpus1MHeaders(header http.Header) {
@@ -423,6 +450,44 @@ func stripClaudeOpus1MBetaFromBody(body []byte) []byte {
 		return body
 	}
 	return next
+}
+
+func rewriteClaudeOpus1MModelInBody(body []byte) []byte {
+	model := strings.TrimSpace(gjson.GetBytes(body, "model").String())
+	if model == "" {
+		return body
+	}
+	rewritten, changed := policy.RewriteClaudeOpus1MToBase(model)
+	if !changed {
+		return body
+	}
+	next, err := sjson.SetBytes(body, "model", rewritten)
+	if err != nil {
+		return body
+	}
+	return next
+}
+
+func shouldEnforceClaudeBaseContextLimit(req *http.Request, model string) bool {
+	if req == nil || req.Method != http.MethodPost {
+		return false
+	}
+	if !isClaudeOpusModel(model) {
+		return false
+	}
+	path := strings.TrimRight(req.URL.Path, "/")
+	return strings.HasSuffix(path, "/v1/messages")
+}
+
+func isClaudeOpusModel(model string) bool {
+	return strings.HasPrefix(policy.NormaliseModelKey(model), "claude-opus-")
+}
+
+func estimateClaudeRequestTokens(body []byte) int {
+	if len(body) == 0 {
+		return 0
+	}
+	return (len(body) + claudePromptTooLongEstimateDivisor - 1) / claudePromptTooLongEstimateDivisor
 }
 
 func filterBetaFeatures(header, featureToRemove string) string {
@@ -598,4 +663,17 @@ func dayBoundsChina(now time.Time) (time.Time, time.Time) {
 
 func buildPolicyErrorResponseBody(c *gin.Context, status int, message string) []byte {
 	return handlers.BuildErrorResponseBodyWithRequestID(status, message, handlers.GinRequestID(c))
+}
+
+func buildClaudePolicyErrorResponseBody(c *gin.Context, errType string, message string) []byte {
+	errType = strings.TrimSpace(errType)
+	if errType == "" {
+		errType = "api_error"
+	}
+	message = strings.TrimSpace(message)
+	if message == "" {
+		message = http.StatusText(http.StatusBadRequest)
+	}
+	body := []byte(fmt.Sprintf(`{"type":"error","error":{"type":%q,"message":%q}}`, errType, message))
+	return handlers.AttachRequestIDToErrorBody(body, handlers.GinRequestID(c))
 }

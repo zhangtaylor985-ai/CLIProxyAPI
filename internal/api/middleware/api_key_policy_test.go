@@ -3,6 +3,7 @@ package middleware
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -74,7 +75,7 @@ func TestAPIKeyPolicyMiddleware_StripsClaudeOpus1MSignalsWhenGloballyDisabled(t 
 		})
 	})
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewBufferString(`{"model":"claude-opus-4-6","betas":["context-1m-2025-08-07","other-beta"]}`))
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewBufferString(`{"model":"claude-opus-4-6[1m]","betas":["context-1m-2025-08-07","other-beta"]}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-CPA-CLAUDE-1M", "1")
 	req.Header.Set("Anthropic-Beta", "foo, context-1m-2025-08-07, bar")
@@ -94,6 +95,9 @@ func TestAPIKeyPolicyMiddleware_StripsClaudeOpus1MSignalsWhenGloballyDisabled(t 
 	}
 	if got := gjson.GetBytes(w.Body.Bytes(), "body_betas.#").Int(); got != 1 {
 		t.Fatalf("body_betas count=%d", got)
+	}
+	if got := gjson.GetBytes(w.Body.Bytes(), "body_model").String(); got != "claude-opus-4-6" {
+		t.Fatalf("body_model=%q", got)
 	}
 }
 
@@ -118,10 +122,11 @@ func TestAPIKeyPolicyMiddleware_PreservesClaudeOpus1MSignalsForPerKeyOverride(t 
 			"beta_header": c.Request.Header.Get("Anthropic-Beta"),
 			"claude_1m":   c.Request.Header.Get("X-CPA-CLAUDE-1M"),
 			"body_betas":  gjson.GetBytes(body, "betas").Value(),
+			"body_model":  gjson.GetBytes(body, "model").String(),
 		})
 	})
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewBufferString(`{"model":"claude-opus-4-6","betas":["context-1m-2025-08-07","other-beta"]}`))
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewBufferString(`{"model":"claude-opus-4-6[1m]","betas":["context-1m-2025-08-07","other-beta"]}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-CPA-CLAUDE-1M", "1")
 	req.Header.Set("Anthropic-Beta", "foo, context-1m-2025-08-07, bar")
@@ -138,6 +143,77 @@ func TestAPIKeyPolicyMiddleware_PreservesClaudeOpus1MSignalsForPerKeyOverride(t 
 	}
 	if got := gjson.GetBytes(w.Body.Bytes(), "body_betas.#").Int(); got != 2 {
 		t.Fatalf("body_betas count=%d", got)
+	}
+	if got := gjson.GetBytes(w.Body.Bytes(), "body_model").String(); got != "claude-opus-4-6[1m]" {
+		t.Fatalf("body_model=%q", got)
+	}
+}
+
+func TestAPIKeyPolicyMiddleware_RejectsOversizedOpusWhen1MDisabled(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	cfg := &config.Config{
+		SDKConfig: config.SDKConfig{DisableClaudeOpus1M: true},
+	}
+
+	downstreamCalled := false
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set("apiKey", "k")
+		c.Next()
+	})
+	r.Use(APIKeyPolicyMiddleware(func() *config.Config { return cfg }, nil, nil, nil))
+	r.POST("/v1/messages", func(c *gin.Context) {
+		downstreamCalled = true
+		c.JSON(200, gin.H{"ok": true})
+	})
+
+	largeContent := strings.Repeat("a", claudeBaseContextLimitTokens*claudePromptTooLongEstimateDivisor+1)
+	payload := fmt.Sprintf(`{"model":"claude-opus-4-6","messages":[{"role":"user","content":%q}]}`, largeContent)
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewBufferString(payload))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if downstreamCalled {
+		t.Fatal("downstream handler was called")
+	}
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	if got := gjson.GetBytes(w.Body.Bytes(), "error.type").String(); got != "invalid_request_error" {
+		t.Fatalf("error.type=%q body=%s", got, w.Body.String())
+	}
+	if got := gjson.GetBytes(w.Body.Bytes(), "error.message").String(); !strings.Contains(strings.ToLower(got), "prompt is too long") {
+		t.Fatalf("error.message=%q", got)
+	}
+}
+
+func TestAPIKeyPolicyMiddleware_AllowsOversizedOpusForPerKey1MOverride(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	cfg := &config.Config{
+		SDKConfig: config.SDKConfig{DisableClaudeOpus1M: true},
+		APIKeyPolicies: []config.APIKeyPolicy{
+			{APIKey: "k", EnableClaudeOpus1M: boolPtr(true)},
+		},
+	}
+
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set("apiKey", "k")
+		c.Next()
+	})
+	r.Use(APIKeyPolicyMiddleware(func() *config.Config { return cfg }, nil, nil, nil))
+	r.POST("/v1/messages", func(c *gin.Context) {
+		c.JSON(200, gin.H{"ok": true})
+	})
+
+	largeContent := strings.Repeat("a", claudeBaseContextLimitTokens*claudePromptTooLongEstimateDivisor+1)
+	payload := fmt.Sprintf(`{"model":"claude-opus-4-6","messages":[{"role":"user","content":%q}]}`, largeContent)
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewBufferString(payload))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 	}
 }
 

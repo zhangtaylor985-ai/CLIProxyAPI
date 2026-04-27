@@ -39,6 +39,38 @@ func TestLoadConfigOptional_ClaudeCodeOnlyAllowsExplicitDisable(t *testing.T) {
 	}
 }
 
+func TestLoadConfigOptional_DisableClaudeOpus1MDefaultsEnabled(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(configPath, []byte("debug: false\n"), 0o600); err != nil {
+		t.Fatalf("failed to write config: %v", err)
+	}
+
+	cfg, err := LoadConfigOptional(configPath, false)
+	if err != nil {
+		t.Fatalf("LoadConfigOptional() error = %v", err)
+	}
+	if !cfg.DisableClaudeOpus1M {
+		t.Fatal("DisableClaudeOpus1M = false, want true by default")
+	}
+}
+
+func TestLoadConfigOptional_DisableClaudeOpus1MAllowsExplicitDisable(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(configPath, []byte("disable-claude-opus-1m: false\n"), 0o600); err != nil {
+		t.Fatalf("failed to write config: %v", err)
+	}
+
+	cfg, err := LoadConfigOptional(configPath, false)
+	if err != nil {
+		t.Fatalf("LoadConfigOptional() error = %v", err)
+	}
+	if cfg.DisableClaudeOpus1M {
+		t.Fatal("DisableClaudeOpus1M = true, want explicit false")
+	}
+}
+
 func TestConfig_EffectiveAPIKeyPolicy_UsesGlobalClaudeCodeOnlyByDefault(t *testing.T) {
 	cfg := &Config{
 		SDKConfig: SDKConfig{

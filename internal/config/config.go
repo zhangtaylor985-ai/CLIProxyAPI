@@ -715,6 +715,7 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 	cfg.Pprof.Addr = DefaultPprofAddr
 	cfg.AmpCode.RestrictManagementToLocalhost = false // Default to false: API key auth is sufficient
 	cfg.RemoteManagement.PanelGitHubRepository = DefaultPanelGitHubRepository
+	cfg.DisableClaudeOpus1M = true
 	cfg.ClaudeCodeOnlyEnabled = true
 	cfg.ClaudeToGPTReasoningEffort = policy.EffectiveClaudeGPTReasoningEffort("")
 	cfg.SessionTrajectoryEnabled = true
