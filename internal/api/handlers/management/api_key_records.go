@@ -671,7 +671,7 @@ func (h *Handler) buildAPIKeySummary(ctx context.Context, apiKey string, now tim
 		Disabled:           false,
 		GroupID:            "",
 		GroupName:          "",
-		OwnerUsername:      "legacy_admin",
+		OwnerUsername:      "admin",
 		OwnerRole:          "admin",
 		Registered:         h.apiKeyExists(apiKey),
 		HasExplicitPolicy:  explicitPolicy != nil,
@@ -715,7 +715,7 @@ func (h *Handler) buildAPIKeyPolicyOnlySummary(apiKey string, now time.Time, eff
 		MaskedAPIKey:      util.HideAPIKey(apiKey),
 		Registered:        h.apiKeyExists(apiKey),
 		HasExplicitPolicy: h.cfg != nil && h.cfg.FindAPIKeyPolicy(apiKey) != nil,
-		OwnerUsername:     "legacy_admin",
+		OwnerUsername:     "admin",
 		OwnerRole:         "admin",
 		DailyBudget: apiKeyBudgetWindowView{
 			Enabled: false,
@@ -1269,7 +1269,7 @@ func defaultAPIKeyPolicyView(apiKey string) apiKeyPolicyView {
 		CodexChannelMode:   "auto",
 		AllowClaudeOpus46:  true,
 		DailyLimits:        map[string]int{},
-		OwnerUsername:      "legacy_admin",
+		OwnerUsername:      "admin",
 		OwnerRole:          "admin",
 	}
 }
@@ -1340,11 +1340,13 @@ func stampPolicyOwner(policyEntry *config.APIKeyPolicy, username, role string) {
 	}
 	username = strings.TrimSpace(username)
 	role = normalizeAPIKeyOwnerRole(role)
-	if username == "" {
-		username = "legacy_admin"
-	}
 	if role == "" {
 		role = "admin"
+	}
+	if role == string(managementauth.RoleAdmin) {
+		username = "admin"
+	} else if username == "" {
+		username = "unknown"
 	}
 	policyEntry.OwnerUsername = username
 	policyEntry.OwnerRole = role
@@ -1363,12 +1365,12 @@ func normalizeAPIKeyOwnerRole(role string) string {
 
 func apiKeyOwnerUsername(policyEntry *config.APIKeyPolicy) string {
 	if policyEntry == nil {
-		return "legacy_admin"
+		return "admin"
 	}
-	if value := strings.TrimSpace(policyEntry.OwnerUsername); value != "" {
-		return value
+	if apiKeyOwnerRole(policyEntry) == string(managementauth.RoleAdmin) {
+		return "admin"
 	}
-	return "legacy_admin"
+	return strings.TrimSpace(policyEntry.OwnerUsername)
 }
 
 func apiKeyOwnerRole(policyEntry *config.APIKeyPolicy) string {
@@ -1378,7 +1380,7 @@ func apiKeyOwnerRole(policyEntry *config.APIKeyPolicy) string {
 	if value := normalizeAPIKeyOwnerRole(policyEntry.OwnerRole); value != "" {
 		return value
 	}
-	return "admin"
+	return string(managementauth.RoleAdmin)
 }
 
 func (h *Handler) apiKeyOwner(apiKey string) (string, string) {
@@ -1397,6 +1399,26 @@ func (h *Handler) canManageAPIKey(c *gin.Context, apiKey string) bool {
 	}
 	ownerUsername, ownerRole := h.apiKeyOwner(apiKey)
 	return ownerRole == string(managementauth.RoleStaff) && ownerUsername == managementUsername(c)
+}
+
+func apiKeyOwnerUsernameForRole(username, role string) string {
+	role = normalizeAPIKeyOwnerRole(role)
+	if role == string(managementauth.RoleAdmin) || role == "" {
+		return "admin"
+	}
+	return strings.TrimSpace(username)
+}
+
+func apiKeyRecordOwnerMatchesFilter(username, role, ownerFilter string) bool {
+	ownerFilter = strings.TrimSpace(ownerFilter)
+	if ownerFilter == "" {
+		return true
+	}
+	role = normalizeAPIKeyOwnerRole(role)
+	if role == string(managementauth.RoleAdmin) {
+		return ownerFilter == "admin"
+	}
+	return role == string(managementauth.RoleStaff) && strings.TrimSpace(username) == ownerFilter
 }
 
 func (h *Handler) notifyAPIKeyManagementAction(c *gin.Context, action, apiKey string, policyEntry *config.APIKeyPolicy) {

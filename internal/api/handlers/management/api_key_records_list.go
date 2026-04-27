@@ -98,6 +98,7 @@ type apiKeyRecordListParams struct {
 	Search   string
 	Status   string
 	GroupID  string
+	Owner    string
 	Sort     string
 	Order    string
 }
@@ -133,6 +134,7 @@ func parseAPIKeyRecordListParams(c *gin.Context) apiKeyRecordListParams {
 		Search:   strings.ToLower(strings.TrimSpace(c.Query("search"))),
 		Status:   status,
 		GroupID:  strings.TrimSpace(c.Query("group_id")),
+		Owner:    strings.TrimSpace(c.Query("owner")),
 		Sort:     sortKey,
 		Order:    order,
 	}
@@ -300,7 +302,7 @@ func (h *Handler) buildAPIKeyRecordSummariesLite(ctx context.Context, now time.T
 			MaskedAPIKey:  util.HideAPIKey(apiKey),
 			Name:          "",
 			Note:          "",
-			OwnerUsername: "legacy_admin",
+			OwnerUsername: "admin",
 			OwnerRole:     "admin",
 			Registered:    h.apiKeyExists(apiKey),
 		}
@@ -371,6 +373,7 @@ func filterAPIKeyRecordsLite(items []apiKeyRecordSummaryLiteView, params apiKeyR
 	search := params.Search
 	groupID := params.GroupID
 	status := params.Status
+	owner := strings.TrimSpace(params.Owner)
 	result := make([]apiKeyRecordSummaryLiteView, 0, len(items))
 	for _, item := range items {
 		if search != "" {
@@ -388,6 +391,9 @@ func filterAPIKeyRecordsLite(items []apiKeyRecordSummaryLiteView, params apiKeyR
 			}
 		}
 		if groupID != "" && strings.TrimSpace(item.GroupID) != groupID {
+			continue
+		}
+		if owner != "" && !apiKeyRecordOwnerMatchesFilter(item.OwnerUsername, item.OwnerRole, owner) {
 			continue
 		}
 		switch status {
@@ -465,7 +471,7 @@ func (h *Handler) filterAPIKeyRecordsForPrincipal(c *gin.Context, items []apiKey
 	username := managementUsername(c)
 	result := make([]apiKeyRecordSummaryLiteView, 0, len(items))
 	for _, item := range items {
-		if item.OwnerRole == string(managementauth.RoleStaff) && item.OwnerUsername == username {
+		if normalizeAPIKeyOwnerRole(item.OwnerRole) == string(managementauth.RoleStaff) && item.OwnerUsername == username {
 			result = append(result, item)
 		}
 	}
@@ -480,13 +486,10 @@ func buildAPIKeyOwnershipStats(items []apiKeyRecordSummaryLiteView) apiKeyOwners
 		if role == "" {
 			role = string(managementauth.RoleAdmin)
 		}
-		username := strings.TrimSpace(item.OwnerUsername)
-		if username == "" {
-			username = "legacy_admin"
-		}
 		if role == string(managementauth.RoleAdmin) {
 			stats.AdminTotal++
 		}
+		username := apiKeyOwnerUsernameForRole(item.OwnerUsername, role)
 		key := role + "\x00" + username
 		count := counts[key]
 		if count.Username == "" {

@@ -236,7 +236,7 @@ func (s *PostgresStore) ensureSchema(ctx context.Context) error {
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			expires_at TIMESTAMPTZ NULL,
 			disabled BOOLEAN NOT NULL DEFAULT FALSE,
-			owner_username TEXT NOT NULL DEFAULT 'legacy_admin',
+			owner_username TEXT NOT NULL DEFAULT 'admin',
 			owner_role TEXT NOT NULL DEFAULT 'admin',
 			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		)
@@ -245,14 +245,14 @@ func (s *PostgresStore) ensureSchema(ctx context.Context) error {
 	}
 	if _, err := s.db.ExecContext(ctx, fmt.Sprintf(`
 		ALTER TABLE %s
-			ADD COLUMN IF NOT EXISTS owner_username TEXT NOT NULL DEFAULT 'legacy_admin',
+			ADD COLUMN IF NOT EXISTS owner_username TEXT NOT NULL DEFAULT 'admin',
 			ADD COLUMN IF NOT EXISTS owner_role TEXT NOT NULL DEFAULT 'admin'
 	`, s.table)); err != nil {
 		return fmt.Errorf("api key config store: add owner columns: %w", err)
 	}
 	if _, err := s.db.ExecContext(ctx, fmt.Sprintf(`
 		UPDATE %s
-		SET owner_username = 'legacy_admin'
+		SET owner_username = 'admin'
 		WHERE owner_username IS NULL OR btrim(owner_username) = ''
 	`, s.table)); err != nil {
 		return fmt.Errorf("api key config store: backfill owner username: %w", err)
@@ -263,6 +263,31 @@ func (s *PostgresStore) ensureSchema(ctx context.Context) error {
 		WHERE owner_role IS NULL OR btrim(owner_role) = ''
 	`, s.table)); err != nil {
 		return fmt.Errorf("api key config store: backfill owner role: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, fmt.Sprintf(`
+		UPDATE %s
+		SET owner_role = 'staff'
+		WHERE replace(replace(replace(lower(btrim(owner_username)), '_', ''), '-', ''), ' ', '') IN ('user01', 'user02')
+	`, s.table)); err != nil {
+		return fmt.Errorf("api key config store: infer staff owner roles: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, fmt.Sprintf(`
+		UPDATE %s
+		SET owner_username = CASE
+			WHEN replace(replace(replace(lower(btrim(owner_username)), '_', ''), '-', ''), ' ', '') = 'user01' THEN 'user_01'
+			WHEN replace(replace(replace(lower(btrim(owner_username)), '_', ''), '-', ''), ' ', '') = 'user02' THEN 'user_02'
+			ELSE owner_username
+		END
+		WHERE replace(replace(replace(lower(btrim(owner_username)), '_', ''), '-', ''), ' ', '') IN ('user01', 'user02')
+	`, s.table)); err != nil {
+		return fmt.Errorf("api key config store: normalize staff owner usernames: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, fmt.Sprintf(`
+		UPDATE %s
+		SET owner_username = 'admin'
+		WHERE lower(btrim(owner_role)) = 'admin' AND btrim(owner_username) <> 'admin'
+	`, s.table)); err != nil {
+		return fmt.Errorf("api key config store: collapse admin owner username: %w", err)
 	}
 	if _, err := s.db.ExecContext(ctx, fmt.Sprintf(`
 		CREATE INDEX IF NOT EXISTS %s ON %s (disabled, expires_at)

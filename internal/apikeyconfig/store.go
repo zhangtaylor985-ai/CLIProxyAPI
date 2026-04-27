@@ -208,7 +208,7 @@ func clonePolicies(policies []config.APIKeyPolicy) []config.APIKeyPolicy {
 func defaultStoredPolicy(apiKey string) config.APIKeyPolicy {
 	return config.APIKeyPolicy{
 		APIKey:         strings.TrimSpace(apiKey),
-		OwnerUsername:  "legacy_admin",
+		OwnerUsername:  "admin",
 		OwnerRole:      "admin",
 		ExcludedModels: config.BuildExcludedModelFamilies(true, false, nil),
 	}
@@ -264,11 +264,13 @@ func normalizeRecords(records []Record) []Record {
 		if record.OwnerRole == "" {
 			record.OwnerRole = normalizeOwnerRole(record.Policy.OwnerRole)
 		}
-		if record.OwnerUsername == "" {
-			record.OwnerUsername = "legacy_admin"
-		}
 		if record.OwnerRole == "" {
 			record.OwnerRole = "admin"
+		}
+		if record.OwnerRole == "admin" {
+			record.OwnerUsername = "admin"
+		} else if record.OwnerUsername == "" {
+			record.OwnerUsername = "unknown"
 		}
 		record.Policy.OwnerUsername = record.OwnerUsername
 		record.Policy.OwnerRole = record.OwnerRole

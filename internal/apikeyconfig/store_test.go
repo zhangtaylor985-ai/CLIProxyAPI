@@ -32,8 +32,8 @@ func TestStateFromConfigAndApplyToConfig(t *testing.T) {
 	if state.Records[0].OwnerUsername != "user_01" || state.Records[0].OwnerRole != "staff" {
 		t.Fatalf("expected explicit owner to be preserved, got %#v", state.Records[0])
 	}
-	if state.Records[1].OwnerUsername != "legacy_admin" || state.Records[1].OwnerRole != "admin" {
-		t.Fatalf("expected legacy owner defaults for key-2, got %#v", state.Records[1])
+	if state.Records[1].OwnerUsername != "admin" || state.Records[1].OwnerRole != "admin" {
+		t.Fatalf("expected admin owner defaults for key-2, got %#v", state.Records[1])
 	}
 
 	target := &config.Config{

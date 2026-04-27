@@ -200,9 +200,10 @@ func TestListAPIKeyRecordsLite_FiltersStaffToOwnedKeysAndReturnsOwnerStats(t *te
 	gin.SetMode(gin.TestMode)
 
 	handler, cleanup := newAPIKeyRecordsTestHandler(t, &config.Config{
-		SDKConfig: sdkconfig.SDKConfig{APIKeys: []string{"admin-key", "staff-one", "staff-two"}},
+		SDKConfig: sdkconfig.SDKConfig{APIKeys: []string{"admin-key", "admin-legacy", "staff-one", "staff-two"}},
 		APIKeyPolicies: []config.APIKeyPolicy{
-			{APIKey: "admin-key", OwnerUsername: "root_admin", OwnerRole: "admin"},
+			{APIKey: "admin-key", OwnerUsername: "admin", OwnerRole: "admin"},
+			{APIKey: "admin-legacy", OwnerUsername: "admin", OwnerRole: "admin"},
 			{APIKey: "staff-one", OwnerUsername: "user_01", OwnerRole: "staff"},
 			{APIKey: "staff-two", OwnerUsername: "user_02", OwnerRole: "staff"},
 		},
@@ -213,14 +214,27 @@ func TestListAPIKeyRecordsLite_FiltersStaffToOwnedKeysAndReturnsOwnerStats(t *te
 	if status != http.StatusOK {
 		t.Fatalf("admin status = %d", status)
 	}
-	if got := collectAPIKeysFromList(adminResp); len(got) != 3 {
-		t.Fatalf("admin list = %v, want 3 items", got)
+	if got := collectAPIKeysFromList(adminResp); len(got) != 4 {
+		t.Fatalf("admin list = %v, want 4 items", got)
 	}
-	if adminResp.OwnershipStats.AdminTotal != 1 {
-		t.Fatalf("admin_total = %d, want 1", adminResp.OwnershipStats.AdminTotal)
+	if adminResp.OwnershipStats.AdminTotal != 2 {
+		t.Fatalf("admin_total = %d, want 2", adminResp.OwnershipStats.AdminTotal)
 	}
 	if len(adminResp.OwnershipStats.Owners) != 3 {
 		t.Fatalf("owner stats = %+v, want 3 owners", adminResp.OwnershipStats.Owners)
+	}
+	if adminResp.OwnershipStats.Owners[0].Role != "admin" || adminResp.OwnershipStats.Owners[0].Username != "admin" || adminResp.OwnershipStats.Owners[0].Count != 2 {
+		t.Fatalf("admin owner stats = %+v, want collapsed admin owner", adminResp.OwnershipStats.Owners)
+	}
+
+	adminOnlyResp, _ := runListAPIKeyRecords(t, handler, "owner=admin&sort=api_key&order=asc")
+	if got := collectAPIKeysFromList(adminOnlyResp); len(got) != 2 || got[0] != "admin-key" || got[1] != "admin-legacy" {
+		t.Fatalf("admin owner filter = %v, want [admin-key admin-legacy]", got)
+	}
+
+	user02Resp, _ := runListAPIKeyRecords(t, handler, "owner=user_02&sort=api_key&order=asc")
+	if got := collectAPIKeysFromList(user02Resp); len(got) != 1 || got[0] != "staff-two" {
+		t.Fatalf("user_02 owner filter = %v, want [staff-two]", got)
 	}
 
 	recorder := httptest.NewRecorder()
