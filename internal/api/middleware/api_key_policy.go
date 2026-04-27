@@ -30,6 +30,7 @@ const (
 	claudeBaseContextLimitTokens        = 200000
 	claudePromptTooLongEstimateDivisor  = 3
 	claudePromptTooLongErrorContentType = "application/json"
+	claudePromptTooLongMessage          = "Prompt is too long. Please run /compact and try again."
 )
 
 func modelSupportsPriorityServiceTier(model string) bool {
@@ -150,7 +151,7 @@ func APIKeyPolicyMiddleware(getConfig func() *config.Config, limiter policy.Dail
 				body := buildClaudePolicyErrorResponseBody(
 					c,
 					"invalid_request_error",
-					fmt.Sprintf("Prompt is too long: %d tokens > %d maximum", estimatedTokens, claudeBaseContextLimitTokens),
+					claudePromptTooLongMessage,
 				)
 				c.Abort()
 				c.Data(http.StatusBadRequest, claudePromptTooLongErrorContentType, body)

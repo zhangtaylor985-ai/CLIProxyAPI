@@ -182,7 +182,7 @@ func TestAPIKeyPolicyMiddleware_RejectsOversizedOpusWhen1MDisabled(t *testing.T)
 	if got := gjson.GetBytes(w.Body.Bytes(), "error.type").String(); got != "invalid_request_error" {
 		t.Fatalf("error.type=%q body=%s", got, w.Body.String())
 	}
-	if got := gjson.GetBytes(w.Body.Bytes(), "error.message").String(); !strings.Contains(strings.ToLower(got), "prompt is too long") {
+	if got := gjson.GetBytes(w.Body.Bytes(), "error.message").String(); got != claudePromptTooLongMessage {
 		t.Fatalf("error.message=%q", got)
 	}
 }
