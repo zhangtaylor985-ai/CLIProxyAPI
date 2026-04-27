@@ -176,6 +176,16 @@ type emptyBootstrapStreamExecutor struct {
 	calls int
 }
 
+type claudePreludeOnlyStreamExecutor struct {
+	mu    sync.Mutex
+	calls int
+}
+
+type claudePreludeThenErrorStreamExecutor struct {
+	mu    sync.Mutex
+	calls int
+}
+
 func (e *incompleteBootstrapStreamExecutor) Identifier() string { return "codex" }
 
 func (e *incompleteBootstrapStreamExecutor) Execute(context.Context, *coreauth.Auth, coreexecutor.Request, coreexecutor.Options) (coreexecutor.Response, error) {
@@ -255,6 +265,132 @@ func (e *emptyBootstrapStreamExecutor) HttpRequest(ctx context.Context, auth *co
 }
 
 func (e *emptyBootstrapStreamExecutor) Calls() int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.calls
+}
+
+func (e *claudePreludeOnlyStreamExecutor) Identifier() string { return "codex" }
+
+func (e *claudePreludeOnlyStreamExecutor) Execute(context.Context, *coreauth.Auth, coreexecutor.Request, coreexecutor.Options) (coreexecutor.Response, error) {
+	return coreexecutor.Response{}, &coreauth.Error{Code: "not_implemented", Message: "Execute not implemented"}
+}
+
+func (e *claudePreludeOnlyStreamExecutor) ExecuteStream(context.Context, *coreauth.Auth, coreexecutor.Request, coreexecutor.Options) (*coreexecutor.StreamResult, error) {
+	e.mu.Lock()
+	e.calls++
+	e.mu.Unlock()
+
+	ch := make(chan coreexecutor.StreamChunk, 3)
+	ch <- coreexecutor.StreamChunk{Payload: []byte(`event: message_start
+data: {"type":"message_start","message":{"id":"resp_empty","type":"message","role":"assistant","model":"gpt-5.5","content":[],"usage":{"input_tokens":0,"output_tokens":0},"stop_reason":null}}
+
+`)}
+	ch <- coreexecutor.StreamChunk{Payload: []byte(`event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"input_tokens":0,"output_tokens":0}}
+
+event: message_stop
+data: {"type":"message_stop"}
+
+`)}
+	close(ch)
+	return &coreexecutor.StreamResult{Chunks: ch}, nil
+}
+
+func (e *claudePreludeOnlyStreamExecutor) Refresh(ctx context.Context, auth *coreauth.Auth) (*coreauth.Auth, error) {
+	return auth, nil
+}
+
+func (e *claudePreludeOnlyStreamExecutor) CountTokens(context.Context, *coreauth.Auth, coreexecutor.Request, coreexecutor.Options) (coreexecutor.Response, error) {
+	return coreexecutor.Response{}, &coreauth.Error{Code: "not_implemented", Message: "CountTokens not implemented"}
+}
+
+func (e *claudePreludeOnlyStreamExecutor) HttpRequest(ctx context.Context, auth *coreauth.Auth, req *http.Request) (*http.Response, error) {
+	return nil, &coreauth.Error{
+		Code:       "not_implemented",
+		Message:    "HttpRequest not implemented",
+		HTTPStatus: http.StatusNotImplemented,
+	}
+}
+
+func (e *claudePreludeOnlyStreamExecutor) Calls() int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.calls
+}
+
+func (e *claudePreludeThenErrorStreamExecutor) Identifier() string { return "codex" }
+
+func (e *claudePreludeThenErrorStreamExecutor) Execute(context.Context, *coreauth.Auth, coreexecutor.Request, coreexecutor.Options) (coreexecutor.Response, error) {
+	return coreexecutor.Response{}, &coreauth.Error{Code: "not_implemented", Message: "Execute not implemented"}
+}
+
+func (e *claudePreludeThenErrorStreamExecutor) ExecuteStream(context.Context, *coreauth.Auth, coreexecutor.Request, coreexecutor.Options) (*coreexecutor.StreamResult, error) {
+	e.mu.Lock()
+	e.calls++
+	call := e.calls
+	e.mu.Unlock()
+
+	ch := make(chan coreexecutor.StreamChunk, 4)
+	if call == 1 {
+		ch <- coreexecutor.StreamChunk{Payload: []byte(`event: message_start
+data: {"type":"message_start","message":{"id":"resp_first","type":"message","role":"assistant","model":"gpt-5.5","content":[],"usage":{"input_tokens":0,"output_tokens":0},"stop_reason":null}}
+
+`)}
+		ch <- coreexecutor.StreamChunk{
+			Err: &coreauth.Error{
+				Code:       "stream_incomplete",
+				Message:    "stream error: stream disconnected before completion: stream closed before response.completed",
+				Retryable:  false,
+				HTTPStatus: http.StatusRequestTimeout,
+			},
+		}
+		close(ch)
+		return &coreexecutor.StreamResult{Chunks: ch}, nil
+	}
+
+	ch <- coreexecutor.StreamChunk{Payload: []byte(`event: message_start
+data: {"type":"message_start","message":{"id":"resp_second","type":"message","role":"assistant","model":"gpt-5.5","content":[],"usage":{"input_tokens":1,"output_tokens":1},"stop_reason":null}}
+
+`)}
+	ch <- coreexecutor.StreamChunk{Payload: []byte(`event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}
+
+`)}
+	ch <- coreexecutor.StreamChunk{Payload: []byte(`event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ok"}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":0}
+
+event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"input_tokens":1,"output_tokens":1}}
+
+event: message_stop
+data: {"type":"message_stop"}
+
+`)}
+	close(ch)
+	return &coreexecutor.StreamResult{Chunks: ch}, nil
+}
+
+func (e *claudePreludeThenErrorStreamExecutor) Refresh(ctx context.Context, auth *coreauth.Auth) (*coreauth.Auth, error) {
+	return auth, nil
+}
+
+func (e *claudePreludeThenErrorStreamExecutor) CountTokens(context.Context, *coreauth.Auth, coreexecutor.Request, coreexecutor.Options) (coreexecutor.Response, error) {
+	return coreexecutor.Response{}, &coreauth.Error{Code: "not_implemented", Message: "CountTokens not implemented"}
+}
+
+func (e *claudePreludeThenErrorStreamExecutor) HttpRequest(ctx context.Context, auth *coreauth.Auth, req *http.Request) (*http.Response, error) {
+	return nil, &coreauth.Error{
+		Code:       "not_implemented",
+		Message:    "HttpRequest not implemented",
+		HTTPStatus: http.StatusNotImplemented,
+	}
+}
+
+func (e *claudePreludeThenErrorStreamExecutor) Calls() int {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.calls
@@ -822,5 +958,121 @@ func TestExecuteStreamWithAuthManager_ReturnsErrorWhenStreamClosesBeforeFirstPay
 	}
 	if executor.Calls() != 1 {
 		t.Fatalf("expected single upstream stream attempt, got %d calls", executor.Calls())
+	}
+}
+
+func TestExecuteStreamWithAuthManager_ClaudePreludeOnlyDoesNotCommitEmptyMessage(t *testing.T) {
+	executor := &claudePreludeOnlyStreamExecutor{}
+	manager := coreauth.NewManager(nil, nil, nil)
+	manager.RegisterExecutor(executor)
+
+	auth1 := &coreauth.Auth{
+		ID:       "auth1",
+		Provider: "codex",
+		Status:   coreauth.StatusActive,
+		Metadata: map[string]any{"email": "test1@example.com"},
+	}
+	if _, err := manager.Register(context.Background(), auth1); err != nil {
+		t.Fatalf("manager.Register(auth1): %v", err)
+	}
+
+	registry.GetGlobalRegistry().RegisterClient(auth1.ID, auth1.Provider, []*registry.ModelInfo{{ID: "test-claude-prelude-only"}})
+	t.Cleanup(func() {
+		registry.GetGlobalRegistry().UnregisterClient(auth1.ID)
+	})
+
+	handler := NewBaseAPIHandlers(&sdkconfig.SDKConfig{
+		Streaming: sdkconfig.StreamingConfig{
+			BootstrapRetries: 0,
+		},
+	}, manager)
+	dataChan, _, errChan := handler.ExecuteStreamWithAuthManager(context.Background(), "claude", "test-claude-prelude-only", []byte(`{"model":"test-claude-prelude-only"}`), "")
+	if dataChan == nil || errChan == nil {
+		t.Fatalf("expected non-nil channels")
+	}
+
+	var got []byte
+	for chunk := range dataChan {
+		got = append(got, chunk...)
+	}
+	if len(got) != 0 {
+		t.Fatalf("expected prelude-only Claude stream to stay uncommitted, got %q", string(got))
+	}
+
+	var gotErr error
+	for msg := range errChan {
+		if msg != nil && msg.Error != nil {
+			gotErr = msg.Error
+		}
+	}
+	if gotErr == nil {
+		t.Fatalf("expected terminal error for prelude-only Claude stream")
+	}
+	if !strings.Contains(gotErr.Error(), "before first payload") {
+		t.Fatalf("expected first-payload error, got %v", gotErr)
+	}
+}
+
+func TestExecuteStreamWithAuthManager_ClaudePreludeErrorRetriesBeforeClientCommit(t *testing.T) {
+	executor := &claudePreludeThenErrorStreamExecutor{}
+	manager := coreauth.NewManager(nil, nil, nil)
+	manager.RegisterExecutor(executor)
+
+	auth1 := &coreauth.Auth{
+		ID:       "auth1",
+		Provider: "codex",
+		Status:   coreauth.StatusActive,
+		Metadata: map[string]any{"email": "test1@example.com"},
+	}
+	if _, err := manager.Register(context.Background(), auth1); err != nil {
+		t.Fatalf("manager.Register(auth1): %v", err)
+	}
+
+	auth2 := &coreauth.Auth{
+		ID:       "auth2",
+		Provider: "codex",
+		Status:   coreauth.StatusActive,
+		Metadata: map[string]any{"email": "test2@example.com"},
+	}
+	if _, err := manager.Register(context.Background(), auth2); err != nil {
+		t.Fatalf("manager.Register(auth2): %v", err)
+	}
+
+	registry.GetGlobalRegistry().RegisterClient(auth1.ID, auth1.Provider, []*registry.ModelInfo{{ID: "test-claude-prelude-retry"}})
+	registry.GetGlobalRegistry().RegisterClient(auth2.ID, auth2.Provider, []*registry.ModelInfo{{ID: "test-claude-prelude-retry"}})
+	t.Cleanup(func() {
+		registry.GetGlobalRegistry().UnregisterClient(auth1.ID)
+		registry.GetGlobalRegistry().UnregisterClient(auth2.ID)
+	})
+
+	handler := NewBaseAPIHandlers(&sdkconfig.SDKConfig{
+		Streaming: sdkconfig.StreamingConfig{
+			BootstrapRetries: 1,
+		},
+	}, manager)
+	dataChan, _, errChan := handler.ExecuteStreamWithAuthManager(context.Background(), "claude", "test-claude-prelude-retry", []byte(`{"model":"test-claude-prelude-retry"}`), "")
+	if dataChan == nil || errChan == nil {
+		t.Fatalf("expected non-nil channels")
+	}
+
+	var got []byte
+	for chunk := range dataChan {
+		got = append(got, chunk...)
+	}
+	for msg := range errChan {
+		if msg != nil {
+			t.Fatalf("unexpected terminal error: %+v", msg)
+		}
+	}
+
+	transcript := string(got)
+	if !strings.Contains(transcript, "resp_second") || !strings.Contains(transcript, `"text":"ok"`) {
+		t.Fatalf("expected successful retry transcript, got %q", transcript)
+	}
+	if strings.Contains(transcript, "resp_first") {
+		t.Fatalf("first attempt prelude leaked to client transcript: %q", transcript)
+	}
+	if executor.Calls() != 2 {
+		t.Fatalf("expected 2 stream attempts, got %d", executor.Calls())
 	}
 }

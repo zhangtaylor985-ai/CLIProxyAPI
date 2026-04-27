@@ -2271,6 +2271,7 @@ func (h *BaseAPIHandler) ExecuteStreamWithAuthManager(ctx context.Context, handl
 			}
 		}
 
+		var pendingClaudeBootstrap [][]byte
 	outer:
 		for {
 			for {
@@ -2306,6 +2307,7 @@ func (h *BaseAPIHandler) ExecuteStreamWithAuthManager(ctx context.Context, handl
 								replaceHeader(upstreamHeaders, FilterUpstreamHeaders(retryResult.Headers))
 							}
 							chunks = retryResult.Chunks
+							pendingClaudeBootstrap = nil
 							continue outer
 						}
 						streamErr = preferSpecificStreamRetryError(streamErr, retryExecErr)
@@ -2351,6 +2353,7 @@ func (h *BaseAPIHandler) ExecuteStreamWithAuthManager(ctx context.Context, handl
 									req = failoverReq
 									opts = failoverOpts
 									chunks = retryResult.Chunks
+									pendingClaudeBootstrap = nil
 									bootstrapRetries = 0
 									setEffectiveModelHeader(ctx, originalRequestedModel, normalizedModel)
 									if passthroughHeadersEnabled {
@@ -2383,11 +2386,20 @@ func (h *BaseAPIHandler) ExecuteStreamWithAuthManager(ctx context.Context, handl
 							return
 						}
 					}
-					sentPayload = true
 					payload := cloneBytes(chunk.Payload)
 					if originalRequestedModel != normalizedModel {
 						payload = rewriteStreamChunkModelFields(payload, originalRequestedModel)
 					}
+					if handlerType == "claude" && !sentPayload && isClaudeStreamBootstrapPrelude(payload) {
+						pendingClaudeBootstrap = append(pendingClaudeBootstrap, payload)
+						continue
+					}
+					if len(pendingClaudeBootstrap) > 0 {
+						pendingClaudeBootstrap = append(pendingClaudeBootstrap, payload)
+						payload = bytes.Join(pendingClaudeBootstrap, nil)
+						pendingClaudeBootstrap = nil
+					}
+					sentPayload = true
 					if okSendData := sendData(payload); !okSendData {
 						return
 					}
@@ -2425,6 +2437,30 @@ func validateSSEDataJSON(chunk []byte) error {
 		return fmt.Errorf("invalid SSE data JSON (len=%d): %q", len(data), preview)
 	}
 	return nil
+}
+
+func isClaudeStreamBootstrapPrelude(chunk []byte) bool {
+	sawPrelude := false
+	for _, line := range bytes.Split(chunk, []byte("\n")) {
+		line = bytes.TrimSpace(line)
+		if len(line) == 0 || !bytes.HasPrefix(line, []byte("data:")) {
+			continue
+		}
+		data := bytes.TrimSpace(line[5:])
+		if len(data) == 0 || bytes.Equal(data, []byte("[DONE]")) {
+			continue
+		}
+		if !gjson.ValidBytes(data) {
+			return false
+		}
+		switch strings.TrimSpace(gjson.GetBytes(data, "type").String()) {
+		case "message_start", "message_delta", "message_stop", "ping":
+			sawPrelude = true
+		default:
+			return false
+		}
+	}
+	return sawPrelude
 }
 
 func statusFromError(err error) int {
