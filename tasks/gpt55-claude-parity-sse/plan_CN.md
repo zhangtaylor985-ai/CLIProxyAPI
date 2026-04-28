@@ -17,6 +17,13 @@
 - 默认 Claude -> GPT target family 继续固定 `gpt-5.4`
 - 仅显式选择 `gpt-5.5` 的 key / 用户走 `gpt-5.5`
 
+长期执行策略：
+
+- 详细负责人策略见 `tasks/gpt55-claude-parity-sse/strategy_CN.md`。
+- 长期待办见 `todos/2026-04-28-gpt55-claude-parity-longterm_CN.md`。
+- 当前 `gpt-5.5(high)` 工具请求降到 `gpt-5.5(medium)` 只是生产 mitigation，不是最终最佳实现。
+- 生产部署默认由 Taylor 执行；Codex 只在明确授权时操作生产 systemd。
+
 ## 当前新样本
 
 - JSONL：`412723a8-41d3-4e3e-b962-12b089a30b6a.jsonl`
