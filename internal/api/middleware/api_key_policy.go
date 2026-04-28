@@ -219,7 +219,7 @@ func APIKeyPolicyMiddleware(getConfig func() *config.Config, limiter policy.Dail
 				budgetModel = routed
 			}
 		}
-		if shouldEnforceClaudeBaseContextLimit(c.Request, effectiveModel) {
+		if !cfg.DisablePromptTokenLimit && shouldEnforceClaudeBaseContextLimit(c.Request, effectiveModel) {
 			contextLimit := claudePromptContextLimitTokensForPolicy(budgetModel, allowClaudeOpus1M)
 			estimatedTokens := estimateClaudeRequestTokensWithinLimitForModel(bodyBytes, contextLimit, budgetModel)
 			if estimatedTokens > contextLimit {

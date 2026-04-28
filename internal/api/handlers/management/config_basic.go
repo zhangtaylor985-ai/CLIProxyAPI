@@ -436,6 +436,14 @@ func (h *Handler) PutDisableClaudeOpus1M(c *gin.Context) {
 	h.updateBoolField(c, func(v bool) { h.cfg.DisableClaudeOpus1M = v })
 }
 
+// DisablePromptTokenLimit
+func (h *Handler) GetDisablePromptTokenLimit(c *gin.Context) {
+	c.JSON(200, gin.H{"disable-prompt-token-limit": h.cfg.DisablePromptTokenLimit})
+}
+func (h *Handler) PutDisablePromptTokenLimit(c *gin.Context) {
+	h.updateBoolField(c, func(v bool) { h.cfg.DisablePromptTokenLimit = v })
+}
+
 func normalizeRoutingStrategy(strategy string) (string, bool) {
 	normalized := strings.ToLower(strings.TrimSpace(strategy))
 	switch normalized {

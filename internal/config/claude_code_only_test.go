@@ -71,6 +71,38 @@ func TestLoadConfigOptional_DisableClaudeOpus1MAllowsExplicitDisable(t *testing.
 	}
 }
 
+func TestLoadConfigOptional_DisablePromptTokenLimitDefaultsDisabled(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(configPath, []byte("debug: false\n"), 0o600); err != nil {
+		t.Fatalf("failed to write config: %v", err)
+	}
+
+	cfg, err := LoadConfigOptional(configPath, false)
+	if err != nil {
+		t.Fatalf("LoadConfigOptional() error = %v", err)
+	}
+	if cfg.DisablePromptTokenLimit {
+		t.Fatal("DisablePromptTokenLimit = true, want false by default")
+	}
+}
+
+func TestLoadConfigOptional_DisablePromptTokenLimitAllowsExplicitEnable(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(configPath, []byte("disable-prompt-token-limit: true\n"), 0o600); err != nil {
+		t.Fatalf("failed to write config: %v", err)
+	}
+
+	cfg, err := LoadConfigOptional(configPath, false)
+	if err != nil {
+		t.Fatalf("LoadConfigOptional() error = %v", err)
+	}
+	if !cfg.DisablePromptTokenLimit {
+		t.Fatal("DisablePromptTokenLimit = false, want explicit true")
+	}
+}
+
 func TestConfig_EffectiveAPIKeyPolicy_UsesGlobalClaudeCodeOnlyByDefault(t *testing.T) {
 	cfg := &Config{
 		SDKConfig: SDKConfig{

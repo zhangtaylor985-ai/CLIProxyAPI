@@ -58,6 +58,10 @@ type SDKConfig struct {
 	// explicitly enables 1M context for that key.
 	DisableClaudeOpus1M bool `yaml:"disable-claude-opus-1m" json:"disable-claude-opus-1m"`
 
+	// DisablePromptTokenLimit disables the server-side prompt token preflight. When false,
+	// requests still use the normal prompt size guard before reaching upstream models.
+	DisablePromptTokenLimit bool `yaml:"disable-prompt-token-limit" json:"disable-prompt-token-limit"`
+
 	// ClaudeCodeOnlyEnabled restricts client API key access to Claude Code fingerprints by default.
 	// Individual API key policies may explicitly override this global default.
 	ClaudeCodeOnlyEnabled bool `yaml:"claude-code-only-enabled" json:"claude-code-only-enabled"`

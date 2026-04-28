@@ -38,6 +38,32 @@ func TestGetClaudeCodeOnlyEnabled(t *testing.T) {
 	}
 }
 
+func TestGetDisablePromptTokenLimit(t *testing.T) {
+	t.Parallel()
+	gin.SetMode(gin.TestMode)
+
+	handler := &Handler{
+		cfg: &config.Config{
+			SDKConfig: config.SDKConfig{
+				DisablePromptTokenLimit: true,
+			},
+		},
+	}
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/v0/management/disable-prompt-token-limit", nil)
+
+	handler.GetDisablePromptTokenLimit(ctx)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	if got := gjson.GetBytes(recorder.Body.Bytes(), "disable-prompt-token-limit").Bool(); !got {
+		t.Fatalf("disable-prompt-token-limit = %v, want true", got)
+	}
+}
+
 func TestGetClaudeToGPTReasoningEffort(t *testing.T) {
 	t.Parallel()
 	gin.SetMode(gin.TestMode)

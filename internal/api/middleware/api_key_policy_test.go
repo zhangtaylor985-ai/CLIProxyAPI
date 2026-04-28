@@ -670,6 +670,43 @@ func TestAPIKeyPolicyMiddleware_UsesRoutedGPT54CodexWindowForOpusPreflight(t *te
 	}
 }
 
+func TestAPIKeyPolicyMiddleware_SkipsPromptPreflightWhenGloballyDisabled(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	cfg := &config.Config{
+		SDKConfig: config.SDKConfig{
+			DisableClaudeOpus1M:       true,
+			DisablePromptTokenLimit:   true,
+			ClaudeToGPTRoutingEnabled: true,
+			ClaudeToGPTTargetFamily:   "gpt-5.4",
+		},
+	}
+
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set("apiKey", "k")
+		c.Next()
+	})
+	r.Use(APIKeyPolicyMiddleware(func() *config.Config { return cfg }, nil, nil, nil))
+	r.POST("/v1/messages", func(c *gin.Context) {
+		c.JSON(200, gin.H{"ok": true})
+	})
+
+	limit := claudePromptContextLimitTokens("gpt-5.4(high)")
+	largeContent := strings.Repeat(" token", limit+5000)
+	payload := fmt.Sprintf(`{"model":"claude-opus-4-6","messages":[{"role":"user","content":%q}]}`, largeContent)
+	if estimate := estimateClaudeRequestTokensWithinLimitForModel([]byte(payload), limit, "gpt-5.4(high)"); estimate <= limit {
+		t.Fatalf("test payload should exceed prompt limit, got %d <= %d", estimate, limit)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewBufferString(payload))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
 func TestClaudePromptContextLimitTokensForPolicyUsesLargeBudgetFor1MOverride(t *testing.T) {
 	if got := claudePromptContextLimitTokensForPolicy("gpt-5.4(high)", false); got != 258400 {
 		t.Fatalf("standard gpt-5.4 prompt limit=%d", got)

@@ -895,6 +895,9 @@ func (s *Server) registerManagementRoutes() {
 		adminMgmt.GET("/disable-claude-opus-1m", s.mgmt.GetDisableClaudeOpus1M)
 		adminMgmt.PUT("/disable-claude-opus-1m", s.mgmt.PutDisableClaudeOpus1M)
 		adminMgmt.PATCH("/disable-claude-opus-1m", s.mgmt.PutDisableClaudeOpus1M)
+		adminMgmt.GET("/disable-prompt-token-limit", s.mgmt.GetDisablePromptTokenLimit)
+		adminMgmt.PUT("/disable-prompt-token-limit", s.mgmt.PutDisablePromptTokenLimit)
+		adminMgmt.PATCH("/disable-prompt-token-limit", s.mgmt.PutDisablePromptTokenLimit)
 
 		adminMgmt.GET("/routing/strategy", s.mgmt.GetRoutingStrategy)
 		adminMgmt.PUT("/routing/strategy", s.mgmt.PutRoutingStrategy)
