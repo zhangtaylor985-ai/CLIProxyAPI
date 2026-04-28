@@ -1415,8 +1415,59 @@ func applyClaudeGPTEffortTargetModel(payload []byte, handlerType, requestedModel
 	return withEffort, rewriteModelField(payload, withEffort)
 }
 
+func applyClaudeGPT55ToolEffortClamp(payload []byte, handlerType, requestedModel, effectiveModel string) (string, []byte) {
+	if !strings.EqualFold(strings.TrimSpace(handlerType), "claude") {
+		return effectiveModel, payload
+	}
+	if !seemsClaudeModel(requestedModel) || !seemsGPTModel(effectiveModel) {
+		return effectiveModel, payload
+	}
+
+	parsed := thinking.ParseSuffix(strings.TrimSpace(effectiveModel))
+	base := strings.TrimSpace(parsed.ModelName)
+	if !strings.EqualFold(base, internalpolicy.ClaudeGPTTargetFamilyGPT55) {
+		return effectiveModel, payload
+	}
+	if normalizeClaudeGPTRoutingEffort(parsed.RawSuffix) != "high" {
+		return effectiveModel, payload
+	}
+	if !claudePayloadHasToolRisk(payload) {
+		return effectiveModel, payload
+	}
+
+	withEffort := base + "(medium)"
+	return withEffort, rewriteModelField(payload, withEffort)
+}
+
+func claudePayloadHasToolRisk(payload []byte) bool {
+	if tools := gjson.GetBytes(payload, "tools"); tools.IsArray() && len(tools.Array()) > 0 {
+		return true
+	}
+	messages := gjson.GetBytes(payload, "messages")
+	if !messages.IsArray() {
+		return false
+	}
+	for _, message := range messages.Array() {
+		if strings.EqualFold(strings.TrimSpace(message.Get("role").String()), "tool") {
+			return true
+		}
+		content := message.Get("content")
+		if !content.IsArray() {
+			continue
+		}
+		for _, block := range content.Array() {
+			switch strings.ToLower(strings.TrimSpace(block.Get("type").String())) {
+			case "tool_use", "tool_result":
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func finalizeClaudeGPTTargetModel(payload []byte, handlerType, requestedModel, effectiveModel string) (string, []byte) {
-	return applyClaudeGPTEffortTargetModel(payload, handlerType, requestedModel, effectiveModel)
+	effectiveModel, payload = applyClaudeGPTEffortTargetModel(payload, handlerType, requestedModel, effectiveModel)
+	return applyClaudeGPT55ToolEffortClamp(payload, handlerType, requestedModel, effectiveModel)
 }
 
 // BaseAPIHandler contains the handlers for API endpoints.

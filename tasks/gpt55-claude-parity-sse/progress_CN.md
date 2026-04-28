@@ -173,3 +173,46 @@ go test ./... -count=1
 
 - 生产 `/root/cliapp/CLIProxyAPI/config.yaml` 当前观测到 `claude-to-gpt-target-family: "gpt-5.5"` 且 `claude-to-gpt-reasoning-effort: high`，与“默认保持 gpt-5.4，只显式用户走 5.5”的目标不一致；上线/观察前需复核是否为临时配置。
 - `response.incomplete/max_output_tokens` 的根因仍未消除；本轮只是将它从泛化断流中准确分类，后续需要继续研究降低 GPT-5.5 high 大工具输出触发率的策略。
+
+## 2026-04-28 GPT-5.5 high 工具请求降级策略
+
+目标：
+
+- 只针对 GPT-5.5 high 在 Claude 工具场景里更容易出现 `response.incomplete/max_output_tokens` 的问题止血。
+- 不影响 GPT-5.4、GPT-5.2、GPT-5.3-codex、其他模型或非 Claude 路由。
+- 非工具请求仍尊重全局 / API key / Claude request `output_config.effort` 的最终 effort。
+
+实现策略：
+
+- 在 `finalizeClaudeGPTTargetModel` 的最终路由阶段处理。
+- 先正常应用全局 / API key / 请求显式 effort。
+- 仅当以下条件全部满足时，把最终 target 从 `gpt-5.5(high)` 改为 `gpt-5.5(medium)`：
+  - handler type 是 Claude。
+  - 原始请求模型是 Claude。
+  - 最终路由模型 base 精确为 `gpt-5.5`。
+  - 最终 effort 是 `high`。
+  - payload 有工具风险：`tools` 非空，或历史消息里包含 `tool_use` / `tool_result`。
+
+边界说明：
+
+- 请求发给上游前无法知道模型是否“一定会调用工具”，只能判断本轮是否带 tools 或处在工具续写链路。
+- 为避免第一轮 `tool_use` 参数写到一半撞上 `max_output_tokens`，生产口径按“工具可用/工具续写请求”降级，而不是等真正 tool_use 出现后再处理。
+
+已通过测试：
+
+```bash
+NO_PROXY=127.0.0.1,localhost,::1 no_proxy=127.0.0.1,localhost,::1 \
+HTTP_PROXY= HTTPS_PROXY= http_proxy= https_proxy= \
+go test ./sdk/api/handlers \
+  -run 'Test(ApplyClaudeGPT|FinalizeClaudeGPT|SetEffectiveModelHeader|Rewrite.*Model)' \
+  -count=1
+
+NO_PROXY=127.0.0.1,localhost,::1 no_proxy=127.0.0.1,localhost,::1 \
+HTTP_PROXY= HTTPS_PROXY= http_proxy= https_proxy= \
+go test ./sdk/api/handlers ./sdk/api/handlers/claude \
+  ./internal/runtime/executor ./internal/translator/codex/claude -count=1
+
+NO_PROXY=127.0.0.1,localhost,::1 no_proxy=127.0.0.1,localhost,::1 \
+HTTP_PROXY= HTTPS_PROXY= http_proxy= https_proxy= \
+go test ./... -count=1
+```

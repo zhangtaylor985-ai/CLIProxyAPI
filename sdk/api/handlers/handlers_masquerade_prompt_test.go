@@ -159,6 +159,58 @@ func TestFinalizeClaudeGPTTargetModel_DoesNotClampToolAvailabilityWithoutSearchI
 	}
 }
 
+func TestFinalizeClaudeGPTTargetModel_ClampsGPT55HighToolRequestsToMedium(t *testing.T) {
+	payload := []byte(`{"model":"claude-opus-4-6","thinking":{"type":"adaptive"},"output_config":{"effort":"high"},"messages":[{"role":"user","content":"Read the file"}],"tools":[{"name":"Read","input_schema":{"type":"object","properties":{"file_path":{"type":"string"}},"required":["file_path"]}}]}`)
+
+	model, out := finalizeClaudeGPTTargetModel(payload, "claude", "claude-opus-4-6", "gpt-5.5(high)")
+
+	if model != "gpt-5.5(medium)" {
+		t.Fatalf("expected GPT-5.5 tool request to clamp to medium, got %q", model)
+	}
+	if got := gjson.GetBytes(out, "model").String(); got != "gpt-5.5(medium)" {
+		t.Fatalf("expected payload model to be rewritten, got %q", got)
+	}
+}
+
+func TestFinalizeClaudeGPTTargetModel_ClampsGPT55HighToolResultContinuationToMedium(t *testing.T) {
+	payload := []byte(`{"model":"claude-opus-4-6","thinking":{"type":"adaptive"},"output_config":{"effort":"high"},"messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"large output"}]}]}`)
+
+	model, out := finalizeClaudeGPTTargetModel(payload, "claude", "claude-opus-4-6", "gpt-5.5(high)")
+
+	if model != "gpt-5.5(medium)" {
+		t.Fatalf("expected GPT-5.5 tool_result continuation to clamp to medium, got %q", model)
+	}
+	if got := gjson.GetBytes(out, "model").String(); got != "gpt-5.5(medium)" {
+		t.Fatalf("expected payload model to be rewritten, got %q", got)
+	}
+}
+
+func TestFinalizeClaudeGPTTargetModel_KeepsGPT55HighForNonToolRequests(t *testing.T) {
+	payload := []byte(`{"model":"claude-opus-4-6","thinking":{"type":"adaptive"},"output_config":{"effort":"high"},"messages":[{"role":"user","content":"Reply with exactly HIGH_OK"}]}`)
+
+	model, out := finalizeClaudeGPTTargetModel(payload, "claude", "claude-opus-4-6", "gpt-5.5(high)")
+
+	if model != "gpt-5.5(high)" {
+		t.Fatalf("expected non-tool GPT-5.5 request to keep high effort, got %q", model)
+	}
+	if string(out) != string(payload) {
+		t.Fatalf("expected payload to stay unchanged, got %s", string(out))
+	}
+}
+
+func TestFinalizeClaudeGPTTargetModel_KeepsGPT54HighToolRequests(t *testing.T) {
+	payload := []byte(`{"model":"claude-opus-4-6","thinking":{"type":"adaptive"},"output_config":{"effort":"high"},"messages":[{"role":"user","content":"Read the file"}],"tools":[{"name":"Read","input_schema":{"type":"object"}}]}`)
+
+	model, out := finalizeClaudeGPTTargetModel(payload, "claude", "claude-opus-4-6", "gpt-5.4(high)")
+
+	if model != "gpt-5.4(high)" {
+		t.Fatalf("expected GPT-5.4 tool request to keep high effort, got %q", model)
+	}
+	if string(out) != string(payload) {
+		t.Fatalf("expected payload to stay unchanged, got %s", string(out))
+	}
+}
+
 func TestFinalizeClaudeGPTTargetModel_KeepsConfiguredDefaultWithoutExplicitEffort(t *testing.T) {
 	payload := []byte(`{"model":"claude-sonnet-4-6","thinking":{"type":"adaptive"},"messages":[{"role":"user","content":"hi"}]}`)
 
