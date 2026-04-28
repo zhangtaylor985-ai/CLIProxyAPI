@@ -122,6 +122,19 @@ func ConvertClaudeRequestToCodex(modelName string, inputRawJSON []byte, _ bool) 
 				hasContent = true
 			}
 
+			appendFileContent := func(fileData, filename string) {
+				if fileData == "" {
+					return
+				}
+				message, _ = sjson.SetBytes(message, fmt.Sprintf("content.%d.type", contentIndex), "input_file")
+				message, _ = sjson.SetBytes(message, fmt.Sprintf("content.%d.file_data", contentIndex), fileData)
+				if filename != "" {
+					message, _ = sjson.SetBytes(message, fmt.Sprintf("content.%d.filename", contentIndex), filename)
+				}
+				contentIndex++
+				hasContent = true
+			}
+
 			appendToolResultText := func(rawText string, toolResultContent *[]byte, toolResultContentIndex *int) {
 				if rawText == "" {
 					return
@@ -143,23 +156,12 @@ func ConvertClaudeRequestToCodex(modelName string, inputRawJSON []byte, _ bool) 
 						appendTextContent(messageContentResult.Get("text").String())
 					case "image":
 						sourceResult := messageContentResult.Get("source")
-						if sourceResult.Exists() {
-							data := sourceResult.Get("data").String()
-							if data == "" {
-								data = sourceResult.Get("base64").String()
-							}
-							if data != "" {
-								mediaType := sourceResult.Get("media_type").String()
-								if mediaType == "" {
-									mediaType = sourceResult.Get("mime_type").String()
-								}
-								if mediaType == "" {
-									mediaType = "application/octet-stream"
-								}
-								dataURL := fmt.Sprintf("data:%s;base64,%s", mediaType, data)
-								appendImageContent(dataURL)
-							}
+						if dataURL := claudeBase64DataURL(sourceResult); dataURL != "" {
+							appendImageContent(dataURL)
 						}
+					case "document":
+						sourceResult := messageContentResult.Get("source")
+						appendFileContent(claudeBase64DataURL(sourceResult), claudeDocumentFilename(messageContentResult))
 					case "tool_use":
 						flushMessage()
 						functionCallMessage := []byte(`{"type":"function_call"}`)
@@ -190,25 +192,20 @@ func ConvertClaudeRequestToCodex(modelName string, inputRawJSON []byte, _ bool) 
 								toolResultContentType := contentResults[k].Get("type").String()
 								if toolResultContentType == "image" {
 									sourceResult := contentResults[k].Get("source")
-									if sourceResult.Exists() {
-										data := sourceResult.Get("data").String()
-										if data == "" {
-											data = sourceResult.Get("base64").String()
+									if dataURL := claudeBase64DataURL(sourceResult); dataURL != "" {
+										toolResultContent, _ = sjson.SetBytes(toolResultContent, fmt.Sprintf("%d.type", toolResultContentIndex), "input_image")
+										toolResultContent, _ = sjson.SetBytes(toolResultContent, fmt.Sprintf("%d.image_url", toolResultContentIndex), dataURL)
+										toolResultContentIndex++
+									}
+								} else if toolResultContentType == "document" {
+									sourceResult := contentResults[k].Get("source")
+									if dataURL := claudeBase64DataURL(sourceResult); dataURL != "" {
+										toolResultContent, _ = sjson.SetBytes(toolResultContent, fmt.Sprintf("%d.type", toolResultContentIndex), "input_file")
+										toolResultContent, _ = sjson.SetBytes(toolResultContent, fmt.Sprintf("%d.file_data", toolResultContentIndex), dataURL)
+										if filename := claudeDocumentFilename(contentResults[k]); filename != "" {
+											toolResultContent, _ = sjson.SetBytes(toolResultContent, fmt.Sprintf("%d.filename", toolResultContentIndex), filename)
 										}
-										if data != "" {
-											mediaType := sourceResult.Get("media_type").String()
-											if mediaType == "" {
-												mediaType = sourceResult.Get("mime_type").String()
-											}
-											if mediaType == "" {
-												mediaType = "application/octet-stream"
-											}
-											dataURL := fmt.Sprintf("data:%s;base64,%s", mediaType, data)
-
-											toolResultContent, _ = sjson.SetBytes(toolResultContent, fmt.Sprintf("%d.type", toolResultContentIndex), "input_image")
-											toolResultContent, _ = sjson.SetBytes(toolResultContent, fmt.Sprintf("%d.image_url", toolResultContentIndex), dataURL)
-											toolResultContentIndex++
-										}
+										toolResultContentIndex++
 									}
 								} else if toolResultContentType == "text" {
 									appendToolResultText(contentResults[k].Get("text").String(), &toolResultContent, &toolResultContentIndex)
@@ -331,6 +328,42 @@ func ConvertClaudeRequestToCodex(modelName string, inputRawJSON []byte, _ bool) 
 	template, _ = sjson.SetBytes(template, "include", []string{"reasoning.encrypted_content"})
 
 	return template
+}
+
+func claudeBase64DataURL(sourceResult gjson.Result) string {
+	if !sourceResult.Exists() {
+		return ""
+	}
+	data := sourceResult.Get("data").String()
+	if data == "" {
+		data = sourceResult.Get("base64").String()
+	}
+	if data == "" {
+		return ""
+	}
+	mediaType := sourceResult.Get("media_type").String()
+	if mediaType == "" {
+		mediaType = sourceResult.Get("mime_type").String()
+	}
+	if mediaType == "" {
+		mediaType = "application/octet-stream"
+	}
+	return fmt.Sprintf("data:%s;base64,%s", mediaType, data)
+}
+
+func claudeDocumentFilename(documentResult gjson.Result) string {
+	for _, path := range []string{"title", "name", "filename"} {
+		if value := strings.TrimSpace(documentResult.Get(path).String()); value != "" {
+			return value
+		}
+	}
+	mediaType := strings.ToLower(strings.TrimSpace(documentResult.Get("source.media_type").String()))
+	switch mediaType {
+	case "application/pdf":
+		return "document.pdf"
+	default:
+		return "document"
+	}
 }
 
 // shortenNameIfNeeded applies a simple shortening rule for a single name.

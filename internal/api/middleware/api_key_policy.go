@@ -46,6 +46,9 @@ const (
 	claudeImagePixelsPerToken           = 750
 	claudeImageMaxBillablePixels        = 1152000
 	claudeImageFallbackTokens           = 1600
+	claudeDocumentFallbackTokens        = 8000
+	claudeDocumentBytesPerToken         = 512
+	claudeDocumentMaxEstimateTokens     = 64000
 	claudeTokenEstimateMessageOverhead  = 4
 	claudeTokenEstimateToolOverhead     = 8
 	claudeTokenEstimateBlockOverhead    = 1
@@ -785,6 +788,14 @@ func (c *claudePromptTokenCollector) collectContentBlock(block map[string]any) {
 			tokens = claudeImageFallbackTokens
 		}
 		c.extraTokens += tokens
+	case "document":
+		tokens := estimateClaudeDocumentBlockTokens(block)
+		if tokens <= 0 {
+			tokens = claudeDocumentFallbackTokens
+		}
+		c.extraTokens += tokens
+		c.addString(stringFromMap(block, "title"))
+		c.addString(stringFromMap(block, "context"))
 	default:
 		c.addCompactJSON(block)
 	}
@@ -879,9 +890,19 @@ func estimateClaudeContentBlockBytes(block map[string]any) int {
 		return estimateClaudeContentBytes(block["content"])
 	case "image":
 		return estimateClaudeImageBlockBytes(block)
+	case "document":
+		return estimateClaudeDocumentBlockBytes(block)
 	default:
 		return estimateClaudeCompactJSONBytes(block)
 	}
+}
+
+func estimateClaudeDocumentBlockBytes(block map[string]any) int {
+	tokens := estimateClaudeDocumentBlockTokens(block)
+	if tokens <= 0 {
+		tokens = claudeDocumentFallbackTokens
+	}
+	return tokens * claudePromptTooLongEstimateDivisor
 }
 
 func estimateClaudeImageBlockBytes(block map[string]any) int {
@@ -918,6 +939,48 @@ func estimateClaudeImageBlockTokens(block map[string]any) int {
 		pixels = maxPixels
 	}
 	return int((pixels + int64(claudeImagePixelsPerToken) - 1) / int64(claudeImagePixelsPerToken))
+}
+
+func estimateClaudeDocumentBlockTokens(block map[string]any) int {
+	source, ok := block["source"].(map[string]any)
+	if !ok {
+		return claudeDocumentFallbackTokens
+	}
+	sourceType := strings.ToLower(strings.TrimSpace(stringFromMap(source, "type")))
+	if sourceType != "base64" {
+		return claudeDocumentFallbackTokens
+	}
+	data := strings.TrimSpace(stringFromMap(source, "data"))
+	if data == "" {
+		return claudeDocumentFallbackTokens
+	}
+	if comma := strings.IndexByte(data, ','); comma >= 0 && strings.Contains(data[:comma], "base64") {
+		data = data[comma+1:]
+	}
+	decodedBytes := estimatedBase64DecodedBytes(data)
+	if decodedBytes <= 0 {
+		return claudeDocumentFallbackTokens
+	}
+	tokens := (decodedBytes + claudeDocumentBytesPerToken - 1) / claudeDocumentBytesPerToken
+	if tokens < claudeDocumentFallbackTokens {
+		return claudeDocumentFallbackTokens
+	}
+	if tokens > claudeDocumentMaxEstimateTokens {
+		return claudeDocumentMaxEstimateTokens
+	}
+	return tokens
+}
+
+func estimatedBase64DecodedBytes(data string) int {
+	trimmed := strings.TrimRight(strings.TrimSpace(data), "=")
+	if trimmed == "" {
+		return 0
+	}
+	decoded := len(trimmed) * 3 / 4
+	if decoded <= 0 {
+		return 0
+	}
+	return decoded
 }
 
 func estimateClaudeStringFieldBytes(obj map[string]any, field string) int {

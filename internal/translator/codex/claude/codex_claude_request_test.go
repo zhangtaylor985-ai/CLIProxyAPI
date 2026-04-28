@@ -266,6 +266,65 @@ func TestConvertClaudeRequestToCodex_PreservesUnknownToolResultContentBlocksAsIn
 	}
 }
 
+func TestConvertClaudeRequestToCodex_MapsDocumentBlocksToInputFile(t *testing.T) {
+	input := `{
+		"model": "claude-opus-4-6",
+		"messages": [{
+			"role": "user",
+			"content": [
+				{"type": "text", "text": "please read this"},
+				{"type": "document", "title": "report.pdf", "source": {"type": "base64", "media_type": "application/pdf", "data": "JVBERi0xLjQ="}}
+			]
+		}]
+	}`
+
+	result := ConvertClaudeRequestToCodex("gpt-5.4", []byte(input), true)
+	message := gjson.GetBytes(result, "input.0")
+
+	if got := message.Get("content.1.type").String(); got != "input_file" {
+		t.Fatalf("content.1.type = %q, want %q; output=%s", got, "input_file", string(result))
+	}
+	if got := message.Get("content.1.file_data").String(); got != "data:application/pdf;base64,JVBERi0xLjQ=" {
+		t.Fatalf("content.1.file_data = %q; output=%s", got, string(result))
+	}
+	if got := message.Get("content.1.filename").String(); got != "report.pdf" {
+		t.Fatalf("content.1.filename = %q, want report.pdf; output=%s", got, string(result))
+	}
+}
+
+func TestConvertClaudeRequestToCodex_MapsToolResultDocumentBlocksToInputFile(t *testing.T) {
+	input := `{
+		"model": "claude-opus-4-6",
+		"messages": [{
+			"role": "user",
+			"content": [{
+				"type": "tool_result",
+				"tool_use_id": "toolu_123",
+				"content": [
+					{"type": "text", "text": "generated"},
+					{"type": "document", "title": "artifact.pdf", "source": {"type": "base64", "media_type": "application/pdf", "data": "JVBERi0xLjQ="}}
+				]
+			}]
+		}]
+	}`
+
+	result := ConvertClaudeRequestToCodex("gpt-5.4", []byte(input), true)
+	output := gjson.GetBytes(result, "input.0")
+
+	if got := output.Get("type").String(); got != "function_call_output" {
+		t.Fatalf("input.0.type = %q, want %q; output=%s", got, "function_call_output", string(result))
+	}
+	if got := output.Get("output.1.type").String(); got != "input_file" {
+		t.Fatalf("output.1.type = %q, want %q; output=%s", got, "input_file", string(result))
+	}
+	if got := output.Get("output.1.file_data").String(); got != "data:application/pdf;base64,JVBERi0xLjQ=" {
+		t.Fatalf("output.1.file_data = %q; output=%s", got, string(result))
+	}
+	if got := output.Get("output.1.filename").String(); got != "artifact.pdf" {
+		t.Fatalf("output.1.filename = %q, want artifact.pdf; output=%s", got, string(result))
+	}
+}
+
 func TestConvertClaudeRequestToCodex_PreservesPlainStringToolResultOutput(t *testing.T) {
 	input := `{
 		"model": "claude-opus-4-6",

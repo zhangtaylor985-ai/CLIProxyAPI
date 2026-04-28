@@ -678,7 +678,16 @@ func countCodexInputTokens(enc tokenizer.Codec, body []byte) (int64, error) {
 					segments = append(segments, args)
 				}
 			case "function_call_output":
-				if out := strings.TrimSpace(item.Get("output").String()); out != "" {
+				output := item.Get("output")
+				if output.IsArray() {
+					parts := output.Array()
+					for j := range parts {
+						part := parts[j]
+						if text := strings.TrimSpace(part.Get("text").String()); text != "" {
+							segments = append(segments, text)
+						}
+					}
+				} else if out := strings.TrimSpace(output.String()); out != "" {
 					segments = append(segments, out)
 				}
 			default:
