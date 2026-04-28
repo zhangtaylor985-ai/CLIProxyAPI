@@ -750,7 +750,7 @@ func TestAPIKeyPolicyMiddleware_AllowsPromptAboveStandardWindowForPerKey1MContex
 	}
 }
 
-func TestAPIKeyPolicyMiddleware_RejectsPromptAbovePerKey1MContextBudget(t *testing.T) {
+func TestAPIKeyPolicyMiddleware_SkipsPromptPreflightForPerKey1MContext(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	cfg := &config.Config{
 		SDKConfig: config.SDKConfig{DisableClaudeOpus1M: true},
@@ -779,7 +779,35 @@ func TestAPIKeyPolicyMiddleware_RejectsPromptAbovePerKey1MContextBudget(t *testi
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
-	if w.Code != http.StatusBadRequest {
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestAPIKeyPolicyMiddleware_SkipsPromptPreflightForGlobal1MContext(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	cfg := &config.Config{
+		SDKConfig: config.SDKConfig{DisableClaudeOpus1M: false},
+	}
+
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set("apiKey", "k")
+		c.Next()
+	})
+	r.Use(APIKeyPolicyMiddleware(func() *config.Config { return cfg }, nil, nil, nil))
+	r.POST("/v1/messages", func(c *gin.Context) {
+		c.JSON(200, gin.H{"ok": true})
+	})
+
+	limit := claudePromptContextLimitTokensForPolicy("claude-opus-4-6", true)
+	largeContent := strings.Repeat("a", limit*claudePromptTooLongEstimateDivisor+1)
+	payload := fmt.Sprintf(`{"model":"claude-opus-4-6[1m]","messages":[{"role":"user","content":%q}]}`, largeContent)
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewBufferString(payload))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 	}
 }
