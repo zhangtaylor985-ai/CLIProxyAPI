@@ -578,7 +578,7 @@ func (p *UsagePersistPlugin) buildPersistRecord(record coreusage.Record) (usageP
 			"model":     modelKey,
 		}).Warn("billing price missing for usage record; request will be tracked with zero cost")
 	}
-	cost := calculateUsageCostMicro(detail.InputTokens, detail.OutputTokens, detail.ReasoningTokens, detail.CachedTokens, price)
+	cost := calculateUsageCostMicroForModel(modelKey, detail.InputTokens, detail.OutputTokens, detail.ReasoningTokens, detail.CachedTokens, price)
 
 	return usagePersistRecord{
 		dayKey: dayKey,

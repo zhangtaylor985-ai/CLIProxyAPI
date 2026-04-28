@@ -536,7 +536,8 @@ func (s *PostgresStore) ImportUsageStatisticsSnapshot(ctx context.Context, snaps
 				if errPrice != nil {
 					return result, errPrice
 				}
-				cost := calculateUsageCostMicro(
+				cost := calculateUsageCostMicroForModel(
+					modelKey,
 					normalized.Tokens.InputTokens,
 					normalized.Tokens.OutputTokens,
 					normalized.Tokens.ReasoningTokens,
@@ -1060,7 +1061,7 @@ func (s *PostgresStore) recalculateUsageCosts(ctx context.Context, model string)
 	now := nowUnixUTC()
 	for _, item := range items {
 		price := priceByModel[item.Model]
-		cost := calculateUsageCostMicro(item.InputTokens, item.OutputTokens, item.ReasoningTokens, item.CachedTokens, price)
+		cost := calculateUsageCostMicroForModel(item.Model, item.InputTokens, item.OutputTokens, item.ReasoningTokens, item.CachedTokens, price)
 		if _, err := stmt.ExecContext(ctx, cost, now, item.APIKey, item.Model, item.Day); err != nil {
 			return fmt.Errorf("billing postgres: update repaired cost: %w", err)
 		}

@@ -2,9 +2,17 @@ package billing
 
 import (
 	"math"
+
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/policy"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
 )
 
 const tokensPerMillion = int64(1_000_000)
+
+const (
+	fallbackGPT54StandardContextTokens = int64(272_000)
+	fallbackGPT55StandardContextTokens = int64(400_000)
+)
 
 func usdPer1MToMicroUSDPer1M(v float64) int64 {
 	if v <= 0 || math.IsNaN(v) || math.IsInf(v, 0) {
@@ -59,6 +67,46 @@ func calculateUsageCostMicro(inputTokens, outputTokens, reasoningTokens, cachedT
 	return cost
 }
 
+func calculateUsageCostMicroForModel(model string, inputTokens, outputTokens, reasoningTokens, cachedTokens int64, price PriceMicroUSDPer1M) int64 {
+	cost := calculateUsageCostMicro(inputTokens, outputTokens, reasoningTokens, cachedTokens, price)
+	window := longContextPremiumStandardWindowTokens(model)
+	if window <= 0 || inputTokens <= window {
+		return cost
+	}
+	excessInputTokens := inputTokens - window
+	return cost + costMicroUSD(excessInputTokens, price.Prompt)
+}
+
 func CalculateUsageCostMicro(inputTokens, outputTokens, reasoningTokens, cachedTokens int64, price PriceMicroUSDPer1M) int64 {
 	return calculateUsageCostMicro(inputTokens, outputTokens, reasoningTokens, cachedTokens, price)
+}
+
+func longContextPremiumStandardWindowTokens(model string) int64 {
+	key := policy.StripThinkingVariant(policy.NormaliseModelKey(model))
+	switch key {
+	case policy.ClaudeGPTTargetFamilyGPT54, policy.ClaudeGPTTargetFamilyGPT55:
+	default:
+		return 0
+	}
+
+	if info := registry.LookupModelInfo(key); info != nil {
+		if info.ContextLength > 0 {
+			return int64(info.ContextLength)
+		}
+		if info.InputTokenLimit > 0 && info.OutputTokenLimit > 0 {
+			return int64(info.InputTokenLimit + info.OutputTokenLimit)
+		}
+		if info.InputTokenLimit > 0 {
+			return int64(info.InputTokenLimit)
+		}
+	}
+
+	switch key {
+	case policy.ClaudeGPTTargetFamilyGPT54:
+		return fallbackGPT54StandardContextTokens
+	case policy.ClaudeGPTTargetFamilyGPT55:
+		return fallbackGPT55StandardContextTokens
+	default:
+		return 0
+	}
 }
