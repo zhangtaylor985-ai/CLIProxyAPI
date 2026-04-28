@@ -441,6 +441,26 @@ func TestConvertCodexResponseToClaudeNonStream_ResponseDoneActsAsCompleted(t *te
 	}
 }
 
+func TestConvertCodexResponseToClaudeNonStream_AcceptsSSETranscriptAndPatchesOutputItemDone(t *testing.T) {
+	raw := []byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}\n" +
+		"data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"ok\"}]},\"output_index\":0}\n" +
+		"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"model\":\"gpt-5.4\",\"usage\":{\"input_tokens\":8,\"output_tokens\":2},\"output\":[]}}\n\n")
+
+	out := ConvertCodexResponseToClaudeNonStream(claudeCLICtx(), "gpt-5.4", nil, nil, raw, nil)
+	if got := gjson.GetBytes(out, "id").String(); got != "resp_1" {
+		t.Fatalf("id = %q, want resp_1; out=%s", got, string(out))
+	}
+	if got := gjson.GetBytes(out, "content.0.type").String(); got != "text" {
+		t.Fatalf("content.0.type = %q, want text; out=%s", got, string(out))
+	}
+	if got := gjson.GetBytes(out, "content.0.text").String(); got != "ok" {
+		t.Fatalf("content.0.text = %q, want ok; out=%s", got, string(out))
+	}
+	if got := gjson.GetBytes(out, "usage.input_tokens").Int(); got != 8 {
+		t.Fatalf("usage.input_tokens = %d, want 8; out=%s", got, string(out))
+	}
+}
+
 func TestConvertCodexResponseToClaude_WebSearchSyntheticTagSuppressedForVSCode(t *testing.T) {
 	originalRequest := []byte(`{"model":"claude-opus-4-6","messages":[{"role":"user","content":"OpenAI Codex app 最新官方信息是什么？给我来源。"}],"tools":[{"name":"WebSearch","input_schema":{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}}]}`)
 	raw := []byte(`data: {"type":"response.output_item.added","item":{"id":"ws_123","type":"web_search_call","status":"in_progress"},"output_index":1,"sequence_number":4}`)

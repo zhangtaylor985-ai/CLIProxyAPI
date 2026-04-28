@@ -9,6 +9,7 @@ package claude
 import (
 	"bytes"
 	"context"
+	"sort"
 	"strings"
 
 	translatorcommon "github.com/router-for-me/CLIProxyAPI/v6/internal/translator/common"
@@ -346,6 +347,7 @@ func ConvertCodexResponseToClaudeNonStream(ctx context.Context, _ string, origin
 	revNames := buildReverseMapFromClaudeOriginalShortToOriginal(originalRequestRawJSON)
 	clientKind := gptinclaude.DetectClientKind(ctx)
 
+	rawJSON = normalizeCodexNonStreamCompleted(rawJSON)
 	rootResult := gjson.ParseBytes(rawJSON)
 	typeStr := rootResult.Get("type").String()
 	if typeStr != "response.completed" && typeStr != "response.done" {
@@ -482,6 +484,91 @@ func ConvertCodexResponseToClaudeNonStream(ctx context.Context, _ string, origin
 	}
 
 	return out
+}
+
+func normalizeCodexNonStreamCompleted(rawJSON []byte) []byte {
+	rawJSON = bytes.TrimSpace(rawJSON)
+	if len(rawJSON) == 0 {
+		return rawJSON
+	}
+	if typeStr := gjson.GetBytes(rawJSON, "type").String(); typeStr == "response.completed" || typeStr == "response.done" {
+		return rawJSON
+	}
+
+	outputItemsByIndex := make(map[int64][]byte)
+	var outputItemsFallback [][]byte
+	var completed []byte
+	for _, line := range bytes.Split(rawJSON, []byte("\n")) {
+		line = bytes.TrimSpace(line)
+		if !bytes.HasPrefix(line, dataTag) {
+			continue
+		}
+		data := bytes.TrimSpace(line[len(dataTag):])
+		if len(data) == 0 || bytes.Equal(data, []byte("[DONE]")) {
+			continue
+		}
+		switch gjson.GetBytes(data, "type").String() {
+		case "response.output_item.done":
+			collectCodexNonStreamOutputItemDone(data, outputItemsByIndex, &outputItemsFallback)
+		case "response.completed", "response.done":
+			completed = bytes.Clone(data)
+		}
+	}
+	if len(completed) == 0 {
+		return rawJSON
+	}
+	return patchCodexNonStreamCompletedOutput(completed, outputItemsByIndex, outputItemsFallback)
+}
+
+func collectCodexNonStreamOutputItemDone(eventData []byte, outputItemsByIndex map[int64][]byte, outputItemsFallback *[][]byte) {
+	itemResult := gjson.GetBytes(eventData, "item")
+	if !itemResult.Exists() || itemResult.Type != gjson.JSON {
+		return
+	}
+	outputIndexResult := gjson.GetBytes(eventData, "output_index")
+	if outputIndexResult.Exists() {
+		outputItemsByIndex[outputIndexResult.Int()] = []byte(itemResult.Raw)
+		return
+	}
+	*outputItemsFallback = append(*outputItemsFallback, []byte(itemResult.Raw))
+}
+
+func patchCodexNonStreamCompletedOutput(eventData []byte, outputItemsByIndex map[int64][]byte, outputItemsFallback [][]byte) []byte {
+	outputResult := gjson.GetBytes(eventData, "response.output")
+	shouldPatchOutput := (!outputResult.Exists() || !outputResult.IsArray() || len(outputResult.Array()) == 0) && (len(outputItemsByIndex) > 0 || len(outputItemsFallback) > 0)
+	if !shouldPatchOutput {
+		return eventData
+	}
+
+	indexes := make([]int64, 0, len(outputItemsByIndex))
+	for idx := range outputItemsByIndex {
+		indexes = append(indexes, idx)
+	}
+	sort.Slice(indexes, func(i, j int) bool {
+		return indexes[i] < indexes[j]
+	})
+
+	items := make([][]byte, 0, len(outputItemsByIndex)+len(outputItemsFallback))
+	for _, idx := range indexes {
+		items = append(items, outputItemsByIndex[idx])
+	}
+	items = append(items, outputItemsFallback...)
+
+	var buf bytes.Buffer
+	buf.WriteByte('[')
+	for i, item := range items {
+		if i > 0 {
+			buf.WriteByte(',')
+		}
+		buf.Write(item)
+	}
+	buf.WriteByte(']')
+
+	patched, err := sjson.SetRawBytes(eventData, "response.output", buf.Bytes())
+	if err != nil {
+		return eventData
+	}
+	return patched
 }
 
 func extractResponsesUsage(usage gjson.Result) (int64, int64, int64) {
