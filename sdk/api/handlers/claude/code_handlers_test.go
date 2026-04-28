@@ -62,6 +62,30 @@ func (e slowFailingClaudeExecutor) HttpRequest(context.Context, *coreauth.Auth, 
 	return nil, nil
 }
 
+type emptyClaudeExecutor struct{}
+
+func (e emptyClaudeExecutor) Identifier() string { return "claude" }
+
+func (e emptyClaudeExecutor) Execute(context.Context, *coreauth.Auth, coreexecutor.Request, coreexecutor.Options) (coreexecutor.Response, error) {
+	return coreexecutor.Response{Payload: []byte{}}, nil
+}
+
+func (e emptyClaudeExecutor) ExecuteStream(context.Context, *coreauth.Auth, coreexecutor.Request, coreexecutor.Options) (*coreexecutor.StreamResult, error) {
+	return nil, &coreauth.Error{HTTPStatus: http.StatusInternalServerError, Message: "unexpected stream call"}
+}
+
+func (e emptyClaudeExecutor) CountTokens(context.Context, *coreauth.Auth, coreexecutor.Request, coreexecutor.Options) (coreexecutor.Response, error) {
+	return coreexecutor.Response{}, &coreauth.Error{HTTPStatus: http.StatusInternalServerError, Message: "unexpected count call"}
+}
+
+func (e emptyClaudeExecutor) Refresh(_ context.Context, auth *coreauth.Auth) (*coreauth.Auth, error) {
+	return auth, nil
+}
+
+func (e emptyClaudeExecutor) HttpRequest(context.Context, *coreauth.Auth, *http.Request) (*http.Response, error) {
+	return nil, nil
+}
+
 func TestWriteClientError_UsesClaudeErrorBody(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	base := handlers.NewBaseAPIHandlers(&sdkconfig.SDKConfig{}, nil)
@@ -195,6 +219,50 @@ func TestClaudeNonStreamingResponse_DoesNotBodyKeepAliveBeforeError(t *testing.T
 	if payload.Error.Message != "stream closed before response.completed" {
 		t.Fatalf("error.message = %q", payload.Error.Message)
 	}
+}
+
+func TestClaudeNonStreamingResponse_RejectsEmptyUpstreamBody(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	manager := coreauth.NewManager(nil, nil, nil)
+	manager.RegisterExecutor(emptyClaudeExecutor{})
+	auth := &coreauth.Auth{
+		ID:       "claude-empty-response-test",
+		Provider: "claude",
+		Status:   coreauth.StatusActive,
+	}
+	if _, err := manager.Register(context.Background(), auth); err != nil {
+		t.Fatalf("register auth: %v", err)
+	}
+	registry.GetGlobalRegistry().RegisterClient(auth.ID, auth.Provider, []*registry.ModelInfo{{ID: "claude-empty-response-test"}})
+	t.Cleanup(func() {
+		registry.GetGlobalRegistry().UnregisterClient(auth.ID)
+	})
+
+	base := handlers.NewBaseAPIHandlers(&sdkconfig.SDKConfig{}, manager)
+	h := NewClaudeCodeAPIHandler(base)
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	h.handleNonStreamingResponse(c, []byte(`{"model":"claude-empty-response-test","max_tokens":1,"messages":[{"role":"user","content":"Hi"}]}`))
+
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d; body=%q", recorder.Code, http.StatusServiceUnavailable, recorder.Body.String())
+	}
+	if strings.TrimSpace(recorder.Body.String()) == "" {
+		t.Fatal("expected Claude error body, got empty response")
+	}
+
+	var payload claudeErrorPayload
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if payload.Error.Message != handlers.GenericSensitiveClientErrorMessage {
+		t.Fatalf("error.message = %q", payload.Error.Message)
+	}
+	assertNoClaudeClientInternalLeak(t, recorder.Body.String())
 }
 
 func TestForwardClaudeStreamTerminalError_UsesClaudeErrorEvent(t *testing.T) {

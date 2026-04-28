@@ -198,6 +198,13 @@ func (h *ClaudeCodeAPIHandler) handleNonStreamingResponse(c *gin.Context, rawJSO
 		}
 	}
 
+	if len(bytes.TrimSpace(resp)) == 0 {
+		errEmpty := errors.New("empty upstream response")
+		h.writeClientError(c, &interfaces.ErrorMessage{StatusCode: http.StatusBadGateway, Error: errEmpty})
+		cliCancel(errEmpty)
+		return
+	}
+
 	handlers.WriteUpstreamHeaders(c.Writer.Header(), upstreamHeaders)
 	_, _ = c.Writer.Write(resp)
 	cliCancel()
