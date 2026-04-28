@@ -132,6 +132,8 @@ sudo tail -60 /root/cliapp/CLIProxyAPI/logs/codex-raw-sse/codex-raw-sse-*.log
 
 - `# saw_completion_event: true`：该 upstream attempt 有完成事件。
 - `# saw_completion_event: false` 且 `# eof: true`：流在 completion 前结束。
+- `# saw_terminal_event: true` + `# terminal_event: response.incomplete`：上游返回了终止事件，但不是成功完成。
+- `# incomplete_reason: max_output_tokens`：上游因输出上限提前结束；若此时工具参数半截或 `tool_use.input={}`，不要当成功写回 transcript。
 - `# scanner_error: ...`：本地读流/scanner 层异常。
 - `# raw_sse_log_truncated: true`：日志达到上限，需提高 max bytes 或缩小复现范围。
 
@@ -157,6 +159,7 @@ sudo systemctl restart cliproxyapi
 - 失败时间窗
 - `response_json` / `error_json` 摘要
 - raw SSE 文件尾部的 `eof` / `saw_completion_event` / `scanner_error`
+- 若存在 `response.incomplete`，记录 `terminal_event` 与 `incomplete_reason`
 - `journalctl -u cliproxyapi` 对应时间窗
 
 线上 systemd 日志：
@@ -173,6 +176,7 @@ sudo journalctl -u cliproxyapi --since '2026-04-28 16:45:00' --until '2026-04-28
 - “该轮下游形成半截 tool_use，且未收到 completion。”
 - “raw SSE 显示上游/链路在 completion 前 EOF。”
 - “raw SSE 显示 scanner error，更偏本地读流问题。”
+- “raw SSE 显示上游返回 `response.incomplete`，reason 为 `max_output_tokens`；这不是本地 scanner 丢帧，应保留失败处理，避免半截 tool_use 污染会话。”
 
 不要说：
 

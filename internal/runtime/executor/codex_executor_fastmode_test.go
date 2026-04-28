@@ -98,6 +98,49 @@ func TestApplyConfiguredCodexServiceTierLeavesBodyUnchangedWhenFastModeDisabled(
 	}
 }
 
+func TestCodexExecute_ReturnsResponseIncompleteReason(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/responses" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_incomplete\",\"model\":\"gpt-5.5\",\"status\":\"in_progress\"}}\n\n"))
+		_, _ = w.Write([]byte("data: {\"type\":\"response.incomplete\",\"response\":{\"id\":\"resp_incomplete\",\"model\":\"gpt-5.5\",\"status\":\"incomplete\",\"incomplete_details\":{\"reason\":\"max_output_tokens\"}}}\n\n"))
+	}))
+	defer srv.Close()
+
+	exec := NewCodexExecutor(&config.Config{})
+	auth := &cliproxyauth.Auth{
+		Attributes: map[string]string{
+			"api_key":  "test-key",
+			"base_url": srv.URL,
+		},
+	}
+	req := cliproxyexecutor.Request{
+		Model:   "gpt-5.5",
+		Payload: []byte(`{"input":"hi"}`),
+	}
+	opts := cliproxyexecutor.Options{SourceFormat: sdktranslator.FromString("codex")}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_, err := exec.Execute(ctx, auth, req, opts)
+	if err == nil {
+		t.Fatal("expected response.incomplete error")
+	}
+	for _, want := range []string{"response.incomplete", "max_output_tokens"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error = %v, want %q", err, want)
+		}
+	}
+}
+
 func TestCodexExecuteStream_ReturnsErrorWhenStreamEndsBeforeCompleted(t *testing.T) {
 	t.Parallel()
 
@@ -158,6 +201,59 @@ func TestCodexExecuteStream_ReturnsErrorWhenStreamEndsBeforeCompleted(t *testing
 	}
 	if !strings.Contains(last.Err.Error(), "stream closed before response.completed") {
 		t.Fatalf("terminal error = %v, want missing response.completed", last.Err)
+	}
+}
+
+func TestCodexExecuteStream_ReturnsResponseIncompleteReason(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/responses" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_incomplete\",\"model\":\"gpt-5.5\",\"status\":\"in_progress\"}}\n\n"))
+		_, _ = w.Write([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\n"))
+		_, _ = w.Write([]byte("data: {\"type\":\"response.incomplete\",\"response\":{\"id\":\"resp_incomplete\",\"model\":\"gpt-5.5\",\"status\":\"incomplete\",\"incomplete_details\":{\"reason\":\"max_output_tokens\"}}}\n\n"))
+	}))
+	defer srv.Close()
+
+	exec := NewCodexExecutor(&config.Config{})
+	auth := &cliproxyauth.Auth{
+		Attributes: map[string]string{
+			"api_key":  "test-key",
+			"base_url": srv.URL,
+		},
+	}
+	req := cliproxyexecutor.Request{
+		Model:   "gpt-5.5",
+		Payload: []byte(`{"stream":true,"model":"gpt-5.5","messages":[{"role":"user","content":"hi"}]}`),
+	}
+	opts := cliproxyexecutor.Options{SourceFormat: sdktranslator.FromString("claude")}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	result, err := exec.ExecuteStream(ctx, auth, req, opts)
+	if err != nil {
+		t.Fatalf("ExecuteStream error: %v", err)
+	}
+	var terminalErr error
+	for chunk := range result.Chunks {
+		if chunk.Err != nil {
+			terminalErr = chunk.Err
+		}
+	}
+	if terminalErr == nil {
+		t.Fatal("expected response.incomplete terminal error")
+	}
+	for _, want := range []string{"response.incomplete", "max_output_tokens"} {
+		if !strings.Contains(terminalErr.Error(), want) {
+			t.Fatalf("terminal error = %v, want %q", terminalErr, want)
+		}
 	}
 }
 
@@ -291,6 +387,9 @@ func TestCodexExecuteStream_RawSSEDiagnosticsWritesUnnormalizedResponseDone(t *t
 	if !strings.Contains(content, "# saw_completion_event: true") {
 		t.Fatalf("raw SSE log missing completion marker:\n%s", content)
 	}
+	if !strings.Contains(content, "# saw_terminal_event: true") || !strings.Contains(content, "# terminal_event: response.done") {
+		t.Fatalf("raw SSE log missing terminal marker:\n%s", content)
+	}
 }
 
 func TestCodexExecuteStream_RawSSEDiagnosticsMarksMissingCompletion(t *testing.T) {
@@ -345,6 +444,71 @@ func TestCodexExecuteStream_RawSSEDiagnosticsMarksMissingCompletion(t *testing.T
 	}
 	if !strings.Contains(content, "# eof: true") || !strings.Contains(content, "# saw_completion_event: false") {
 		t.Fatalf("raw SSE log missing EOF diagnostic markers:\n%s", content)
+	}
+	if !strings.Contains(content, "# saw_terminal_event: false") {
+		t.Fatalf("raw SSE log should mark missing terminal event:\n%s", content)
+	}
+}
+
+func TestCodexExecuteStream_RawSSEDiagnosticsMarksResponseIncomplete(t *testing.T) {
+	logDir := t.TempDir()
+	t.Setenv(codexRawSSELogDirEnv, logDir)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/responses" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_partial\",\"model\":\"gpt-5.5\",\"status\":\"in_progress\"}}\n\n"))
+		_, _ = w.Write([]byte("data: {\"type\":\"response.incomplete\",\"response\":{\"id\":\"resp_partial\",\"model\":\"gpt-5.5\",\"status\":\"incomplete\",\"incomplete_details\":{\"reason\":\"max_output_tokens\"}}}\n\n"))
+	}))
+	defer srv.Close()
+
+	exec := NewCodexExecutor(&config.Config{})
+	auth := &cliproxyauth.Auth{
+		Attributes: map[string]string{
+			"api_key":  "test-key",
+			"base_url": srv.URL,
+		},
+	}
+	req := cliproxyexecutor.Request{
+		Model:   "gpt-5.5",
+		Payload: []byte(`{"stream":true,"model":"gpt-5.5","messages":[{"role":"user","content":"hi"}]}`),
+	}
+	opts := cliproxyexecutor.Options{SourceFormat: sdktranslator.FromString("claude")}
+
+	ctx, cancel := context.WithTimeout(logging.WithRequestID(context.Background(), "raw-sse-response-incomplete"), 5*time.Second)
+	defer cancel()
+
+	result, err := exec.ExecuteStream(ctx, auth, req, opts)
+	if err != nil {
+		t.Fatalf("ExecuteStream error: %v", err)
+	}
+	var terminalErr error
+	for chunk := range result.Chunks {
+		if chunk.Err != nil {
+			terminalErr = chunk.Err
+		}
+	}
+	if terminalErr == nil || !strings.Contains(terminalErr.Error(), "max_output_tokens") {
+		t.Fatalf("terminal error = %v, want response.incomplete reason", terminalErr)
+	}
+
+	content := readSingleRawSSELog(t, logDir)
+	for _, want := range []string{
+		`"type":"response.incomplete"`,
+		"# eof: true",
+		"# saw_completion_event: false",
+		"# saw_terminal_event: true",
+		"# terminal_event: response.incomplete",
+		"# incomplete_reason: max_output_tokens",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("raw SSE log missing %q:\n%s", want, content)
+		}
 	}
 }
 

@@ -95,12 +95,19 @@ func (l *codexRawSSELogger) WriteScannerError(err error) {
 	l.writeString("\n# scanner_error: " + err.Error() + "\n")
 }
 
-func (l *codexRawSSELogger) WriteEOF(sawCompleted bool) {
+func (l *codexRawSSELogger) WriteEOF(sawCompleted bool, terminalEvent string, incompleteReason string) {
 	if l == nil || l.file == nil {
 		return
 	}
 	l.writeString("\n# eof: true\n")
 	l.writeString("# saw_completion_event: " + strconv.FormatBool(sawCompleted) + "\n")
+	l.writeString("# saw_terminal_event: " + strconv.FormatBool(strings.TrimSpace(terminalEvent) != "") + "\n")
+	if terminalEvent = strings.TrimSpace(terminalEvent); terminalEvent != "" {
+		l.writeString("# terminal_event: " + terminalEvent + "\n")
+	}
+	if incompleteReason = strings.TrimSpace(incompleteReason); incompleteReason != "" {
+		l.writeString("# incomplete_reason: " + incompleteReason + "\n")
+	}
 }
 
 func (l *codexRawSSELogger) Close() {

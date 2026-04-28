@@ -234,7 +234,7 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 
 	lines := bytes.Split(data, []byte("\n"))
 	normalizedLines := make([][]byte, 0, len(lines))
-	completed := false
+	var terminalState codexResponseTerminalState
 	outputItemsByIndex := make(map[int64][]byte)
 	var outputItemsFallback [][]byte
 	for _, line := range lines {
@@ -249,7 +249,7 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 		case "response.output_item.done":
 			collectCodexOutputItemDone(data, outputItemsByIndex, &outputItemsFallback)
 		case "response.completed", "response.done":
-			completed = true
+			terminalState.Observe(data)
 			if detail, ok := parseCodexUsage(data); ok {
 				reporter.publish(ctx, detail)
 			}
@@ -257,17 +257,19 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 			if !bytes.Equal(patchedData, data) {
 				line = append([]byte("data: "), patchedData...)
 			}
+		case "response.incomplete":
+			terminalState.Observe(data)
 		}
 		normalizedLines = append(normalizedLines, line)
 	}
-	if completed {
+	if terminalState.SawCompleted() {
 		data = bytes.Join(normalizedLines, []byte("\n"))
 		var param any
 		out := sdktranslator.TranslateNonStream(ctx, to, from, req.Model, originalPayload, body, data, &param)
 		resp = cliproxyexecutor.Response{Payload: out, Headers: httpResp.Header.Clone()}
 		return resp, nil
 	}
-	err = statusErr{code: 408, msg: "stream error: stream disconnected before completion: stream closed before response.completed"}
+	err = newCodexIncompleteResponseErr(terminalState)
 	return resp, err
 }
 
@@ -462,12 +464,15 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 		scanner := bufio.NewScanner(httpResp.Body)
 		scanner.Buffer(nil, 52_428_800) // 50MB
 		var param any
-		sawCompleted := false
+		var terminalState codexResponseTerminalState
 		outputItemsByIndex := make(map[int64][]byte)
 		var outputItemsFallback [][]byte
 		for scanner.Scan() {
 			rawLine := bytes.Clone(scanner.Bytes())
 			rawSSELogger.WriteLine(rawLine)
+			if data, ok := codexSSEData(rawLine); ok {
+				terminalState.Observe(data)
+			}
 			line := normalizeCodexSSECompletionLine(rawLine)
 			translatedLine := bytes.Clone(line)
 
@@ -476,7 +481,6 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 				case "response.output_item.done":
 					collectCodexOutputItemDone(data, outputItemsByIndex, &outputItemsFallback)
 				case "response.completed", "response.done":
-					sawCompleted = true
 					if detail, ok := parseCodexUsage(data); ok {
 						reporter.publish(ctx, detail)
 					}
@@ -498,12 +502,9 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 			out <- cliproxyexecutor.StreamChunk{Err: errScan}
 			return
 		}
-		rawSSELogger.WriteEOF(sawCompleted)
-		if !sawCompleted {
-			errIncomplete := statusErr{
-				code: http.StatusRequestTimeout,
-				msg:  "stream error: stream disconnected before completion: stream closed before response.completed",
-			}
+		rawSSELogger.WriteEOF(terminalState.SawCompleted(), terminalState.Event, terminalState.IncompleteReason)
+		if !terminalState.SawCompleted() {
+			errIncomplete := newCodexIncompleteResponseErr(terminalState)
 			recordAPIResponseError(ctx, e.cfg, errIncomplete)
 			reporter.publishFailure(ctx)
 			out <- cliproxyexecutor.StreamChunk{Err: errIncomplete}
@@ -523,6 +524,56 @@ func codexSSEData(line []byte) ([]byte, bool) {
 func isCodexCompletionEvent(payload []byte) bool {
 	eventType := strings.TrimSpace(gjson.GetBytes(payload, "type").String())
 	return eventType == "response.completed" || eventType == "response.done"
+}
+
+type codexResponseTerminalState struct {
+	Event            string
+	IncompleteReason string
+}
+
+func (s *codexResponseTerminalState) Observe(payload []byte) {
+	if s == nil {
+		return
+	}
+	eventType := strings.TrimSpace(gjson.GetBytes(payload, "type").String())
+	switch eventType {
+	case "response.completed", "response.done":
+		s.Event = eventType
+		s.IncompleteReason = ""
+	case "response.incomplete":
+		s.Event = eventType
+		s.IncompleteReason = codexResponseIncompleteReason(payload)
+	}
+}
+
+func (s codexResponseTerminalState) SawCompleted() bool {
+	return s.Event == "response.completed" || s.Event == "response.done"
+}
+
+func codexResponseIncompleteReason(payload []byte) string {
+	for _, path := range []string{
+		"response.incomplete_details.reason",
+		"incomplete_details.reason",
+	} {
+		if reason := strings.TrimSpace(gjson.GetBytes(payload, path).String()); reason != "" {
+			return reason
+		}
+	}
+	return ""
+}
+
+func newCodexIncompleteResponseErr(state codexResponseTerminalState) statusErr {
+	if state.Event == "response.incomplete" {
+		msg := "stream error: upstream response.incomplete before response.completed"
+		if state.IncompleteReason != "" {
+			msg += ": reason=" + state.IncompleteReason
+		}
+		return statusErr{code: http.StatusRequestTimeout, msg: msg}
+	}
+	return statusErr{
+		code: http.StatusRequestTimeout,
+		msg:  "stream error: stream disconnected before completion: stream closed before response.completed",
+	}
 }
 
 func normalizeCodexSSECompletionLine(line []byte) []byte {
