@@ -447,8 +447,13 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 		return nil, err
 	}
 	out := make(chan cliproxyexecutor.StreamChunk)
+	rawSSELogger := newCodexRawSSELogger(ctx, req.Model)
+	if rawSSELogger != nil {
+		rawSSELogger.WriteStatus(httpResp.StatusCode)
+	}
 	go func() {
 		defer close(out)
+		defer rawSSELogger.Close()
 		defer func() {
 			if errClose := httpResp.Body.Close(); errClose != nil {
 				log.Errorf("codex executor: close response body error: %v", errClose)
@@ -461,7 +466,9 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 		outputItemsByIndex := make(map[int64][]byte)
 		var outputItemsFallback [][]byte
 		for scanner.Scan() {
-			line := normalizeCodexSSECompletionLine(scanner.Bytes())
+			rawLine := bytes.Clone(scanner.Bytes())
+			rawSSELogger.WriteLine(rawLine)
+			line := normalizeCodexSSECompletionLine(rawLine)
 			translatedLine := bytes.Clone(line)
 
 			if data, ok := codexSSEData(line); ok {
@@ -485,11 +492,13 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 			}
 		}
 		if errScan := scanner.Err(); errScan != nil {
+			rawSSELogger.WriteScannerError(errScan)
 			recordAPIResponseError(ctx, e.cfg, errScan)
 			reporter.publishFailure(ctx)
 			out <- cliproxyexecutor.StreamChunk{Err: errScan}
 			return
 		}
+		rawSSELogger.WriteEOF(sawCompleted)
 		if !sawCompleted {
 			errIncomplete := statusErr{
 				code: http.StatusRequestTimeout,
