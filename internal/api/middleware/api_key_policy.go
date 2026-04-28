@@ -3,8 +3,13 @@ package middleware
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"image"
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
 	"io"
 	"math"
 	"net/http"
@@ -36,6 +41,9 @@ const (
 	claudeOrdinaryOpusContextTokens     = 200000
 	claudeCodexEffectiveContextPercent  = 95
 	claudePromptTooLongEstimateDivisor  = 3
+	claudeImagePixelsPerToken           = 750
+	claudeImageMaxBillablePixels        = 1152000
+	claudeImageFallbackTokens           = 1600
 	claudePromptTooLongErrorContentType = "application/json"
 	claudePromptTooLongMessage          = "Prompt is too long. Please run /compact and try again."
 )
@@ -631,17 +639,59 @@ func estimateClaudeContentBlockBytes(block map[string]any) int {
 		return estimateClaudeStringFieldBytes(block, "name") + estimateClaudeCompactJSONBytes(block["input"])
 	case "tool_result":
 		return estimateClaudeContentBytes(block["content"])
+	case "image":
+		return estimateClaudeImageBlockBytes(block)
 	default:
 		return estimateClaudeCompactJSONBytes(block)
 	}
 }
 
+func estimateClaudeImageBlockBytes(block map[string]any) int {
+	tokens := estimateClaudeImageBlockTokens(block)
+	if tokens <= 0 {
+		tokens = claudeImageFallbackTokens
+	}
+	return tokens * claudePromptTooLongEstimateDivisor
+}
+
+func estimateClaudeImageBlockTokens(block map[string]any) int {
+	source, ok := block["source"].(map[string]any)
+	if !ok {
+		return claudeImageFallbackTokens
+	}
+	sourceType := strings.ToLower(strings.TrimSpace(stringFromMap(source, "type")))
+	if sourceType != "base64" {
+		return claudeImageFallbackTokens
+	}
+	data := strings.TrimSpace(stringFromMap(source, "data"))
+	if data == "" {
+		return claudeImageFallbackTokens
+	}
+	if comma := strings.IndexByte(data, ','); comma >= 0 && strings.Contains(data[:comma], "base64") {
+		data = data[comma+1:]
+	}
+	cfg, _, err := image.DecodeConfig(base64.NewDecoder(base64.StdEncoding, strings.NewReader(data)))
+	if err != nil || cfg.Width <= 0 || cfg.Height <= 0 {
+		return claudeImageFallbackTokens
+	}
+	pixels := int64(cfg.Width) * int64(cfg.Height)
+	maxPixels := int64(claudeImageMaxBillablePixels)
+	if pixels > maxPixels {
+		pixels = maxPixels
+	}
+	return int((pixels + int64(claudeImagePixelsPerToken) - 1) / int64(claudeImagePixelsPerToken))
+}
+
 func estimateClaudeStringFieldBytes(obj map[string]any, field string) int {
+	return len(stringFromMap(obj, field))
+}
+
+func stringFromMap(obj map[string]any, field string) string {
 	value, ok := obj[field].(string)
 	if !ok {
-		return 0
+		return ""
 	}
-	return len(value)
+	return value
 }
 
 func estimateClaudeCompactJSONBytes(value any) int {

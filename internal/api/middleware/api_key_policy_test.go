@@ -223,6 +223,56 @@ func TestAPIKeyPolicyMiddleware_AllowsEscapedJSONBodyWhenSemanticPromptUnderLimi
 	}
 }
 
+func TestAPIKeyPolicyMiddleware_AllowsLargeBase64ImagePayloadWhenVisualPromptUnderLimit(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	cfg := &config.Config{
+		SDKConfig: config.SDKConfig{DisableClaudeOpus1M: true},
+	}
+
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set("apiKey", "k")
+		c.Next()
+	})
+	r.Use(APIKeyPolicyMiddleware(func() *config.Config { return cfg }, nil, nil, nil))
+	r.POST("/v1/messages", func(c *gin.Context) {
+		c.JSON(200, gin.H{"ok": true})
+	})
+
+	limit := claudePromptContextLimitTokens("claude-opus-4-6")
+	base64PNG1x1 := "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+	largeBase64Image := base64PNG1x1 + strings.Repeat("A", limit*claudePromptTooLongEstimateDivisor)
+	payload := fmt.Sprintf(`{"model":"claude-opus-4-6","messages":[{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":%q}},{"type":"text","text":"describe this image"}]}]}`, largeBase64Image)
+	if rawEstimate := (len(payload) + claudePromptTooLongEstimateDivisor - 1) / claudePromptTooLongEstimateDivisor; rawEstimate <= limit {
+		t.Fatalf("test payload no longer exceeds raw body estimate: %d", rawEstimate)
+	}
+	if semanticEstimate := estimateClaudeRequestTokens([]byte(payload)); semanticEstimate >= limit {
+		t.Fatalf("semantic estimate=%d, want below %d", semanticEstimate, limit)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewBufferString(payload))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestEstimateClaudeImageBlockTokensUsesDecodedDimensions(t *testing.T) {
+	block := map[string]any{
+		"type": "image",
+		"source": map[string]any{
+			"type":       "base64",
+			"media_type": "image/png",
+			"data":       "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
+		},
+	}
+	if got := estimateClaudeImageBlockTokens(block); got != 1 {
+		t.Fatalf("image tokens=%d, want 1", got)
+	}
+}
+
 func TestAPIKeyPolicyMiddleware_UsesOrdinaryOpusWindowWhenNotRouted(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	cfg := &config.Config{
