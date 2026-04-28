@@ -219,7 +219,11 @@ func (h *Handler) persistLocked(c *gin.Context) bool {
 		return false
 	}
 	currentCfg := h.cfg
+	// The reload callback eventually calls Handler.SetConfig on the same handler.
+	// Release h.mu around the callback to avoid self-deadlocking management PUTs.
+	h.mu.Unlock()
 	h.notifyConfigUpdated(currentCfg)
+	h.mu.Lock()
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	return true
 }

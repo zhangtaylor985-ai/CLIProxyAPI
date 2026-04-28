@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
@@ -61,6 +62,53 @@ func TestGetDisablePromptTokenLimit(t *testing.T) {
 	}
 	if got := gjson.GetBytes(recorder.Body.Bytes(), "disable-prompt-token-limit").Bool(); !got {
 		t.Fatalf("disable-prompt-token-limit = %v, want true", got)
+	}
+}
+
+func TestPutDisablePromptTokenLimitDoesNotDeadlockWhenReloadSetsHandlerConfig(t *testing.T) {
+	t.Parallel()
+	gin.SetMode(gin.TestMode)
+
+	tmpFile := t.TempDir() + "/config.yaml"
+	if err := os.WriteFile(tmpFile, []byte("disable-prompt-token-limit: false\n"), 0o600); err != nil {
+		t.Fatalf("write temp config: %v", err)
+	}
+
+	handler := &Handler{
+		cfg: &config.Config{
+			SDKConfig: config.SDKConfig{
+				DisablePromptTokenLimit: false,
+			},
+		},
+		configFilePath: tmpFile,
+	}
+	handler.SetConfigUpdatedCallback(func(updated *config.Config) {
+		handler.SetConfig(updated)
+	})
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(
+		http.MethodPut,
+		"/v0/management/disable-prompt-token-limit",
+		bytes.NewBufferString(`{"value":false}`),
+	)
+	ctx.Request.Header.Set("Content-Type", "application/json")
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		handler.PutDisablePromptTokenLimit(ctx)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("PutDisablePromptTokenLimit deadlocked while running config-updated callback")
+	}
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
 	}
 }
 

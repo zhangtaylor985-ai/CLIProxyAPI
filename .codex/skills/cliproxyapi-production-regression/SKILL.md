@@ -78,6 +78,18 @@ npm run lint
 
 `npm run build` 覆盖 TypeScript 和生产打包；`npm run lint` 覆盖常规静态问题。
 
+管理端前端源码默认只认：
+
+`/Users/taylor/code/tools/Cli-Proxy-API-Management-Center-ori`
+
+不要把后端暴露的 `/management.html` 当成管理端前端源码或前端发布产物。需要登录、调用管理端 API、做浏览器校验时，认证信息直接从后端仓库 `.env` 读取：
+
+- `MANAGEMENT_PASSWORD`
+- `MANAGEMENT_TEST_ADMIN_*`
+- `MANAGEMENT_TEST_STAFF_*`
+
+命令里可以 `source /Users/taylor/code/tools/CLIProxyAPI-ori/.env` 后使用变量，但不要在日志、截图或最终回复里输出明文密码、Token 或完整 API Key。
+
 ### 4. 配置与持久化检查
 
 涉及 API key policy、billing、session trajectory、management users、PG store 时，确认：
