@@ -93,8 +93,9 @@ type APIKeyPolicy struct {
 	// Nil preserves the default of enabled for native Claude opt-in keys.
 	ClaudeGlobalFallbackEnabled *bool `yaml:"claude-global-fallback-enabled,omitempty" json:"claude-global-fallback-enabled,omitempty"`
 
-	// EnableClaudeOpus1M allows this API key to keep Claude Opus 1M capability even when
-	// the global disable-claude-opus-1m switch is enabled.
+	// EnableClaudeOpus1M allows this API key to keep Claude Code 1M context signals even
+	// when the global disable-claude-opus-1m switch is enabled. For Claude -> GPT routed
+	// keys, this selects the large GPT-backed context budget instead of the standard budget.
 	EnableClaudeOpus1M *bool `yaml:"enable-claude-opus-1m,omitempty" json:"enable-claude-opus-1m,omitempty"`
 
 	// ClaudeCodeOnly overrides the global Claude Code-only client restriction for this API key.
@@ -690,7 +691,7 @@ func (cfg *Config) ClaudeGPTReasoningEffortOrDefault() string {
 	return policy.EffectiveClaudeGPTReasoningEffort(cfg.ClaudeToGPTReasoningEffort)
 }
 
-// AllowsClaudeOpus1M reports whether this client API key may keep Claude Opus 1M capability.
+// AllowsClaudeOpus1M reports whether this client API key may keep Claude Code 1M context signals.
 // When the global switch is off, all keys are allowed. When the global switch is on, only
 // keys with enable-claude-opus-1m=true are allowed.
 func (cfg *Config) AllowsClaudeOpus1M(apiKey string) bool {

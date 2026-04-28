@@ -670,7 +670,19 @@ func TestAPIKeyPolicyMiddleware_UsesRoutedGPT54CodexWindowForOpusPreflight(t *te
 	}
 }
 
-func TestAPIKeyPolicyMiddleware_AllowsOversizedOpusForPerKey1MOverride(t *testing.T) {
+func TestClaudePromptContextLimitTokensForPolicyUsesLargeBudgetFor1MOverride(t *testing.T) {
+	if got := claudePromptContextLimitTokensForPolicy("gpt-5.4(high)", false); got != 258400 {
+		t.Fatalf("standard gpt-5.4 prompt limit=%d", got)
+	}
+	if got := claudePromptContextLimitTokensForPolicy("gpt-5.4(high)", true); got != 997500 {
+		t.Fatalf("1M override prompt limit=%d", got)
+	}
+	if got := claudePromptContextLimitTokensForPolicy("gpt-5.5(high)", true); got != 997500 {
+		t.Fatalf("1M override should not depend on standard routed model window, got %d", got)
+	}
+}
+
+func TestAPIKeyPolicyMiddleware_AllowsPromptAboveStandardWindowForPerKey1MContext(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	cfg := &config.Config{
 		SDKConfig: config.SDKConfig{DisableClaudeOpus1M: true},
@@ -697,6 +709,40 @@ func TestAPIKeyPolicyMiddleware_AllowsOversizedOpusForPerKey1MOverride(t *testin
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestAPIKeyPolicyMiddleware_RejectsPromptAbovePerKey1MContextBudget(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	cfg := &config.Config{
+		SDKConfig: config.SDKConfig{DisableClaudeOpus1M: true},
+		APIKeyPolicies: []config.APIKeyPolicy{
+			{APIKey: "k", EnableClaudeOpus1M: boolPtr(true)},
+		},
+	}
+
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set("apiKey", "k")
+		c.Next()
+	})
+	r.Use(APIKeyPolicyMiddleware(func() *config.Config { return cfg }, nil, nil, nil))
+	r.POST("/v1/messages", func(c *gin.Context) {
+		c.JSON(200, gin.H{"ok": true})
+	})
+
+	limit := claudePromptContextLimitTokensForPolicy("claude-opus-4-6", true)
+	if limit != 997500 {
+		t.Fatalf("1M prompt limit=%d", limit)
+	}
+	largeContent := strings.Repeat("a", limit*claudePromptTooLongEstimateDivisor+1)
+	payload := fmt.Sprintf(`{"model":"claude-opus-4-6[1m]","messages":[{"role":"user","content":%q}]}`, largeContent)
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewBufferString(payload))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 	}
 }

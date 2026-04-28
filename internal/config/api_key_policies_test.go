@@ -234,7 +234,7 @@ func TestConfig_AllowsClaudeOpus1M_DefaultsEnabledWhenGlobalDisabled(t *testing.
 	cfg := &Config{}
 
 	if !cfg.AllowsClaudeOpus1M("k1") {
-		t.Fatal("expected Opus 1M to remain enabled when the global switch is off")
+		t.Fatal("expected 1M context signals to remain enabled when the global switch is off")
 	}
 }
 
@@ -248,13 +248,13 @@ func TestConfig_AllowsClaudeOpus1M_RespectsPerKeyOverride(t *testing.T) {
 	}
 
 	if !cfg.AllowsClaudeOpus1M("k1") {
-		t.Fatal("expected k1 to override the global Opus 1M disable switch")
+		t.Fatal("expected k1 to override the global 1M context disable switch")
 	}
 	if cfg.AllowsClaudeOpus1M("k2") {
-		t.Fatal("expected k2 to inherit the global Opus 1M disable switch")
+		t.Fatal("expected k2 to inherit the global 1M context disable switch")
 	}
 	if cfg.AllowsClaudeOpus1M("k3") {
-		t.Fatal("expected unknown keys to inherit the global Opus 1M disable switch")
+		t.Fatal("expected unknown keys to inherit the global 1M context disable switch")
 	}
 }
 

@@ -272,6 +272,7 @@ func TestPolicyViewRoundTripUsesFamilyAccessTogglesAndMetadata(t *testing.T) {
 		CodexChannelMode:            "provider",
 		EnableClaudeModels:          boolPtr(true),
 		ClaudeGlobalFallbackEnabled: boolPtr(false),
+		EnableClaudeOpus1M:          boolPtr(true),
 		ExcludedModels:              []string{"claude-*", "gpt-*", "chatgpt-*", "o1*", "o3*", "o4*", "custom-*"},
 	}
 
@@ -300,6 +301,9 @@ func TestPolicyViewRoundTripUsesFamilyAccessTogglesAndMetadata(t *testing.T) {
 	if view.ClaudeGlobalFallback {
 		t.Fatalf("expected claude global fallback flag to round-trip as disabled, got %+v", view)
 	}
+	if !view.EnableClaudeOpus1M {
+		t.Fatalf("expected 1M context override to round-trip in view, got %+v", view)
+	}
 
 	roundTrip := viewToPolicy("k1", view)
 	if !roundTrip.Disabled || roundTrip.CreatedAt != policyEntry.CreatedAt || roundTrip.ExpiresAt != policyEntry.ExpiresAt {
@@ -316,6 +320,9 @@ func TestPolicyViewRoundTripUsesFamilyAccessTogglesAndMetadata(t *testing.T) {
 	}
 	if roundTrip.ClaudeGlobalFallbackEnabled == nil || *roundTrip.ClaudeGlobalFallbackEnabled {
 		t.Fatalf("unexpected round-trip claude global fallback flag: %+v", roundTrip)
+	}
+	if roundTrip.EnableClaudeOpus1M == nil || !*roundTrip.EnableClaudeOpus1M {
+		t.Fatalf("unexpected round-trip 1M context flag: %+v", roundTrip)
 	}
 	if got := roundTrip.ExcludedModels; len(got) != 7 {
 		t.Fatalf("unexpected round-trip excluded models: %#v", got)

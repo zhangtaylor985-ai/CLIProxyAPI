@@ -180,6 +180,7 @@ type apiKeyRecordSummaryView struct {
 	DailyLimitCount           int                            `json:"daily_limit_count"`
 	PolicyFamily              string                         `json:"policy_family"`
 	EnableClaudeModels        bool                           `json:"enable_claude_models"`
+	EnableClaudeOpus1M        bool                           `json:"enable_claude_opus_1m"`
 	FastMode                  bool                           `json:"fast_mode"`
 	SessionTrajectoryDisabled bool                           `json:"session_trajectory_disabled"`
 }
@@ -724,6 +725,7 @@ func (h *Handler) buildAPIKeySummary(ctx context.Context, apiKey string, now tim
 		DailyLimitCount:    0,
 		PolicyFamily:       "",
 		EnableClaudeModels: false,
+		EnableClaudeOpus1M: false,
 		FastMode:           false,
 	}
 	if effectivePolicy != nil {
@@ -738,6 +740,7 @@ func (h *Handler) buildAPIKeySummary(ctx context.Context, apiKey string, now tim
 		summary.DailyLimitCount = len(effectivePolicy.DailyLimits)
 		summary.PolicyFamily = effectivePolicy.ClaudeGPTTargetFamilyOrDefault()
 		summary.EnableClaudeModels = effectivePolicy.ClaudeModelsEnabled()
+		summary.EnableClaudeOpus1M = effectivePolicy.ClaudeOpus1MEnabled()
 		summary.FastMode = effectivePolicy.FastModeEnabled()
 		summary.SessionTrajectoryDisabled = effectivePolicy.SessionTrajectoryDisabled
 	}
@@ -783,6 +786,7 @@ func (h *Handler) buildAPIKeyPolicyOnlySummary(apiKey string, now time.Time, eff
 		summary.DailyLimitCount = len(effectivePolicy.DailyLimits)
 		summary.PolicyFamily = effectivePolicy.ClaudeGPTTargetFamilyOrDefault()
 		summary.EnableClaudeModels = effectivePolicy.ClaudeModelsEnabled()
+		summary.EnableClaudeOpus1M = effectivePolicy.ClaudeOpus1MEnabled()
 		summary.FastMode = effectivePolicy.FastModeEnabled()
 		if effectivePolicy.DailyBudgetUSD > 0 {
 			summary.DailyBudget.Enabled = true

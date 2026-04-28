@@ -52,6 +52,7 @@ const (
 	claudeGPTImageMaxSidePixels         = 2048
 	claudeGPTImageShortSidePixels       = 768
 	claudeGPTImageTileSizePixels        = 512
+	claudeOneMillionContextTokens       = 1050000
 	claudeDocumentFallbackTokens        = 8000
 	claudeDocumentBytesPerToken         = 512
 	claudeDocumentMaxEstimateTokens     = 64000
@@ -218,8 +219,8 @@ func APIKeyPolicyMiddleware(getConfig func() *config.Config, limiter policy.Dail
 				budgetModel = routed
 			}
 		}
-		if !allowClaudeOpus1M && shouldEnforceClaudeBaseContextLimit(c.Request, effectiveModel) {
-			contextLimit := claudePromptContextLimitTokens(budgetModel)
+		if shouldEnforceClaudeBaseContextLimit(c.Request, effectiveModel) {
+			contextLimit := claudePromptContextLimitTokensForPolicy(budgetModel, allowClaudeOpus1M)
 			estimatedTokens := estimateClaudeRequestTokensWithinLimitForModel(bodyBytes, contextLimit, budgetModel)
 			if estimatedTokens > contextLimit {
 				if claudeContextLimitAlertEnabled(cfg) {
@@ -558,6 +559,13 @@ func claudePromptContextLimitTokens(routedModel string) int {
 		contextWindow = claudeOrdinaryOpusContextTokens
 	}
 	return claudeEffectivePromptContextLimitTokens(contextWindow)
+}
+
+func claudePromptContextLimitTokensForPolicy(routedModel string, allowClaudeOpus1M bool) int {
+	if allowClaudeOpus1M {
+		return claudeEffectivePromptContextLimitTokens(claudeOneMillionContextTokens)
+	}
+	return claudePromptContextLimitTokens(routedModel)
 }
 
 func claudeContextLimitAlertEnabled(cfg *config.Config) bool {

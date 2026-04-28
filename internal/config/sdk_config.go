@@ -53,9 +53,9 @@ type SDKConfig struct {
 	// When empty and ClaudeStyleEnabled is true, the built-in default prompt is used.
 	ClaudeStylePrompt string `yaml:"claude-style-prompt,omitempty" json:"claude-style-prompt,omitempty"`
 
-	// DisableClaudeOpus1M strips Claude Opus 1M capability from client API key requests by default.
+	// DisableClaudeOpus1M strips Claude Code 1M context signals from client API key requests by default.
 	// When true, the proxy removes the custom 1M header and beta flag unless the API key policy
-	// explicitly enables Opus 1M for that key.
+	// explicitly enables 1M context for that key.
 	DisableClaudeOpus1M bool `yaml:"disable-claude-opus-1m" json:"disable-claude-opus-1m"`
 
 	// ClaudeCodeOnlyEnabled restricts client API key access to Claude Code fingerprints by default.
