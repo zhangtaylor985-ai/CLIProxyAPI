@@ -543,6 +543,9 @@ func formatErrorEntry(entry *log.Entry, normalizedMessage string, suppressed int
 	if requestID, ok := entry.Data["request_id"].(string); ok && strings.TrimSpace(requestID) != "" {
 		builder.WriteString("Request ID: " + strings.TrimSpace(requestID) + "\n")
 	}
+	if apiKey := firstLogFieldString(entry, "client_api_key", "api_key"); apiKey != "" {
+		builder.WriteString("API Key: " + trimForTelegram(apiKey, 120) + "\n")
+	}
 	if normalizedMessage != "" {
 		builder.WriteString("Message: " + trimForTelegram(normalizedMessage, 600) + "\n")
 	}
@@ -550,6 +553,20 @@ func formatErrorEntry(entry *log.Entry, normalizedMessage string, suppressed int
 		builder.WriteString(fmt.Sprintf("Suppressed similar alerts: %d\n", suppressed))
 	}
 	return strings.TrimRight(builder.String(), "\n")
+}
+
+func firstLogFieldString(entry *log.Entry, keys ...string) string {
+	if entry == nil || len(keys) == 0 {
+		return ""
+	}
+	for _, key := range keys {
+		if raw, ok := entry.Data[key]; ok && raw != nil {
+			if text := strings.TrimSpace(fmt.Sprint(raw)); text != "" {
+				return text
+			}
+		}
+	}
+	return ""
 }
 
 func formatManagementEvent(event ManagementEvent) string {

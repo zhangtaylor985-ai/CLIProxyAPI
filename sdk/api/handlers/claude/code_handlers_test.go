@@ -165,7 +165,7 @@ func TestWriteClientError_SanitizesUnknownProviderModelLeak(t *testing.T) {
 	assertNoClaudeClientInternalLeak(t, recorder.Body.String())
 }
 
-func TestSanitizeClientErrorLogsRequestID(t *testing.T) {
+func TestSanitizeClientErrorLogsRequestIDAndAPIKey(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	base := handlers.NewBaseAPIHandlers(&sdkconfig.SDKConfig{}, nil)
 	h := NewClaudeCodeAPIHandler(base)
@@ -174,6 +174,7 @@ func TestSanitizeClientErrorLogsRequestID(t *testing.T) {
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
 	internallogging.SetGinRequestID(c, "req-alert-1")
+	c.Set("apiKey", "sk-user-alert-test-123456")
 
 	logger := log.StandardLogger()
 	previousHooks := logger.Hooks
@@ -196,6 +197,9 @@ func TestSanitizeClientErrorLogsRequestID(t *testing.T) {
 	case entry := <-hook.entries:
 		if got := entry.Data["request_id"]; got != "req-alert-1" {
 			t.Fatalf("request_id field = %#v, want req-alert-1", got)
+		}
+		if got := entry.Data["client_api_key"]; got != "sk-u...3456" {
+			t.Fatalf("client_api_key field = %#v, want sk-u...3456", got)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("expected sanitize log entry")

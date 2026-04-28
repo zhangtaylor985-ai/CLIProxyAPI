@@ -134,6 +134,29 @@ func TestNotifyErrorEntrySuppressesEmptyGinServerErrorLine(t *testing.T) {
 	}
 }
 
+func TestFormatErrorEntryIncludesAPIKey(t *testing.T) {
+	entry := log.NewEntry(log.New())
+	entry.Level = log.ErrorLevel
+	entry.Message = "suppressing raw upstream error for Claude client"
+	entry.Data["request_id"] = "req-alert-1"
+	entry.Data["client_api_key"] = "sk-u...3456"
+
+	text := formatErrorEntry(entry, normalizeLogMessage(entry), 7)
+
+	expected := []string{
+		"Error log alert",
+		"Request ID: req-alert-1",
+		"API Key: sk-u...3456",
+		"Message: suppressing raw upstream error for Claude client",
+		"Suppressed similar alerts: 7",
+	}
+	for _, fragment := range expected {
+		if !strings.Contains(text, fragment) {
+			t.Fatalf("expected %q in %q", fragment, text)
+		}
+	}
+}
+
 func TestResolveTelegramBotTokenPrefersConfigToken(t *testing.T) {
 	t.Setenv("TELEGRAM_BOT_TOKEN", "env-token")
 	token := resolveTelegramBotToken("config-token")
