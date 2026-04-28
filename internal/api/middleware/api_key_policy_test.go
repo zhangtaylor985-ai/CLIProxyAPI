@@ -396,6 +396,63 @@ func TestEstimateClaudeImageBlockTokensUsesDecodedDimensions(t *testing.T) {
 	}
 }
 
+func TestEstimateClaudeRequestTokensUsesRoutedGPTTokenizerNearLimit(t *testing.T) {
+	limit := claudePromptContextLimitTokens("gpt-5.4(high)")
+	content := strings.Repeat(" the", limit-5000)
+	payload := fmt.Sprintf(`{"model":"claude-opus-4-6","messages":[{"role":"user","content":%q}]}`, content)
+
+	byteEstimate := estimateClaudeRequestTokensWithinLimitForModel([]byte(payload), limit, "claude-opus-4-6")
+	tokenEstimate := estimateClaudeRequestTokensWithinLimitForModel([]byte(payload), limit, "gpt-5.4(high)")
+	if byteEstimate <= limit {
+		t.Fatalf("byte estimate=%d, want over %d for test payload", byteEstimate, limit)
+	}
+	if tokenEstimate >= limit {
+		t.Fatalf("tokenizer estimate=%d, want below %d", tokenEstimate, limit)
+	}
+	if tokenEstimate >= byteEstimate {
+		t.Fatalf("tokenizer estimate=%d should be lower than byte estimate=%d", tokenEstimate, byteEstimate)
+	}
+}
+
+func TestAPIKeyPolicyMiddleware_AllowsRoutedGPT54PromptWhenTokenizerEstimateFits(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	cfg := &config.Config{
+		SDKConfig: config.SDKConfig{
+			DisableClaudeOpus1M:       true,
+			ClaudeToGPTRoutingEnabled: true,
+			ClaudeToGPTTargetFamily:   "gpt-5.4",
+		},
+	}
+
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set("apiKey", "k")
+		c.Next()
+	})
+	r.Use(APIKeyPolicyMiddleware(func() *config.Config { return cfg }, nil, nil, nil))
+	r.POST("/v1/messages", func(c *gin.Context) {
+		c.JSON(200, gin.H{"ok": true})
+	})
+
+	limit := claudePromptContextLimitTokens("gpt-5.4(high)")
+	content := strings.Repeat(" the", limit-5000)
+	payload := fmt.Sprintf(`{"model":"claude-opus-4-6","messages":[{"role":"user","content":%q}]}`, content)
+	if estimate := estimateClaudeRequestTokensWithinLimitForModel([]byte(payload), limit, "claude-opus-4-6"); estimate <= limit {
+		t.Fatalf("test payload should exceed legacy byte estimate, got %d <= %d", estimate, limit)
+	}
+	if estimate := estimateClaudeRequestTokensWithinLimitForModel([]byte(payload), limit, "gpt-5.4(high)"); estimate >= limit {
+		t.Fatalf("test payload should fit routed tokenizer estimate, got %d >= %d", estimate, limit)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewBufferString(payload))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
 func TestAPIKeyPolicyMiddleware_UsesOrdinaryOpusWindowWhenNotRouted(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	cfg := &config.Config{
@@ -489,7 +546,7 @@ func TestAPIKeyPolicyMiddleware_UsesRoutedGPT55CodexWindowForOpusPreflight(t *te
 	if limit != 380000 {
 		t.Fatalf("gpt-5.5 prompt limit=%d", limit)
 	}
-	largeContent := strings.Repeat("a", limit*claudePromptTooLongEstimateDivisor+1)
+	largeContent := strings.Repeat(" token", limit+5000)
 	payload := fmt.Sprintf(`{"model":"claude-opus-4-6","max_tokens":64000,"messages":[{"role":"user","content":%q}]}`, largeContent)
 	req := httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewBufferString(payload))
 	req.Header.Set("Content-Type", "application/json")
@@ -524,7 +581,7 @@ func TestAPIKeyPolicyMiddleware_UsesRoutedGPT54CodexWindowForOpusPreflight(t *te
 	if limit != 258400 {
 		t.Fatalf("gpt-5.4 prompt limit=%d", limit)
 	}
-	largeContent := strings.Repeat("a", limit*claudePromptTooLongEstimateDivisor+1)
+	largeContent := strings.Repeat(" token", limit+5000)
 	payload := fmt.Sprintf(`{"model":"claude-opus-4-6","messages":[{"role":"user","content":%q}]}`, largeContent)
 	req := httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewBufferString(payload))
 	req.Header.Set("Content-Type", "application/json")

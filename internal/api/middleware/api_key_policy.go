@@ -28,6 +28,7 @@ import (
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
+	"github.com/tiktoken-go/tokenizer"
 )
 
 const (
@@ -45,6 +46,10 @@ const (
 	claudeImagePixelsPerToken           = 750
 	claudeImageMaxBillablePixels        = 1152000
 	claudeImageFallbackTokens           = 1600
+	claudeTokenEstimateMessageOverhead  = 4
+	claudeTokenEstimateToolOverhead     = 8
+	claudeTokenEstimateBlockOverhead    = 1
+	claudeTokenizerRefineThresholdPct   = 80
 	claudePromptTooLongErrorContentType = "application/json"
 	claudePromptTooLongMessage          = "Prompt is too long. Please run /compact and try again."
 )
@@ -206,7 +211,7 @@ func APIKeyPolicyMiddleware(getConfig func() *config.Config, limiter policy.Dail
 		}
 		if !allowClaudeOpus1M && shouldEnforceClaudeBaseContextLimit(c.Request, effectiveModel) {
 			contextLimit := claudePromptContextLimitTokens(budgetModel)
-			estimatedTokens := estimateClaudeRequestTokensWithinLimit(bodyBytes, contextLimit)
+			estimatedTokens := estimateClaudeRequestTokensWithinLimitForModel(bodyBytes, contextLimit, budgetModel)
 			if estimatedTokens > contextLimit {
 				if claudeContextLimitAlertEnabled(cfg) {
 					alertClaudePromptTooLong(c, apiKey, effectiveModel, estimatedTokens, contextLimit)
@@ -508,17 +513,34 @@ func estimateClaudeRequestTokens(body []byte) int {
 }
 
 func estimateClaudeRequestTokensWithinLimit(body []byte, limit int) int {
+	return estimateClaudeRequestTokensWithinLimitForModel(body, limit, "")
+}
+
+func estimateClaudeRequestTokensWithinLimitForModel(body []byte, limit int, routedModel string) int {
 	if len(body) == 0 {
 		return 0
 	}
 	rawEstimate := (len(body) + claudePromptTooLongEstimateDivisor - 1) / claudePromptTooLongEstimateDivisor
-	if limit > 0 && rawEstimate <= limit {
+	if limit > 0 && rawEstimate <= limit && !shouldRefineClaudePromptEstimate(rawEstimate, limit, routedModel) {
 		return rawEstimate
+	}
+	if semanticTokens, ok := estimateClaudeSemanticPromptTokens(body, routedModel); ok {
+		return semanticTokens
 	}
 	if semanticBytes, ok := estimateClaudeSemanticPromptBytes(body); ok {
 		return (semanticBytes + claudePromptTooLongEstimateDivisor - 1) / claudePromptTooLongEstimateDivisor
 	}
 	return rawEstimate
+}
+
+func shouldRefineClaudePromptEstimate(rawEstimate, limit int, routedModel string) bool {
+	if limit <= 0 || rawEstimate <= 0 {
+		return false
+	}
+	if !isTokenizableClaudePromptModel(routedModel) {
+		return false
+	}
+	return rawEstimate*100 >= limit*claudeTokenizerRefineThresholdPct
 }
 
 func claudePromptContextLimitTokens(routedModel string) int {
@@ -601,6 +623,188 @@ func estimateClaudeSemanticPromptBytes(body []byte) (int, bool) {
 	total += estimateClaudeMessagesBytes(obj["messages"])
 	total += estimateClaudeToolsBytes(obj["tools"])
 	return total, true
+}
+
+func estimateClaudeSemanticPromptTokens(body []byte, routedModel string) (int, bool) {
+	enc, ok := tokenizerForClaudePromptModel(routedModel)
+	if !ok || enc == nil {
+		return 0, false
+	}
+	var root any
+	if err := json.Unmarshal(body, &root); err != nil {
+		return 0, false
+	}
+	obj, ok := root.(map[string]any)
+	if !ok {
+		return 0, false
+	}
+	collector := claudePromptTokenCollector{segments: make([]string, 0, 64)}
+	collector.collectContent(obj["system"])
+	collector.collectMessages(obj["messages"])
+	collector.collectTools(obj["tools"])
+	text := strings.TrimSpace(strings.Join(collector.segments, "\n"))
+	if text == "" {
+		return collector.extraTokens, true
+	}
+	count, err := enc.Count(text)
+	if err != nil {
+		return 0, false
+	}
+	return count + collector.extraTokens, true
+}
+
+func tokenizerForClaudePromptModel(model string) (tokenizer.Codec, bool) {
+	key := policy.NormaliseModelKey(model)
+	switch {
+	case strings.HasPrefix(key, "gpt-5"):
+		enc, err := tokenizer.ForModel(tokenizer.GPT5)
+		return enc, err == nil
+	case strings.HasPrefix(key, "gpt-4.1"):
+		enc, err := tokenizer.ForModel(tokenizer.GPT41)
+		return enc, err == nil
+	case strings.HasPrefix(key, "gpt-4o"):
+		enc, err := tokenizer.ForModel(tokenizer.GPT4o)
+		return enc, err == nil
+	case strings.HasPrefix(key, "gpt-4"):
+		enc, err := tokenizer.ForModel(tokenizer.GPT4)
+		return enc, err == nil
+	case strings.HasPrefix(key, "gpt-3.5"), strings.HasPrefix(key, "gpt-3"):
+		enc, err := tokenizer.ForModel(tokenizer.GPT35Turbo)
+		return enc, err == nil
+	case strings.HasPrefix(key, "o1"):
+		enc, err := tokenizer.ForModel(tokenizer.O1)
+		return enc, err == nil
+	case strings.HasPrefix(key, "o3"):
+		enc, err := tokenizer.ForModel(tokenizer.O3)
+		return enc, err == nil
+	case strings.HasPrefix(key, "o4"):
+		enc, err := tokenizer.ForModel(tokenizer.O4Mini)
+		return enc, err == nil
+	case strings.HasPrefix(key, "chatgpt-"):
+		enc, err := tokenizer.Get(tokenizer.O200kBase)
+		return enc, err == nil
+	default:
+		return nil, false
+	}
+}
+
+func isTokenizableClaudePromptModel(model string) bool {
+	key := policy.NormaliseModelKey(model)
+	switch {
+	case strings.HasPrefix(key, "gpt-"):
+		return true
+	case strings.HasPrefix(key, "chatgpt-"):
+		return true
+	case strings.HasPrefix(key, "o1"):
+		return true
+	case strings.HasPrefix(key, "o3"):
+		return true
+	case strings.HasPrefix(key, "o4"):
+		return true
+	default:
+		return false
+	}
+}
+
+type claudePromptTokenCollector struct {
+	segments    []string
+	extraTokens int
+}
+
+func (c *claudePromptTokenCollector) collectMessages(value any) {
+	messages, ok := value.([]any)
+	if !ok {
+		c.collectContent(value)
+		return
+	}
+	for _, message := range messages {
+		msg, ok := message.(map[string]any)
+		if !ok {
+			c.collectContent(message)
+			continue
+		}
+		c.extraTokens += claudeTokenEstimateMessageOverhead
+		c.addString(stringFromMap(msg, "role"))
+		c.collectContent(msg["content"])
+	}
+}
+
+func (c *claudePromptTokenCollector) collectTools(value any) {
+	tools, ok := value.([]any)
+	if !ok {
+		c.addCompactJSON(value)
+		return
+	}
+	for _, tool := range tools {
+		t, ok := tool.(map[string]any)
+		if !ok {
+			c.addCompactJSON(tool)
+			continue
+		}
+		c.extraTokens += claudeTokenEstimateToolOverhead
+		c.addString(stringFromMap(t, "name"))
+		c.addString(stringFromMap(t, "description"))
+		c.addCompactJSON(t["input_schema"])
+	}
+}
+
+func (c *claudePromptTokenCollector) collectContent(value any) {
+	switch v := value.(type) {
+	case nil:
+		return
+	case string:
+		c.addString(v)
+	case []any:
+		for _, item := range v {
+			c.collectContent(item)
+		}
+	case map[string]any:
+		c.collectContentBlock(v)
+	default:
+		c.addCompactJSON(v)
+	}
+}
+
+func (c *claudePromptTokenCollector) collectContentBlock(block map[string]any) {
+	c.extraTokens += claudeTokenEstimateBlockOverhead
+	switch blockType, _ := block["type"].(string); blockType {
+	case "text":
+		c.addString(stringFromMap(block, "text"))
+	case "thinking":
+		c.addString(stringFromMap(block, "thinking"))
+	case "redacted_thinking":
+		c.addString(stringFromMap(block, "data"))
+	case "tool_use":
+		c.addString(stringFromMap(block, "name"))
+		c.addCompactJSON(block["input"])
+	case "tool_result":
+		c.collectContent(block["content"])
+	case "image":
+		tokens := estimateClaudeImageBlockTokens(block)
+		if tokens <= 0 {
+			tokens = claudeImageFallbackTokens
+		}
+		c.extraTokens += tokens
+	default:
+		c.addCompactJSON(block)
+	}
+}
+
+func (c *claudePromptTokenCollector) addString(value string) {
+	if value = strings.TrimSpace(value); value != "" {
+		c.segments = append(c.segments, value)
+	}
+}
+
+func (c *claudePromptTokenCollector) addCompactJSON(value any) {
+	if value == nil {
+		return
+	}
+	data, err := json.Marshal(value)
+	if err != nil {
+		return
+	}
+	c.addString(string(data))
 }
 
 func estimateClaudeMessagesBytes(value any) int {
