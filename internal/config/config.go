@@ -164,9 +164,10 @@ type TelegramRouteConfig struct {
 
 // TelegramErrorLogRouteConfig configures Telegram alerts emitted from error logs.
 type TelegramErrorLogRouteConfig struct {
-	Backoff         []string `yaml:"backoff,omitempty" json:"backoff,omitempty"`
-	MinLevel        string   `yaml:"min-level,omitempty" json:"min-level,omitempty"`
-	ExcludePatterns []string `yaml:"exclude-patterns,omitempty" json:"exclude-patterns,omitempty"`
+	Backoff                        []string `yaml:"backoff,omitempty" json:"backoff,omitempty"`
+	MinLevel                       string   `yaml:"min-level,omitempty" json:"min-level,omitempty"`
+	ExcludePatterns                []string `yaml:"exclude-patterns,omitempty" json:"exclude-patterns,omitempty"`
+	ClaudeContextLimitAlertEnabled *bool    `yaml:"claude-context-limit-alert-enabled,omitempty" json:"claude-context-limit-alert-enabled,omitempty"`
 }
 
 // ClaudeHeaderDefaults configures default header values injected into Claude API requests

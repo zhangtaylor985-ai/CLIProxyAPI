@@ -208,7 +208,9 @@ func APIKeyPolicyMiddleware(getConfig func() *config.Config, limiter policy.Dail
 			contextLimit := claudePromptContextLimitTokens(budgetModel)
 			estimatedTokens := estimateClaudeRequestTokensWithinLimit(bodyBytes, contextLimit)
 			if estimatedTokens > contextLimit {
-				alertClaudePromptTooLong(c, apiKey, effectiveModel, estimatedTokens, contextLimit)
+				if claudeContextLimitAlertEnabled(cfg) {
+					alertClaudePromptTooLong(c, apiKey, effectiveModel, estimatedTokens, contextLimit)
+				}
 				body := buildClaudePolicyErrorResponseBody(
 					c,
 					"invalid_request_error",
@@ -525,6 +527,13 @@ func claudePromptContextLimitTokens(routedModel string) int {
 		contextWindow = claudeOrdinaryOpusContextTokens
 	}
 	return claudeEffectivePromptContextLimitTokens(contextWindow)
+}
+
+func claudeContextLimitAlertEnabled(cfg *config.Config) bool {
+	if cfg == nil || cfg.Notifications.Telegram.ErrorLog.ClaudeContextLimitAlertEnabled == nil {
+		return true
+	}
+	return *cfg.Notifications.Telegram.ErrorLog.ClaudeContextLimitAlertEnabled
 }
 
 func alertClaudePromptTooLong(c *gin.Context, apiKey, model string, estimatedTokens, contextLimit int) {

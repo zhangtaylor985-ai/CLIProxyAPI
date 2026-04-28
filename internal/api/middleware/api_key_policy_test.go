@@ -266,6 +266,51 @@ func TestAPIKeyPolicyMiddleware_AlertsWhenClaudePromptExceedsContextLimit(t *tes
 	}
 }
 
+func TestAPIKeyPolicyMiddleware_SuppressesClaudeContextAlertWhenDisabled(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	cfg := &config.Config{
+		SDKConfig: config.SDKConfig{DisableClaudeOpus1M: true},
+	}
+	cfg.Notifications.Telegram.ErrorLog.ClaudeContextLimitAlertEnabled = boolPtr(false)
+
+	logger := log.StandardLogger()
+	previousHooks := logger.Hooks
+	hook := captureErrorLogHook{entries: make(chan *log.Entry, 1)}
+	logger.ReplaceHooks(log.LevelHooks{})
+	logger.AddHook(hook)
+	t.Cleanup(func() {
+		logger.ReplaceHooks(previousHooks)
+	})
+
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set("apiKey", "sk-user-alert-test-123456")
+		internallogging.SetGinRequestID(c, "req-context-alert-disabled")
+		c.Next()
+	})
+	r.Use(APIKeyPolicyMiddleware(func() *config.Config { return cfg }, nil, nil, nil))
+	r.POST("/v1/messages", func(c *gin.Context) {
+		c.JSON(200, gin.H{"ok": true})
+	})
+
+	limit := claudePromptContextLimitTokens("claude-opus-4-6")
+	largeContent := strings.Repeat("a", limit*claudePromptTooLongEstimateDivisor+1)
+	payload := fmt.Sprintf(`{"model":"claude-opus-4-6","messages":[{"role":"user","content":%q}]}`, largeContent)
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewBufferString(payload))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+
+	select {
+	case entry := <-hook.entries:
+		t.Fatalf("unexpected context alert log entry: %s", entry.Message)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
 func TestAPIKeyPolicyMiddleware_AllowsEscapedJSONBodyWhenSemanticPromptUnderLimit(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	cfg := &config.Config{
