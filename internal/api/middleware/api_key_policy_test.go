@@ -15,10 +15,25 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/billing"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	internallogging "github.com/router-for-me/CLIProxyAPI/v6/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/policy"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/requesttrace"
+	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 )
+
+type captureErrorLogHook struct {
+	entries chan *log.Entry
+}
+
+func (h captureErrorLogHook) Levels() []log.Level {
+	return []log.Level{log.ErrorLevel}
+}
+
+func (h captureErrorLogHook) Fire(entry *log.Entry) error {
+	h.entries <- entry
+	return nil
+}
 
 func TestAPIKeyPolicyMiddleware_DowngradesOpus46(t *testing.T) {
 	gin.SetMode(gin.TestMode)
@@ -185,6 +200,69 @@ func TestAPIKeyPolicyMiddleware_RejectsOversizedOpusWhen1MDisabled(t *testing.T)
 	}
 	if got := gjson.GetBytes(w.Body.Bytes(), "error.message").String(); got != claudePromptTooLongMessage {
 		t.Fatalf("error.message=%q", got)
+	}
+}
+
+func TestAPIKeyPolicyMiddleware_AlertsWhenClaudePromptExceedsContextLimit(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	cfg := &config.Config{
+		SDKConfig: config.SDKConfig{DisableClaudeOpus1M: true},
+	}
+
+	logger := log.StandardLogger()
+	previousHooks := logger.Hooks
+	hook := captureErrorLogHook{entries: make(chan *log.Entry, 1)}
+	logger.ReplaceHooks(log.LevelHooks{})
+	logger.AddHook(hook)
+	t.Cleanup(func() {
+		logger.ReplaceHooks(previousHooks)
+	})
+
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set("apiKey", "sk-user-alert-test-123456")
+		internallogging.SetGinRequestID(c, "req-context-alert")
+		c.Next()
+	})
+	r.Use(APIKeyPolicyMiddleware(func() *config.Config { return cfg }, nil, nil, nil))
+	r.POST("/v1/messages", func(c *gin.Context) {
+		c.JSON(200, gin.H{"ok": true})
+	})
+
+	limit := claudePromptContextLimitTokens("claude-opus-4-6")
+	largeContent := strings.Repeat("a", limit*claudePromptTooLongEstimateDivisor+1)
+	payload := fmt.Sprintf(`{"model":"claude-opus-4-6","messages":[{"role":"user","content":%q}]}`, largeContent)
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewBufferString(payload))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+
+	select {
+	case entry := <-hook.entries:
+		if got := entry.Data["request_id"]; got != "req-context-alert" {
+			t.Fatalf("request_id field = %#v, want req-context-alert", got)
+		}
+		if got := entry.Data["client_api_key"]; got != "sk-user-alert-test-123456" {
+			t.Fatalf("client_api_key field = %#v, want sk-user-alert-test-123456", got)
+		}
+		gotEstimated, ok := entry.Data["estimated_tokens"].(int)
+		if !ok || gotEstimated <= limit {
+			t.Fatalf("estimated_tokens field = %#v, want > %d", entry.Data["estimated_tokens"], limit)
+		}
+		if got := entry.Data["context_limit_tokens"]; got != limit {
+			t.Fatalf("context_limit_tokens field = %#v, want %d", got, limit)
+		}
+		if got := entry.Data["model"]; got != "claude-opus-4-6" {
+			t.Fatalf("model field = %#v", got)
+		}
+		if !strings.Contains(entry.Message, "estimated_tokens=") || !strings.Contains(entry.Message, "limit_tokens=") {
+			t.Fatalf("alert message missing token details: %q", entry.Message)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected prompt context alert log entry")
 	}
 }
 

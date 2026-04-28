@@ -25,6 +25,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/requesttrace"
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/api/handlers"
+	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -207,6 +208,7 @@ func APIKeyPolicyMiddleware(getConfig func() *config.Config, limiter policy.Dail
 			contextLimit := claudePromptContextLimitTokens(budgetModel)
 			estimatedTokens := estimateClaudeRequestTokensWithinLimit(bodyBytes, contextLimit)
 			if estimatedTokens > contextLimit {
+				alertClaudePromptTooLong(c, apiKey, effectiveModel, estimatedTokens, contextLimit)
 				body := buildClaudePolicyErrorResponseBody(
 					c,
 					"invalid_request_error",
@@ -523,6 +525,29 @@ func claudePromptContextLimitTokens(routedModel string) int {
 		contextWindow = claudeOrdinaryOpusContextTokens
 	}
 	return claudeEffectivePromptContextLimitTokens(contextWindow)
+}
+
+func alertClaudePromptTooLong(c *gin.Context, apiKey, model string, estimatedTokens, contextLimit int) {
+	fields := log.Fields{
+		"component":            "claude_prompt_context_preflight",
+		"estimated_tokens":     estimatedTokens,
+		"context_limit_tokens": contextLimit,
+		"model":                strings.TrimSpace(model),
+	}
+	if requestID := handlers.GinRequestID(c); requestID != "" {
+		fields["request_id"] = requestID
+	}
+	if rawAPIKey := strings.TrimSpace(apiKey); rawAPIKey != "" {
+		fields["client_api_key"] = rawAPIKey
+	}
+	if c != nil && c.Request != nil && c.Request.URL != nil {
+		fields["path"] = c.Request.URL.Path
+	}
+	log.WithFields(fields).Errorf(
+		"Claude prompt context preflight exceeded: estimated_tokens=%d limit_tokens=%d",
+		estimatedTokens,
+		contextLimit,
+	)
 }
 
 func claudeEffectivePromptContextLimitTokens(contextWindow int) int {
