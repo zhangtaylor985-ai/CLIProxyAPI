@@ -5,6 +5,24 @@ import (
 	"time"
 )
 
+func TestProviderIdentityForAuthKeepsRawAPIKeyForAlerts(t *testing.T) {
+	t.Parallel()
+
+	identity := providerIdentityForAuth(&Auth{
+		Attributes: map[string]string{
+			"api_key":  "sk-provider-alert-raw-key-123456",
+			"base_url": "https://example.com",
+		},
+	})
+
+	if identity.MaskedAPIKey != "sk-provider-alert-raw-key-123456" {
+		t.Fatalf("alert api key = %q, want raw api key", identity.MaskedAPIKey)
+	}
+	if identity.BaseURL != "https://example.com" {
+		t.Fatalf("base url = %q", identity.BaseURL)
+	}
+}
+
 func TestUpdateAggregatedAvailability_UnavailableWithoutNextRetryDoesNotBlockAuth(t *testing.T) {
 	t.Parallel()
 

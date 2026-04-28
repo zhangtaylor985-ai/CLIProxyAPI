@@ -139,14 +139,14 @@ func TestFormatErrorEntryIncludesAPIKey(t *testing.T) {
 	entry.Level = log.ErrorLevel
 	entry.Message = "suppressing raw upstream error for Claude client"
 	entry.Data["request_id"] = "req-alert-1"
-	entry.Data["client_api_key"] = "sk-u...3456"
+	entry.Data["client_api_key"] = "sk-user-alert-test-123456"
 
 	text := formatErrorEntry(entry, normalizeLogMessage(entry), 7)
 
 	expected := []string{
 		"Error log alert",
 		"Request ID: req-alert-1",
-		"API Key: sk-u...3456",
+		"API Key: sk-user-alert-test-123456",
 		"Message: suppressing raw upstream error for Claude client",
 		"Suppressed similar alerts: 7",
 	}

@@ -9,7 +9,6 @@ import (
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/alerting"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
-	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/proxyutil"
 	log "github.com/sirupsen/logrus"
@@ -99,7 +98,7 @@ func notifyProxyUnavailable(auth *cliproxyauth.Auth, proxyURL string, err error)
 		event.AuthIndex = auth.EnsureIndex()
 		if auth.Attributes != nil {
 			if apiKey := strings.TrimSpace(auth.Attributes["api_key"]); apiKey != "" {
-				event.MaskedAPIKey = util.HideAPIKey(apiKey)
+				event.MaskedAPIKey = apiKey
 			}
 		}
 	}

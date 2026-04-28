@@ -198,8 +198,8 @@ func TestSanitizeClientErrorLogsRequestIDAndAPIKey(t *testing.T) {
 		if got := entry.Data["request_id"]; got != "req-alert-1" {
 			t.Fatalf("request_id field = %#v, want req-alert-1", got)
 		}
-		if got := entry.Data["client_api_key"]; got != "sk-u...3456" {
-			t.Fatalf("client_api_key field = %#v, want sk-u...3456", got)
+		if got := entry.Data["client_api_key"]; got != "sk-user-alert-test-123456" {
+			t.Fatalf("client_api_key field = %#v, want sk-user-alert-test-123456", got)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("expected sanitize log entry")

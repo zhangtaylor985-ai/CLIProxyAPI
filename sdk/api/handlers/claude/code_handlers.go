@@ -22,7 +22,6 @@ import (
 	. "github.com/router-for-me/CLIProxyAPI/v6/internal/constant"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/interfaces"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
-	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/api/handlers"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
@@ -347,7 +346,7 @@ func (h *ClaudeCodeAPIHandler) sanitizeClientError(c *gin.Context, msg *interfac
 	}
 	if c != nil {
 		if apiKey := strings.TrimSpace(c.GetString("apiKey")); apiKey != "" {
-			entry = entry.WithField("client_api_key", util.HideAPIKey(apiKey))
+			entry = entry.WithField("client_api_key", apiKey)
 		}
 	}
 	if hasCodexFailoverMarker(c) {

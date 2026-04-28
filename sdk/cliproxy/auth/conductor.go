@@ -2139,7 +2139,7 @@ func providerIdentityForAuth(auth *Auth) providerIdentity {
 	identity := providerIdentity{}
 	if auth.Attributes != nil {
 		if apiKey := strings.TrimSpace(auth.Attributes["api_key"]); apiKey != "" {
-			identity.MaskedAPIKey = util.HideAPIKey(apiKey)
+			identity.MaskedAPIKey = apiKey
 		}
 		if baseURL := strings.TrimSpace(auth.Attributes["base_url"]); baseURL != "" {
 			identity.BaseURL = baseURL

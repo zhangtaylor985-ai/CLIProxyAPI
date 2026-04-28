@@ -1437,7 +1437,7 @@ func (h *Handler) notifyAPIKeyManagementAction(c *gin.Context, action, apiKey st
 		Username:          managementUsername(c),
 		Role:              role,
 		AuthSource:        authSource,
-		APIKey:            util.HideAPIKey(strings.TrimSpace(apiKey)),
+		APIKey:            strings.TrimSpace(apiKey),
 		APIKeyName:        "",
 		GroupID:           "",
 		GroupName:         "",
