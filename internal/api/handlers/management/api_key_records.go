@@ -21,37 +21,38 @@ import (
 )
 
 type apiKeyPolicyView struct {
-	APIKey                    string                    `json:"api_key"`
-	Name                      string                    `json:"name"`
-	Note                      string                    `json:"note"`
-	CreatedAt                 string                    `json:"created_at"`
-	ExpiresAt                 string                    `json:"expires_at"`
-	Disabled                  bool                      `json:"disabled"`
-	OwnerUsername             string                    `json:"owner_username"`
-	OwnerRole                 string                    `json:"owner_role"`
-	GroupID                   string                    `json:"group_id"`
-	GroupName                 string                    `json:"group_name"`
-	AllowClaudeFamily         bool                      `json:"allow_claude_family"`
-	AllowGPTFamily            bool                      `json:"allow_gpt_family"`
-	FastMode                  bool                      `json:"fast_mode"`
-	SessionTrajectoryDisabled bool                      `json:"session_trajectory_disabled"`
-	CodexChannelMode          string                    `json:"codex_channel_mode"`
-	EnableClaudeModels        bool                      `json:"enable_claude_models"`
-	ClaudeUsageLimitUSD       float64                   `json:"claude_usage_limit_usd"`
-	ClaudeGPTTargetFamily     string                    `json:"claude_gpt_target_family"`
-	EnableClaudeOpus1M        bool                      `json:"enable_claude_opus_1m"`
-	ClaudeCodeOnlyMode        string                    `json:"claude_code_only_mode"`
-	UpstreamBaseURL           string                    `json:"upstream_base_url"`
-	ExcludedModels            []string                  `json:"excluded_models"`
-	AllowClaudeOpus46         bool                      `json:"allow_claude_opus_46"`
-	DailyLimits               map[string]int            `json:"daily_limits"`
-	DailyBudgetUSD            float64                   `json:"daily_budget_usd"`
-	WeeklyBudgetUSD           float64                   `json:"weekly_budget_usd"`
-	WeeklyBudgetAnchorAt      string                    `json:"weekly_budget_anchor_at"`
-	TokenPackageUSD           float64                   `json:"token_package_usd"`
-	TokenPackageStartedAt     string                    `json:"token_package_started_at"`
-	ModelRoutingRules         []config.ModelRoutingRule `json:"model_routing_rules"`
-	ClaudeGlobalFallback      bool                      `json:"claude_global_fallback_enabled"`
+	APIKey                    string                         `json:"api_key"`
+	Name                      string                         `json:"name"`
+	Note                      string                         `json:"note"`
+	CreatedAt                 string                         `json:"created_at"`
+	ExpiresAt                 string                         `json:"expires_at"`
+	Disabled                  bool                           `json:"disabled"`
+	OwnerUsername             string                         `json:"owner_username"`
+	OwnerRole                 string                         `json:"owner_role"`
+	GroupID                   string                         `json:"group_id"`
+	GroupName                 string                         `json:"group_name"`
+	AllowClaudeFamily         bool                           `json:"allow_claude_family"`
+	AllowGPTFamily            bool                           `json:"allow_gpt_family"`
+	FastMode                  bool                           `json:"fast_mode"`
+	SessionTrajectoryDisabled bool                           `json:"session_trajectory_disabled"`
+	CodexChannelMode          string                         `json:"codex_channel_mode"`
+	EnableClaudeModels        bool                           `json:"enable_claude_models"`
+	ClaudeUsageLimitUSD       float64                        `json:"claude_usage_limit_usd"`
+	ClaudeGPTTargetFamily     string                         `json:"claude_gpt_target_family"`
+	EnableClaudeOpus1M        bool                           `json:"enable_claude_opus_1m"`
+	ClaudeCodeOnlyMode        string                         `json:"claude_code_only_mode"`
+	UpstreamBaseURL           string                         `json:"upstream_base_url"`
+	ExcludedModels            []string                       `json:"excluded_models"`
+	AllowClaudeOpus46         bool                           `json:"allow_claude_opus_46"`
+	DailyLimits               map[string]int                 `json:"daily_limits"`
+	DailyBudgetUSD            float64                        `json:"daily_budget_usd"`
+	WeeklyBudgetUSD           float64                        `json:"weekly_budget_usd"`
+	WeeklyBudgetAnchorAt      string                         `json:"weekly_budget_anchor_at"`
+	TokenPackageUSD           float64                        `json:"token_package_usd"`
+	TokenPackageStartedAt     string                         `json:"token_package_started_at"`
+	TokenPackages             []apiKeyTokenPackagePolicyView `json:"token_packages"`
+	ModelRoutingRules         []config.ModelRoutingRule      `json:"model_routing_rules"`
+	ClaudeGlobalFallback      bool                           `json:"claude_global_fallback_enabled"`
 }
 
 type apiKeyUsageTotals struct {
@@ -84,6 +85,30 @@ type apiKeyTokenPackageView struct {
 	UsedUSD      float64   `json:"used_usd"`
 	RemainingUSD float64   `json:"remaining_usd"`
 	Active       bool      `json:"active"`
+}
+
+type apiKeyTokenPackagePolicyView struct {
+	ID        string  `json:"id"`
+	StartedAt string  `json:"started_at"`
+	USD       float64 `json:"usd"`
+	Note      string  `json:"note"`
+}
+
+type apiKeyTokenPackageLedgerView struct {
+	ID           string    `json:"id"`
+	StartedAt    time.Time `json:"started_at"`
+	TotalUSD     float64   `json:"total_usd"`
+	UsedUSD      float64   `json:"used_usd"`
+	RemainingUSD float64   `json:"remaining_usd"`
+	Active       bool      `json:"active"`
+	Note         string    `json:"note,omitempty"`
+}
+
+type apiKeyTokenPackageUsageEventView struct {
+	RequestedAt  time.Time `json:"requested_at"`
+	PackageID    string    `json:"package_id"`
+	CostUSD      float64   `json:"cost_usd"`
+	CostMicroUSD int64     `json:"cost_micro_usd"`
 }
 
 type apiKeyDailyLimitView struct {
@@ -132,55 +157,58 @@ type apiKeyEventView struct {
 }
 
 type apiKeyRecordSummaryView struct {
-	APIKey                    string                 `json:"api_key"`
-	MaskedAPIKey              string                 `json:"masked_api_key"`
-	Name                      string                 `json:"name"`
-	Note                      string                 `json:"note"`
-	CreatedAt                 string                 `json:"created_at"`
-	ExpiresAt                 string                 `json:"expires_at"`
-	Disabled                  bool                   `json:"disabled"`
-	OwnerUsername             string                 `json:"owner_username"`
-	OwnerRole                 string                 `json:"owner_role"`
-	GroupID                   string                 `json:"group_id"`
-	GroupName                 string                 `json:"group_name"`
-	Registered                bool                   `json:"registered"`
-	HasExplicitPolicy         bool                   `json:"has_explicit_policy"`
-	LastUsedAt                *time.Time             `json:"last_used_at,omitempty"`
-	Today                     apiKeyUsageTotals      `json:"today"`
-	CurrentPeriod             apiKeyUsageTotals      `json:"current_period"`
-	DailyBudget               apiKeyBudgetWindowView `json:"daily_budget"`
-	WeeklyBudget              apiKeyBudgetWindowView `json:"weekly_budget"`
-	TokenPackage              apiKeyTokenPackageView `json:"token_package"`
-	DailyLimitCount           int                    `json:"daily_limit_count"`
-	PolicyFamily              string                 `json:"policy_family"`
-	EnableClaudeModels        bool                   `json:"enable_claude_models"`
-	FastMode                  bool                   `json:"fast_mode"`
-	SessionTrajectoryDisabled bool                   `json:"session_trajectory_disabled"`
+	APIKey                    string                         `json:"api_key"`
+	MaskedAPIKey              string                         `json:"masked_api_key"`
+	Name                      string                         `json:"name"`
+	Note                      string                         `json:"note"`
+	CreatedAt                 string                         `json:"created_at"`
+	ExpiresAt                 string                         `json:"expires_at"`
+	Disabled                  bool                           `json:"disabled"`
+	OwnerUsername             string                         `json:"owner_username"`
+	OwnerRole                 string                         `json:"owner_role"`
+	GroupID                   string                         `json:"group_id"`
+	GroupName                 string                         `json:"group_name"`
+	Registered                bool                           `json:"registered"`
+	HasExplicitPolicy         bool                           `json:"has_explicit_policy"`
+	LastUsedAt                *time.Time                     `json:"last_used_at,omitempty"`
+	Today                     apiKeyUsageTotals              `json:"today"`
+	CurrentPeriod             apiKeyUsageTotals              `json:"current_period"`
+	DailyBudget               apiKeyBudgetWindowView         `json:"daily_budget"`
+	WeeklyBudget              apiKeyBudgetWindowView         `json:"weekly_budget"`
+	TokenPackage              apiKeyTokenPackageView         `json:"token_package"`
+	TokenPackages             []apiKeyTokenPackageLedgerView `json:"token_packages"`
+	DailyLimitCount           int                            `json:"daily_limit_count"`
+	PolicyFamily              string                         `json:"policy_family"`
+	EnableClaudeModels        bool                           `json:"enable_claude_models"`
+	FastMode                  bool                           `json:"fast_mode"`
+	SessionTrajectoryDisabled bool                           `json:"session_trajectory_disabled"`
 }
 
 type apiKeyRecordDetailView struct {
-	Summary         apiKeyRecordSummaryView `json:"summary"`
-	ExplicitPolicy  apiKeyPolicyView        `json:"explicit_policy"`
-	EffectivePolicy apiKeyPolicyView        `json:"effective_policy"`
-	TodayReport     apiKeyUsageTotals       `json:"today_report"`
-	CurrentPeriod   apiKeyUsageTotals       `json:"current_period_report"`
-	Group           *apiKeyGroupView        `json:"group,omitempty"`
-	RecentDays      []apiKeyRecentDayView   `json:"recent_days"`
-	ModelUsage      []apiKeyModelUsageView  `json:"model_usage"`
-	DailyLimits     []apiKeyDailyLimitView  `json:"daily_limits"`
-	RecentEvents    []apiKeyEventView       `json:"recent_events"`
+	Summary                 apiKeyRecordSummaryView            `json:"summary"`
+	ExplicitPolicy          apiKeyPolicyView                   `json:"explicit_policy"`
+	EffectivePolicy         apiKeyPolicyView                   `json:"effective_policy"`
+	TodayReport             apiKeyUsageTotals                  `json:"today_report"`
+	CurrentPeriod           apiKeyUsageTotals                  `json:"current_period_report"`
+	Group                   *apiKeyGroupView                   `json:"group,omitempty"`
+	RecentDays              []apiKeyRecentDayView              `json:"recent_days"`
+	ModelUsage              []apiKeyModelUsageView             `json:"model_usage"`
+	DailyLimits             []apiKeyDailyLimitView             `json:"daily_limits"`
+	TokenPackageUsageEvents []apiKeyTokenPackageUsageEventView `json:"token_package_usage_events"`
+	RecentEvents            []apiKeyEventView                  `json:"recent_events"`
 }
 
 type apiKeyInsightSummaryView struct {
-	MaskedAPIKey  string                 `json:"masked_api_key"`
-	CreatedAt     string                 `json:"created_at"`
-	ExpiresAt     string                 `json:"expires_at"`
-	LastUsedAt    *time.Time             `json:"last_used_at,omitempty"`
-	Today         apiKeyUsageTotals      `json:"today"`
-	CurrentPeriod apiKeyUsageTotals      `json:"current_period"`
-	DailyBudget   apiKeyBudgetWindowView `json:"daily_budget"`
-	WeeklyBudget  apiKeyBudgetWindowView `json:"weekly_budget"`
-	TokenPackage  apiKeyTokenPackageView `json:"token_package"`
+	MaskedAPIKey  string                         `json:"masked_api_key"`
+	CreatedAt     string                         `json:"created_at"`
+	ExpiresAt     string                         `json:"expires_at"`
+	LastUsedAt    *time.Time                     `json:"last_used_at,omitempty"`
+	Today         apiKeyUsageTotals              `json:"today"`
+	CurrentPeriod apiKeyUsageTotals              `json:"current_period"`
+	DailyBudget   apiKeyBudgetWindowView         `json:"daily_budget"`
+	WeeklyBudget  apiKeyBudgetWindowView         `json:"weekly_budget"`
+	TokenPackage  apiKeyTokenPackageView         `json:"token_package"`
+	TokenPackages []apiKeyTokenPackageLedgerView `json:"token_packages"`
 }
 
 type apiKeyInsightDetailView struct {
@@ -540,22 +568,27 @@ func (h *Handler) buildAPIKeyRecordDetail(ctx context.Context, apiKey string, no
 	if err != nil {
 		return apiKeyRecordDetailView{}, err
 	}
+	tokenPackageUsageEvents, err := h.buildTokenPackageUsageEventViews(ctx, apiKey, now, effectivePolicyEntry, eventsLimit)
+	if err != nil {
+		return apiKeyRecordDetailView{}, err
+	}
 	recentEvents, err := h.listAPIKeyEvents(ctx, apiKey, now.AddDate(0, 0, -(rangeDays-1)), time.Time{}, eventsLimit)
 	if err != nil {
 		return apiKeyRecordDetailView{}, err
 	}
 
 	return apiKeyRecordDetailView{
-		Summary:         summary,
-		ExplicitPolicy:  explicitPolicy,
-		EffectivePolicy: effectivePolicy,
-		TodayReport:     todayReport,
-		CurrentPeriod:   totalsFromRows(periodRows),
-		Group:           h.optionalGroupView(effectiveGroup),
-		RecentDays:      recentDays,
-		ModelUsage:      modelUsage,
-		DailyLimits:     dailyLimits,
-		RecentEvents:    recentEvents,
+		Summary:                 summary,
+		ExplicitPolicy:          explicitPolicy,
+		EffectivePolicy:         effectivePolicy,
+		TodayReport:             todayReport,
+		CurrentPeriod:           totalsFromRows(periodRows),
+		Group:                   h.optionalGroupView(effectiveGroup),
+		RecentDays:              recentDays,
+		ModelUsage:              modelUsage,
+		DailyLimits:             dailyLimits,
+		TokenPackageUsageEvents: tokenPackageUsageEvents,
+		RecentEvents:            recentEvents,
 	}, nil
 }
 
@@ -592,6 +625,7 @@ func (h *Handler) buildAPIKeyInsightDetail(ctx context.Context, apiKey string, n
 			DailyBudget:   summary.DailyBudget,
 			WeeklyBudget:  summary.WeeklyBudget,
 			TokenPackage:  summary.TokenPackage,
+			TokenPackages: summary.TokenPackages,
 		},
 		TodayReport:   todayReport,
 		CurrentPeriod: totalsFromRows(periodRows),
@@ -614,16 +648,17 @@ func (h *Handler) buildAPIKeyRecordPolicyDetail(ctx context.Context, apiKey stri
 	}
 
 	return apiKeyRecordDetailView{
-		Summary:         h.buildAPIKeyPolicyOnlySummary(apiKey, now, effectivePolicyEntry, effectiveGroup),
-		ExplicitPolicy:  policyToView(apiKey, explicitPolicyEntry, explicitGroup),
-		EffectivePolicy: policyToView(apiKey, effectivePolicyEntry, effectiveGroup),
-		TodayReport:     apiKeyUsageTotals{},
-		CurrentPeriod:   apiKeyUsageTotals{},
-		Group:           h.optionalGroupView(effectiveGroup),
-		RecentDays:      []apiKeyRecentDayView{},
-		ModelUsage:      []apiKeyModelUsageView{},
-		DailyLimits:     []apiKeyDailyLimitView{},
-		RecentEvents:    []apiKeyEventView{},
+		Summary:                 h.buildAPIKeyPolicyOnlySummary(apiKey, now, effectivePolicyEntry, effectiveGroup),
+		ExplicitPolicy:          policyToView(apiKey, explicitPolicyEntry, explicitGroup),
+		EffectivePolicy:         policyToView(apiKey, effectivePolicyEntry, effectiveGroup),
+		TodayReport:             apiKeyUsageTotals{},
+		CurrentPeriod:           apiKeyUsageTotals{},
+		Group:                   h.optionalGroupView(effectiveGroup),
+		RecentDays:              []apiKeyRecentDayView{},
+		ModelUsage:              []apiKeyModelUsageView{},
+		DailyLimits:             []apiKeyDailyLimitView{},
+		TokenPackageUsageEvents: []apiKeyTokenPackageUsageEventView{},
+		RecentEvents:            []apiKeyEventView{},
 	}, nil
 }
 
@@ -655,6 +690,10 @@ func (h *Handler) buildAPIKeySummary(ctx context.Context, apiKey string, now tim
 	if err != nil {
 		return apiKeyRecordSummaryView{}, err
 	}
+	tokenPackages, err := h.buildTokenPackageLedgerViews(ctx, apiKey, now, effectivePolicy)
+	if err != nil {
+		return apiKeyRecordSummaryView{}, err
+	}
 	lastUsedAt, err := h.loadLastUsedAt(ctx, apiKey)
 	if err != nil {
 		return apiKeyRecordSummaryView{}, err
@@ -681,6 +720,7 @@ func (h *Handler) buildAPIKeySummary(ctx context.Context, apiKey string, now tim
 		DailyBudget:        dailyBudget,
 		WeeklyBudget:       weeklyBudget,
 		TokenPackage:       tokenPackage,
+		TokenPackages:      tokenPackages,
 		DailyLimitCount:    0,
 		PolicyFamily:       "",
 		EnableClaudeModels: false,
@@ -756,13 +796,24 @@ func (h *Handler) buildAPIKeyPolicyOnlySummary(apiKey string, now time.Time, eff
 			summary.WeeklyBudget.LimitUSD = effectivePolicy.WeeklyBudgetUSD
 			summary.WeeklyBudget.RemainingUSD = effectivePolicy.WeeklyBudgetUSD
 		}
-		if effectivePolicy.TokenPackageUSD > 0 {
+		if entries := effectivePolicy.TokenPackageEntries(); len(entries) > 0 {
 			summary.TokenPackage.Enabled = true
-			summary.TokenPackage.TotalUSD = effectivePolicy.TokenPackageUSD
-			summary.TokenPackage.RemainingUSD = effectivePolicy.TokenPackageUSD
+			for _, entry := range entries {
+				startedAt, _ := time.Parse(time.RFC3339, entry.StartedAt)
+				summary.TokenPackage.TotalUSD += entry.USD
+				summary.TokenPackage.RemainingUSD += entry.USD
+				summary.TokenPackages = append(summary.TokenPackages, apiKeyTokenPackageLedgerView{
+					ID:           entry.ID,
+					StartedAt:    startedAt,
+					TotalUSD:     entry.USD,
+					RemainingUSD: entry.USD,
+					Active:       !startedAt.After(now),
+					Note:         entry.Note,
+				})
+			}
 			summary.TokenPackage.Active = true
-			if parsed, err := time.Parse(time.RFC3339, strings.TrimSpace(effectivePolicy.TokenPackageStartedAt)); err == nil {
-				summary.TokenPackage.StartedAt = parsed
+			if len(summary.TokenPackages) > 0 {
+				summary.TokenPackage.StartedAt = summary.TokenPackages[0].StartedAt
 			}
 		}
 	}
@@ -865,39 +916,77 @@ func (h *Handler) buildWeeklyBudgetWindow(ctx context.Context, apiKey string, no
 }
 
 func (h *Handler) buildTokenPackageView(ctx context.Context, apiKey string, now time.Time, p *config.APIKeyPolicy) (apiKeyTokenPackageView, error) {
-	if p == nil || !p.TokenPackageEnabled() {
-		return apiKeyTokenPackageView{}, nil
-	}
-	startedAt, ok := p.TokenPackageStartTime()
-	if !ok {
-		return apiKeyTokenPackageView{}, nil
-	}
-	if startedAt.After(now) {
-		return apiKeyTokenPackageView{
-			Enabled:      true,
-			StartedAt:    startedAt,
-			TotalUSD:     p.TokenPackageUSD,
-			RemainingUSD: p.TokenPackageUSD,
-		}, nil
-	}
+	summary, _, err := h.buildTokenPackageViews(ctx, apiKey, now, p)
+	return summary, err
+}
 
+func (h *Handler) buildTokenPackageLedgerViews(ctx context.Context, apiKey string, now time.Time, p *config.APIKeyPolicy) ([]apiKeyTokenPackageLedgerView, error) {
+	_, packages, err := h.buildTokenPackageViews(ctx, apiKey, now, p)
+	return packages, err
+}
+
+func (h *Handler) buildTokenPackageViews(ctx context.Context, apiKey string, now time.Time, p *config.APIKeyPolicy) (apiKeyTokenPackageView, []apiKeyTokenPackageLedgerView, error) {
+	if p == nil || !p.TokenPackageEnabled() {
+		return apiKeyTokenPackageView{}, nil, nil
+	}
 	state, err := billing.ComputeBudgetReplayState(ctx, h.billingStore, apiKey, now, p)
 	if err != nil {
-		return apiKeyTokenPackageView{}, err
+		return apiKeyTokenPackageView{}, nil, err
 	}
-	usedUSD := microUSDToUSD(state.PackageUsedMicro)
-	remainingUSD := p.TokenPackageUSD - usedUSD
-	if remainingUSD < 0 {
-		remainingUSD = 0
+
+	packages := make([]apiKeyTokenPackageLedgerView, 0, len(state.Packages))
+	summary := apiKeyTokenPackageView{Enabled: len(state.Packages) > 0}
+	for _, pkg := range state.Packages {
+		totalUSD := microUSDToUSD(pkg.TotalMicro)
+		usedUSD := microUSDToUSD(pkg.UsedMicro)
+		remainingUSD := microUSDToUSD(pkg.RemainingMicro)
+		packages = append(packages, apiKeyTokenPackageLedgerView{
+			ID:           pkg.ID,
+			StartedAt:    pkg.StartedAt,
+			TotalUSD:     round6(totalUSD),
+			UsedUSD:      round6(usedUSD),
+			RemainingUSD: round6(remainingUSD),
+			Active:       pkg.Active,
+			Note:         pkg.Note,
+		})
+		if summary.StartedAt.IsZero() || pkg.StartedAt.Before(summary.StartedAt) {
+			summary.StartedAt = pkg.StartedAt
+		}
+		summary.TotalUSD += totalUSD
+		summary.UsedUSD += usedUSD
+		summary.RemainingUSD += remainingUSD
+		if pkg.Active {
+			summary.Active = true
+		}
 	}
-	return apiKeyTokenPackageView{
-		Enabled:      true,
-		StartedAt:    startedAt,
-		TotalUSD:     p.TokenPackageUSD,
-		UsedUSD:      round6(usedUSD),
-		RemainingUSD: round6(remainingUSD),
-		Active:       remainingUSD > 0,
-	}, nil
+	summary.TotalUSD = round6(summary.TotalUSD)
+	summary.UsedUSD = round6(summary.UsedUSD)
+	summary.RemainingUSD = round6(summary.RemainingUSD)
+	return summary, packages, nil
+}
+
+func (h *Handler) buildTokenPackageUsageEventViews(ctx context.Context, apiKey string, now time.Time, p *config.APIKeyPolicy, limit int) ([]apiKeyTokenPackageUsageEventView, error) {
+	if p == nil || !p.TokenPackageEnabled() {
+		return []apiKeyTokenPackageUsageEventView{}, nil
+	}
+	_, allocations, err := billing.ComputeBudgetReplayStateWithAllocations(ctx, h.billingStore, apiKey, now, p)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]apiKeyTokenPackageUsageEventView, 0, len(allocations))
+	for i := len(allocations) - 1; i >= 0; i-- {
+		allocation := allocations[i]
+		result = append(result, apiKeyTokenPackageUsageEventView{
+			RequestedAt:  time.Unix(allocation.RequestedAt, 0),
+			PackageID:    allocation.PackageID,
+			CostUSD:      round6(microUSDToUSD(allocation.CostMicroUSD)),
+			CostMicroUSD: allocation.CostMicroUSD,
+		})
+		if limit > 0 && len(result) >= limit {
+			break
+		}
+	}
+	return result, nil
 }
 
 func (h *Handler) buildRecentDayViews(ctx context.Context, apiKey string, now time.Time, rangeDays int) ([]apiKeyRecentDayView, error) {
@@ -1122,6 +1211,7 @@ func policyToView(apiKey string, p *config.APIKeyPolicy, group *apikeygroup.Grou
 	view.WeeklyBudgetAnchorAt = p.WeeklyBudgetAnchorAt
 	view.TokenPackageUSD = p.TokenPackageUSD
 	view.TokenPackageStartedAt = p.TokenPackageStartedAt
+	view.TokenPackages = tokenPackagePolicyEntriesToView(p.TokenPackageEntries())
 	view.ModelRoutingRules = append([]config.ModelRoutingRule(nil), p.ModelRouting.Rules...)
 	return view
 }
@@ -1170,10 +1260,43 @@ func viewToPolicy(apiKey string, view apiKeyPolicyView) config.APIKeyPolicy {
 		WeeklyBudgetAnchorAt:        strings.TrimSpace(view.WeeklyBudgetAnchorAt),
 		TokenPackageUSD:             view.TokenPackageUSD,
 		TokenPackageStartedAt:       strings.TrimSpace(view.TokenPackageStartedAt),
+		TokenPackages:               tokenPackagePolicyEntriesFromView(view.TokenPackages),
 		ModelRouting: config.APIKeyModelRoutingPolicy{
 			Rules: append([]config.ModelRoutingRule(nil), view.ModelRoutingRules...),
 		},
 	}
+}
+
+func tokenPackagePolicyEntriesToView(entries []config.TokenPackageEntry) []apiKeyTokenPackagePolicyView {
+	if len(entries) == 0 {
+		return []apiKeyTokenPackagePolicyView{}
+	}
+	result := make([]apiKeyTokenPackagePolicyView, 0, len(entries))
+	for _, entry := range entries {
+		result = append(result, apiKeyTokenPackagePolicyView{
+			ID:        strings.TrimSpace(entry.ID),
+			StartedAt: strings.TrimSpace(entry.StartedAt),
+			USD:       entry.USD,
+			Note:      strings.TrimSpace(entry.Note),
+		})
+	}
+	return result
+}
+
+func tokenPackagePolicyEntriesFromView(entries []apiKeyTokenPackagePolicyView) []config.TokenPackageEntry {
+	if len(entries) == 0 {
+		return nil
+	}
+	result := make([]config.TokenPackageEntry, 0, len(entries))
+	for _, entry := range entries {
+		result = append(result, config.TokenPackageEntry{
+			ID:        strings.TrimSpace(entry.ID),
+			StartedAt: strings.TrimSpace(entry.StartedAt),
+			USD:       entry.USD,
+			Note:      strings.TrimSpace(entry.Note),
+		})
+	}
+	return result
 }
 
 func upsertAPIKeyPolicy(policies *[]config.APIKeyPolicy, entry config.APIKeyPolicy) {

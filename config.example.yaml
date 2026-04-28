@@ -57,9 +57,10 @@ api-keys:
 # - daily-budget-usd / weekly-budget-usd: spend quotas are tracked from persisted billing data.
 #   Weekly quota windows are 7-day cycles anchored to weekly-budget-anchor-at when set,
 #   otherwise to the API key created_at timestamp from the API key config store.
-# - token-package-usd / token-package-started-at: one-time prepaid spend allowance for the API key.
-#   While package balance remains, daily/weekly spend budgets are bypassed. Once exhausted,
-#   daily/weekly spend budgets resume counting only from the depletion point forward.
+# - token-package-usd / token-package-started-at: legacy one-time prepaid spend allowance for the API key.
+#   Daily/weekly spend budgets are consumed first; overflow is covered by token packages.
+# - token-packages: optional prepaid package ledger. Each recharge should be appended as one row.
+#   Packages are consumed FIFO by started-at after the daily/weekly spend budget is exhausted.
 # - session-trajectory-disabled: when true, this API key will not persist new requests to
 #   session trajectory storage. The global session-trajectory-enabled switch remains the top-level gate.
 # - Storage:
@@ -102,6 +103,15 @@ api-key-policies:
     allow-claude-opus-4-6: true
     token-package-usd: 1000
     token-package-started-at: "2026-03-25T12:00:00+08:00"
+    token-packages:
+      - id: "pkg-20260421"
+        started-at: "2026-04-21T00:00:00+08:00"
+        usd: 100
+        note: "initial recharge"
+      - id: "pkg-20260428"
+        started-at: "2026-04-28T00:00:00+08:00"
+        usd: 100
+        note: "renewal recharge"
     weekly-budget-usd: 400
     daily-limits:
       claude-opus-4-6: 10

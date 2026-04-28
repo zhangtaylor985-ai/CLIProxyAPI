@@ -74,12 +74,13 @@ type apiKeyRecordStatsRequest struct {
 }
 
 type apiKeyRecordStatsItem struct {
-	APIKey        string                 `json:"api_key"`
-	Today         apiKeyUsageTotals      `json:"today"`
-	CurrentPeriod apiKeyUsageTotals      `json:"current_period"`
-	DailyBudget   apiKeyBudgetWindowView `json:"daily_budget"`
-	WeeklyBudget  apiKeyBudgetWindowView `json:"weekly_budget"`
-	TokenPackage  apiKeyTokenPackageView `json:"token_package"`
+	APIKey        string                         `json:"api_key"`
+	Today         apiKeyUsageTotals              `json:"today"`
+	CurrentPeriod apiKeyUsageTotals              `json:"current_period"`
+	DailyBudget   apiKeyBudgetWindowView         `json:"daily_budget"`
+	WeeklyBudget  apiKeyBudgetWindowView         `json:"weekly_budget"`
+	TokenPackage  apiKeyTokenPackageView         `json:"token_package"`
+	TokenPackages []apiKeyTokenPackageLedgerView `json:"token_packages"`
 }
 
 type apiKeyRecordStatsResponse struct {
@@ -264,6 +265,10 @@ func (h *Handler) buildAPIKeyRecordStats(ctx context.Context, apiKey string, now
 	if err != nil {
 		return apiKeyRecordStatsItem{}, err
 	}
+	tokenPackages, err := h.buildTokenPackageLedgerViews(ctx, apiKey, now, effectivePolicy)
+	if err != nil {
+		return apiKeyRecordStatsItem{}, err
+	}
 	return apiKeyRecordStatsItem{
 		APIKey:        apiKey,
 		Today:         todayTotals,
@@ -271,6 +276,7 @@ func (h *Handler) buildAPIKeyRecordStats(ctx context.Context, apiKey string, now
 		DailyBudget:   dailyBudget,
 		WeeklyBudget:  weeklyBudget,
 		TokenPackage:  tokenPackage,
+		TokenPackages: tokenPackages,
 	}, nil
 }
 

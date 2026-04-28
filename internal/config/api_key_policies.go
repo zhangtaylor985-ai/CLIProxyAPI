@@ -3,6 +3,8 @@ package config
 import (
 	"errors"
 	"hash/fnv"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -142,13 +144,26 @@ type APIKeyPolicy struct {
 	WeeklyBudgetAnchorAt string `yaml:"weekly-budget-anchor-at,omitempty" json:"weekly-budget-anchor-at,omitempty"`
 
 	// TokenPackageUSD defines a one-time prepaid spend allowance (USD) for this API key.
-	// While the package still has balance, daily/weekly spend budgets are bypassed.
+	// Daily/weekly spend budgets are consumed first; overflow is covered by token packages.
 	// Values <= 0 are treated as disabled.
 	TokenPackageUSD float64 `yaml:"token-package-usd,omitempty" json:"token-package-usd,omitempty"`
 
 	// TokenPackageStartedAt defines when the prepaid package becomes active.
 	// The value is stored as RFC3339 during sanitization.
 	TokenPackageStartedAt string `yaml:"token-package-started-at,omitempty" json:"token-package-started-at,omitempty"`
+
+	// TokenPackages stores the prepaid package ledger. Legacy single-package
+	// fields above are still accepted and are exposed as the first package when
+	// this slice is empty.
+	TokenPackages []TokenPackageEntry `yaml:"token-packages,omitempty" json:"token-packages,omitempty"`
+}
+
+// TokenPackageEntry describes one prepaid token traffic package.
+type TokenPackageEntry struct {
+	ID        string  `yaml:"id,omitempty" json:"id,omitempty"`
+	StartedAt string  `yaml:"started-at,omitempty" json:"started-at,omitempty"`
+	USD       float64 `yaml:"usd,omitempty" json:"usd,omitempty"`
+	Note      string  `yaml:"note,omitempty" json:"note,omitempty"`
 }
 
 // APIKeyModelRoutingPolicy groups model routing configuration for a client API key.
@@ -430,10 +445,19 @@ func (p *APIKeyPolicy) TokenPackageEnabled() bool {
 	if p == nil {
 		return false
 	}
-	return p.TokenPackageUSD > 0
+	return len(p.TokenPackageEntries()) > 0
 }
 
 func (p *APIKeyPolicy) TokenPackageStartTime() (time.Time, bool) {
+	if p != nil && len(p.TokenPackages) > 0 {
+		entries := sanitizeTokenPackageEntries(p.TokenPackages)
+		if len(entries) > 0 {
+			startedAt, err := time.Parse(time.RFC3339, entries[0].StartedAt)
+			if err == nil {
+				return startedAt, true
+			}
+		}
+	}
 	if p == nil || strings.TrimSpace(p.TokenPackageStartedAt) == "" {
 		return time.Time{}, false
 	}
@@ -442,6 +466,75 @@ func (p *APIKeyPolicy) TokenPackageStartTime() (time.Time, bool) {
 		return time.Time{}, false
 	}
 	return startedAt, true
+}
+
+// TokenPackageEntries returns the normalized package ledger. It maps the legacy
+// single-package fields to one entry when no explicit ledger is present.
+func (p *APIKeyPolicy) TokenPackageEntries() []TokenPackageEntry {
+	if p == nil {
+		return nil
+	}
+	entries := sanitizeTokenPackageEntries(p.TokenPackages)
+	if len(entries) > 0 {
+		return entries
+	}
+	if p.TokenPackageUSD <= 0 {
+		return nil
+	}
+	startedAt, ok := p.TokenPackageStartTime()
+	if !ok {
+		return nil
+	}
+	return []TokenPackageEntry{{
+		ID:        stableTokenPackageID(startedAt.Format(time.RFC3339), p.TokenPackageUSD, ""),
+		StartedAt: startedAt.Format(time.RFC3339),
+		USD:       p.TokenPackageUSD,
+	}}
+}
+
+func sanitizeTokenPackageEntries(entries []TokenPackageEntry) []TokenPackageEntry {
+	if len(entries) == 0 {
+		return nil
+	}
+	normalized := make([]TokenPackageEntry, 0, len(entries))
+	seen := make(map[string]int, len(entries))
+	for _, entry := range entries {
+		if entry.USD <= 0 {
+			continue
+		}
+		startedAt, err := time.Parse(time.RFC3339, strings.TrimSpace(entry.StartedAt))
+		if err != nil {
+			continue
+		}
+		entry.StartedAt = startedAt.Format(time.RFC3339)
+		entry.Note = strings.TrimSpace(entry.Note)
+		entry.ID = strings.TrimSpace(entry.ID)
+		if entry.ID == "" {
+			entry.ID = stableTokenPackageID(entry.StartedAt, entry.USD, entry.Note)
+		}
+		if count := seen[entry.ID]; count > 0 {
+			entry.ID = stableTokenPackageID(entry.StartedAt, entry.USD, entry.Note+"#"+strconv.Itoa(count+1))
+		}
+		seen[entry.ID]++
+		normalized = append(normalized, entry)
+	}
+	sort.SliceStable(normalized, func(i, j int) bool {
+		if normalized[i].StartedAt == normalized[j].StartedAt {
+			return normalized[i].ID < normalized[j].ID
+		}
+		return normalized[i].StartedAt < normalized[j].StartedAt
+	})
+	return normalized
+}
+
+func stableTokenPackageID(startedAt string, usd float64, note string) string {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(strings.TrimSpace(startedAt)))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(strconv.FormatFloat(usd, 'f', 6, 64)))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(strings.TrimSpace(note)))
+	return "pkg-" + strconv.FormatUint(uint64(h.Sum32()), 36)
 }
 
 func (p *APIKeyPolicy) CreatedTime() (time.Time, bool) {
@@ -760,7 +853,15 @@ func (cfg *Config) SanitizeAPIKeyPolicies() {
 			entry.DailyBudgetUSD = 0
 			entry.WeeklyBudgetUSD = 0
 		}
-		if entry.TokenPackageUSD <= 0 {
+		entry.TokenPackages = sanitizeTokenPackageEntries(entry.TokenPackages)
+		if len(entry.TokenPackages) > 0 {
+			totalUSD := 0.0
+			entry.TokenPackageStartedAt = entry.TokenPackages[0].StartedAt
+			for _, tokenPackage := range entry.TokenPackages {
+				totalUSD += tokenPackage.USD
+			}
+			entry.TokenPackageUSD = totalUSD
+		} else if entry.TokenPackageUSD <= 0 {
 			entry.TokenPackageUSD = 0
 			entry.TokenPackageStartedAt = ""
 		} else {

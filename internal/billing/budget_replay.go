@@ -16,20 +16,69 @@ type BudgetReplayState struct {
 	BaseAvailableMicro    int64
 	PackageUsedMicro      int64
 	PackageRemainingMicro int64
+	Packages              []TokenPackageReplayState
+}
+
+type TokenPackageReplayState struct {
+	ID             string
+	StartedAt      time.Time
+	TotalMicro     int64
+	UsedMicro      int64
+	RemainingMicro int64
+	Active         bool
+	Note           string
+}
+
+type TokenPackageUsageAllocation struct {
+	UsageEventID     int64
+	RequestedAt      int64
+	PackageID        string
+	PackageStartedAt time.Time
+	CostMicroUSD     int64
 }
 
 // ComputeBudgetReplayState replays usage events to derive current base-budget and token-package state.
 func ComputeBudgetReplayState(ctx context.Context, store UsageEventReader, apiKey string, asOf time.Time, p *config.APIKeyPolicy) (BudgetReplayState, error) {
+	state, _, err := computeBudgetReplayState(ctx, store, apiKey, asOf, p)
+	return state, err
+}
+
+// ComputeBudgetReplayStateWithAllocations returns the replay state plus recent
+// package allocation details, useful for management views.
+func ComputeBudgetReplayStateWithAllocations(ctx context.Context, store UsageEventReader, apiKey string, asOf time.Time, p *config.APIKeyPolicy) (BudgetReplayState, []TokenPackageUsageAllocation, error) {
+	return computeBudgetReplayState(ctx, store, apiKey, asOf, p)
+}
+
+func computeBudgetReplayState(ctx context.Context, store UsageEventReader, apiKey string, asOf time.Time, p *config.APIKeyPolicy) (BudgetReplayState, []TokenPackageUsageAllocation, error) {
 	state := BudgetReplayState{}
-	if store == nil || p == nil || asOf.IsZero() {
-		return state, nil
+	if p == nil || asOf.IsZero() {
+		return state, nil, nil
 	}
 
 	dayStart, dayEnd := dayBoundsAt(asOf)
-	packageStart, packageEnabled := p.TokenPackageStartTime()
-	packageBudgetMicro := int64(p.TokenPackageUSD*1_000_000 + 0.5)
+	packages := buildReplayPackages(p.TokenPackageEntries(), asOf)
+	packageEnabled := len(packages) > 0
 	dailyBudgetMicro := int64(p.DailyBudgetUSD*1_000_000 + 0.5)
 	weeklyBudgetMicro := int64(p.WeeklyBudgetUSD*1_000_000 + 0.5)
+	if store == nil {
+		if dailyBudgetMicro > 0 {
+			state.DailyRemainingMicro = dailyBudgetMicro
+			state.BaseAvailableMicro = dailyBudgetMicro
+		}
+		if weeklyBudgetMicro > 0 {
+			state.WeeklyRemainingMicro = weeklyBudgetMicro
+			if state.BaseAvailableMicro == 0 || weeklyBudgetMicro < state.BaseAvailableMicro {
+				state.BaseAvailableMicro = weeklyBudgetMicro
+			}
+		}
+		state.Packages = packages
+		for _, pkg := range packages {
+			if !pkg.StartedAt.After(asOf) {
+				state.PackageRemainingMicro += pkg.RemainingMicro
+			}
+		}
+		return state, nil, nil
+	}
 
 	weekStart := time.Time{}
 	weekEnd := time.Time{}
@@ -38,11 +87,11 @@ func ComputeBudgetReplayState(ctx context.Context, store UsageEventReader, apiKe
 		var err error
 		weekStart, weekEnd, err = p.WeeklyBudgetBounds(asOf)
 		if err != nil {
-			return state, err
+			return state, nil, err
 		}
 		weeklyAnchor, err = p.WeeklyBudgetAnchorTime()
 		if err != nil {
-			return state, err
+			return state, nil, err
 		}
 	}
 
@@ -50,17 +99,18 @@ func ComputeBudgetReplayState(ctx context.Context, store UsageEventReader, apiKe
 	if !weekStart.IsZero() && weekStart.Before(startAt) {
 		startAt = weekStart
 	}
-	if packageEnabled && packageStart.Before(startAt) {
-		startAt = packageStart
+	if packageEnabled && packages[0].StartedAt.Before(startAt) {
+		startAt = packages[0].StartedAt
 	}
 
 	events, err := store.ListUsageEventsByAPIKey(ctx, apiKey, startAt, asOf.Add(time.Second), 0, false)
 	if err != nil {
-		return state, err
+		return state, nil, err
 	}
 
 	dayUsed := make(map[string]int64)
 	weekUsed := make(map[int64]int64)
+	allocations := make([]TokenPackageUsageAllocation, 0)
 	for _, event := range events {
 		ts := time.Unix(event.RequestedAt, 0)
 		dayKey := policy.DayKeyChina(ts)
@@ -71,7 +121,7 @@ func ComputeBudgetReplayState(ctx context.Context, store UsageEventReader, apiKe
 		}
 
 		baseCovered := event.CostMicroUSD
-		if packageEnabled && !ts.Before(packageStart) {
+		if packageEnabled {
 			baseCovered = event.CostMicroUSD
 			hasBaseLimit := false
 			if dailyBudgetMicro > 0 {
@@ -97,10 +147,8 @@ func ComputeBudgetReplayState(ctx context.Context, store UsageEventReader, apiKe
 			if !hasBaseLimit {
 				baseCovered = 0
 			}
-			packageCovered := event.CostMicroUSD - baseCovered
-			if packageCovered > 0 {
-				state.PackageUsedMicro += packageCovered
-			}
+			packageNeeded := event.CostMicroUSD - baseCovered
+			allocations = append(allocations, allocatePackageUsage(packages, event, ts, packageNeeded)...)
 		}
 
 		if baseCovered < 0 {
@@ -134,16 +182,70 @@ func ComputeBudgetReplayState(ctx context.Context, store UsageEventReader, apiKe
 	case weeklyBudgetMicro > 0:
 		state.BaseAvailableMicro = state.WeeklyRemainingMicro
 	}
-	if packageEnabled && packageBudgetMicro > 0 {
-		state.PackageRemainingMicro = packageBudgetMicro - state.PackageUsedMicro
-		if state.PackageRemainingMicro < 0 {
-			state.PackageRemainingMicro = 0
+	if packageEnabled {
+		for _, pkg := range packages {
+			state.PackageUsedMicro += pkg.UsedMicro
+			if !pkg.StartedAt.After(asOf) {
+				state.PackageRemainingMicro += pkg.RemainingMicro
+			}
 		}
 	}
+	state.Packages = packages
 
 	_ = dayEnd
 	_ = weekEnd
-	return state, nil
+	return state, allocations, nil
+}
+
+func buildReplayPackages(entries []config.TokenPackageEntry, asOf time.Time) []TokenPackageReplayState {
+	packages := make([]TokenPackageReplayState, 0, len(entries))
+	for _, entry := range entries {
+		startedAt, err := time.Parse(time.RFC3339, entry.StartedAt)
+		if err != nil || entry.USD <= 0 {
+			continue
+		}
+		totalMicro := int64(entry.USD*1_000_000 + 0.5)
+		if totalMicro <= 0 {
+			continue
+		}
+		packages = append(packages, TokenPackageReplayState{
+			ID:             entry.ID,
+			StartedAt:      startedAt,
+			TotalMicro:     totalMicro,
+			RemainingMicro: totalMicro,
+			Active:         !startedAt.After(asOf),
+			Note:           entry.Note,
+		})
+	}
+	return packages
+}
+
+func allocatePackageUsage(packages []TokenPackageReplayState, event UsageEventRow, requestedAt time.Time, neededMicro int64) []TokenPackageUsageAllocation {
+	if neededMicro <= 0 {
+		return nil
+	}
+	allocations := make([]TokenPackageUsageAllocation, 0, 1)
+	for i := range packages {
+		if neededMicro <= 0 {
+			break
+		}
+		if packages[i].StartedAt.After(requestedAt) || packages[i].RemainingMicro <= 0 {
+			continue
+		}
+		covered := min64(neededMicro, packages[i].RemainingMicro)
+		packages[i].UsedMicro += covered
+		packages[i].RemainingMicro -= covered
+		packages[i].Active = packages[i].RemainingMicro > 0
+		neededMicro -= covered
+		allocations = append(allocations, TokenPackageUsageAllocation{
+			UsageEventID:     event.ID,
+			RequestedAt:      event.RequestedAt,
+			PackageID:        packages[i].ID,
+			PackageStartedAt: packages[i].StartedAt,
+			CostMicroUSD:     covered,
+		})
+	}
+	return allocations
 }
 
 func dayBoundsAt(now time.Time) (time.Time, time.Time) {
