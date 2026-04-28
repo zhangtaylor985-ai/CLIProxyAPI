@@ -187,6 +187,40 @@ func TestAPIKeyPolicyMiddleware_RejectsOversizedOpusWhen1MDisabled(t *testing.T)
 	}
 }
 
+func TestAPIKeyPolicyMiddleware_AllowsEscapedJSONBodyWhenSemanticPromptUnderLimit(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	cfg := &config.Config{
+		SDKConfig: config.SDKConfig{DisableClaudeOpus1M: true},
+	}
+
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set("apiKey", "k")
+		c.Next()
+	})
+	r.Use(APIKeyPolicyMiddleware(func() *config.Config { return cfg }, nil, nil, nil))
+	r.POST("/v1/messages", func(c *gin.Context) {
+		c.JSON(200, gin.H{"ok": true})
+	})
+
+	content := strings.Repeat(`\`, claudeBaseContextLimitTokens*claudePromptTooLongEstimateDivisor/2)
+	payload := fmt.Sprintf(`{"model":"claude-opus-4-6","messages":[{"role":"user","content":%q}]}`, content)
+	if rawEstimate := (len(payload) + claudePromptTooLongEstimateDivisor - 1) / claudePromptTooLongEstimateDivisor; rawEstimate <= claudeBaseContextLimitTokens {
+		t.Fatalf("test payload no longer exceeds raw body estimate: %d", rawEstimate)
+	}
+	if semanticEstimate := estimateClaudeRequestTokens([]byte(payload)); semanticEstimate >= claudeBaseContextLimitTokens {
+		t.Fatalf("semantic estimate=%d, want below %d", semanticEstimate, claudeBaseContextLimitTokens)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewBufferString(payload))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
 func TestAPIKeyPolicyMiddleware_AllowsOversizedOpusForPerKey1MOverride(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	cfg := &config.Config{

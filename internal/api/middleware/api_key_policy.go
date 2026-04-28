@@ -3,6 +3,7 @@ package middleware
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"math"
@@ -27,7 +28,10 @@ const (
 	claudeOpus1MHeaderName = "X-CPA-CLAUDE-1M"
 	claudeOpus1MBetaName   = "context-1m-2025-08-07"
 
-	claudeBaseContextLimitTokens        = 200000
+	// GPT-5.5 is advertised locally with a 272k context window. Keep roughly
+	// 32k tokens for Claude's default max_tokens instead of preflighting up to
+	// the absolute upstream ceiling.
+	claudeBaseContextLimitTokens        = 240000
 	claudePromptTooLongEstimateDivisor  = 3
 	claudePromptTooLongErrorContentType = "application/json"
 	claudePromptTooLongMessage          = "Prompt is too long. Please run /compact and try again."
@@ -488,7 +492,120 @@ func estimateClaudeRequestTokens(body []byte) int {
 	if len(body) == 0 {
 		return 0
 	}
+	if semanticBytes, ok := estimateClaudeSemanticPromptBytes(body); ok {
+		return (semanticBytes + claudePromptTooLongEstimateDivisor - 1) / claudePromptTooLongEstimateDivisor
+	}
 	return (len(body) + claudePromptTooLongEstimateDivisor - 1) / claudePromptTooLongEstimateDivisor
+}
+
+func estimateClaudeSemanticPromptBytes(body []byte) (int, bool) {
+	var root any
+	if err := json.Unmarshal(body, &root); err != nil {
+		return 0, false
+	}
+	obj, ok := root.(map[string]any)
+	if !ok {
+		return 0, false
+	}
+	total := 0
+	total += estimateClaudeContentBytes(obj["system"])
+	total += estimateClaudeMessagesBytes(obj["messages"])
+	total += estimateClaudeToolsBytes(obj["tools"])
+	return total, true
+}
+
+func estimateClaudeMessagesBytes(value any) int {
+	messages, ok := value.([]any)
+	if !ok {
+		return estimateClaudeContentBytes(value)
+	}
+	total := 0
+	for _, message := range messages {
+		msg, ok := message.(map[string]any)
+		if !ok {
+			total += estimateClaudeContentBytes(message)
+			continue
+		}
+		if role, ok := msg["role"].(string); ok {
+			total += len(role)
+		}
+		total += estimateClaudeContentBytes(msg["content"])
+	}
+	return total
+}
+
+func estimateClaudeToolsBytes(value any) int {
+	tools, ok := value.([]any)
+	if !ok {
+		return estimateClaudeCompactJSONBytes(value)
+	}
+	total := 0
+	for _, tool := range tools {
+		t, ok := tool.(map[string]any)
+		if !ok {
+			total += estimateClaudeCompactJSONBytes(tool)
+			continue
+		}
+		total += estimateClaudeStringFieldBytes(t, "name")
+		total += estimateClaudeStringFieldBytes(t, "description")
+		total += estimateClaudeCompactJSONBytes(t["input_schema"])
+	}
+	return total
+}
+
+func estimateClaudeContentBytes(value any) int {
+	switch v := value.(type) {
+	case nil:
+		return 0
+	case string:
+		return len(v)
+	case []any:
+		total := 0
+		for _, item := range v {
+			total += estimateClaudeContentBytes(item)
+		}
+		return total
+	case map[string]any:
+		return estimateClaudeContentBlockBytes(v)
+	default:
+		return estimateClaudeCompactJSONBytes(v)
+	}
+}
+
+func estimateClaudeContentBlockBytes(block map[string]any) int {
+	switch blockType, _ := block["type"].(string); blockType {
+	case "text":
+		return estimateClaudeStringFieldBytes(block, "text")
+	case "thinking":
+		return estimateClaudeStringFieldBytes(block, "thinking")
+	case "redacted_thinking":
+		return estimateClaudeStringFieldBytes(block, "data")
+	case "tool_use":
+		return estimateClaudeStringFieldBytes(block, "name") + estimateClaudeCompactJSONBytes(block["input"])
+	case "tool_result":
+		return estimateClaudeContentBytes(block["content"])
+	default:
+		return estimateClaudeCompactJSONBytes(block)
+	}
+}
+
+func estimateClaudeStringFieldBytes(obj map[string]any, field string) int {
+	value, ok := obj[field].(string)
+	if !ok {
+		return 0
+	}
+	return len(value)
+}
+
+func estimateClaudeCompactJSONBytes(value any) int {
+	if value == nil {
+		return 0
+	}
+	data, err := json.Marshal(value)
+	if err != nil {
+		return 0
+	}
+	return len(data)
 }
 
 func filterBetaFeatures(header, featureToRemove string) string {
