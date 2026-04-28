@@ -46,6 +46,12 @@ const (
 	claudeImagePixelsPerToken           = 750
 	claudeImageMaxBillablePixels        = 1152000
 	claudeImageFallbackTokens           = 1600
+	claudeGPTImageLowDetailTokens       = 70
+	claudeGPTImageBaseTokens            = 70
+	claudeGPTImageTileTokens            = 140
+	claudeGPTImageMaxSidePixels         = 2048
+	claudeGPTImageShortSidePixels       = 768
+	claudeGPTImageTileSizePixels        = 512
 	claudeDocumentFallbackTokens        = 8000
 	claudeDocumentBytesPerToken         = 512
 	claudeDocumentMaxEstimateTokens     = 64000
@@ -641,7 +647,10 @@ func estimateClaudeSemanticPromptTokens(body []byte, routedModel string) (int, b
 	if !ok {
 		return 0, false
 	}
-	collector := claudePromptTokenCollector{segments: make([]string, 0, 64)}
+	collector := claudePromptTokenCollector{
+		segments:            make([]string, 0, 64),
+		imageTokenEstimator: estimateClaudeGPTImageBlockTokens,
+	}
 	collector.collectContent(obj["system"])
 	collector.collectMessages(obj["messages"])
 	collector.collectTools(obj["tools"])
@@ -710,8 +719,9 @@ func isTokenizableClaudePromptModel(model string) bool {
 }
 
 type claudePromptTokenCollector struct {
-	segments    []string
-	extraTokens int
+	segments            []string
+	extraTokens         int
+	imageTokenEstimator func(map[string]any) int
 }
 
 func (c *claudePromptTokenCollector) collectMessages(value any) {
@@ -783,7 +793,13 @@ func (c *claudePromptTokenCollector) collectContentBlock(block map[string]any) {
 	case "tool_result":
 		c.collectContent(block["content"])
 	case "image":
-		tokens := estimateClaudeImageBlockTokens(block)
+		tokens := 0
+		if c.imageTokenEstimator != nil {
+			tokens = c.imageTokenEstimator(block)
+		}
+		if tokens <= 0 {
+			tokens = estimateClaudeImageBlockTokens(block)
+		}
 		if tokens <= 0 {
 			tokens = claudeImageFallbackTokens
 		}
@@ -914,23 +930,8 @@ func estimateClaudeImageBlockBytes(block map[string]any) int {
 }
 
 func estimateClaudeImageBlockTokens(block map[string]any) int {
-	source, ok := block["source"].(map[string]any)
+	cfg, ok := decodeClaudeBase64ImageConfig(block)
 	if !ok {
-		return claudeImageFallbackTokens
-	}
-	sourceType := strings.ToLower(strings.TrimSpace(stringFromMap(source, "type")))
-	if sourceType != "base64" {
-		return claudeImageFallbackTokens
-	}
-	data := strings.TrimSpace(stringFromMap(source, "data"))
-	if data == "" {
-		return claudeImageFallbackTokens
-	}
-	if comma := strings.IndexByte(data, ','); comma >= 0 && strings.Contains(data[:comma], "base64") {
-		data = data[comma+1:]
-	}
-	cfg, _, err := image.DecodeConfig(base64.NewDecoder(base64.StdEncoding, strings.NewReader(data)))
-	if err != nil || cfg.Width <= 0 || cfg.Height <= 0 {
 		return claudeImageFallbackTokens
 	}
 	pixels := int64(cfg.Width) * int64(cfg.Height)
@@ -939,6 +940,70 @@ func estimateClaudeImageBlockTokens(block map[string]any) int {
 		pixels = maxPixels
 	}
 	return int((pixels + int64(claudeImagePixelsPerToken) - 1) / int64(claudeImagePixelsPerToken))
+}
+
+func estimateClaudeGPTImageBlockTokens(block map[string]any) int {
+	detail := strings.ToLower(strings.TrimSpace(stringFromMap(block, "detail")))
+	if detail == "low" {
+		return claudeGPTImageLowDetailTokens
+	}
+	cfg, ok := decodeClaudeBase64ImageConfig(block)
+	if !ok {
+		return claudeImageFallbackTokens
+	}
+	return estimateGPTVisionHighDetailImageTokens(cfg.Width, cfg.Height)
+}
+
+func decodeClaudeBase64ImageConfig(block map[string]any) (image.Config, bool) {
+	source, ok := block["source"].(map[string]any)
+	if !ok {
+		return image.Config{}, false
+	}
+	sourceType := strings.ToLower(strings.TrimSpace(stringFromMap(source, "type")))
+	if sourceType != "base64" {
+		return image.Config{}, false
+	}
+	data := strings.TrimSpace(stringFromMap(source, "data"))
+	if data == "" {
+		return image.Config{}, false
+	}
+	if comma := strings.IndexByte(data, ','); comma >= 0 && strings.Contains(data[:comma], "base64") {
+		data = data[comma+1:]
+	}
+	cfg, _, err := image.DecodeConfig(base64.NewDecoder(base64.StdEncoding, strings.NewReader(data)))
+	if err != nil || cfg.Width <= 0 || cfg.Height <= 0 {
+		return image.Config{}, false
+	}
+	return cfg, true
+}
+
+func estimateGPTVisionHighDetailImageTokens(width, height int) int {
+	if width <= 0 || height <= 0 {
+		return claudeImageFallbackTokens
+	}
+	w := float64(width)
+	h := float64(height)
+	maxSide := math.Max(w, h)
+	if maxSide > claudeGPTImageMaxSidePixels {
+		scale := float64(claudeGPTImageMaxSidePixels) / maxSide
+		w *= scale
+		h *= scale
+	}
+	shortSide := math.Min(w, h)
+	if shortSide > claudeGPTImageShortSidePixels {
+		scale := float64(claudeGPTImageShortSidePixels) / shortSide
+		w *= scale
+		h *= scale
+	}
+	tilesWide := int(math.Ceil(w / claudeGPTImageTileSizePixels))
+	tilesHigh := int(math.Ceil(h / claudeGPTImageTileSizePixels))
+	if tilesWide < 1 {
+		tilesWide = 1
+	}
+	if tilesHigh < 1 {
+		tilesHigh = 1
+	}
+	return claudeGPTImageBaseTokens + claudeGPTImageTileTokens*tilesWide*tilesHigh
 }
 
 func estimateClaudeDocumentBlockTokens(block map[string]any) int {

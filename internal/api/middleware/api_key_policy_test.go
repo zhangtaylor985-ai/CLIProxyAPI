@@ -3,7 +3,11 @@ package middleware
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"fmt"
+	stdimage "image"
+	"image/color"
+	"image/png"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -431,6 +435,30 @@ func TestEstimateClaudeImageBlockTokensUsesDecodedDimensions(t *testing.T) {
 	}
 }
 
+func TestEstimateClaudeGPTImageBlockTokensUsesGPT5VisionFormula(t *testing.T) {
+	block := map[string]any{
+		"type": "image",
+		"source": map[string]any{
+			"type":       "base64",
+			"media_type": "image/png",
+			"data":       testPNGBase64(t, 1024, 1024),
+		},
+	}
+	if got := estimateClaudeGPTImageBlockTokens(block); got != 630 {
+		t.Fatalf("gpt image tokens=%d, want 630", got)
+	}
+	block["detail"] = "low"
+	if got := estimateClaudeGPTImageBlockTokens(block); got != 70 {
+		t.Fatalf("low detail gpt image tokens=%d, want 70", got)
+	}
+}
+
+func TestEstimateGPTVisionHighDetailImageTokensScalesLargeImages(t *testing.T) {
+	if got := estimateGPTVisionHighDetailImageTokens(2048, 4096); got != 910 {
+		t.Fatalf("gpt image tokens=%d, want 910", got)
+	}
+}
+
 func TestEstimateClaudeRequestTokensUsesRoutedGPTTokenizerNearLimit(t *testing.T) {
 	limit := claudePromptContextLimitTokens("gpt-5.4(high)")
 	content := strings.Repeat(" the", limit-5000)
@@ -486,6 +514,21 @@ func TestAPIKeyPolicyMiddleware_AllowsRoutedGPT54PromptWhenTokenizerEstimateFits
 	if w.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 	}
+}
+
+func testPNGBase64(t *testing.T, width, height int) string {
+	t.Helper()
+	img := stdimage.NewRGBA(stdimage.Rect(0, 0, width, height))
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			img.Set(x, y, color.RGBA{R: 255, A: 255})
+		}
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatal(err)
+	}
+	return base64.StdEncoding.EncodeToString(buf.Bytes())
 }
 
 func TestAPIKeyPolicyMiddleware_UsesOrdinaryOpusWindowWhenNotRouted(t *testing.T) {
