@@ -341,6 +341,9 @@ func (h *ClaudeCodeAPIHandler) sanitizeClientError(c *gin.Context, msg *interfac
 		"component":   "claude_error_sanitize",
 		"status_code": msg.StatusCode,
 	})
+	if requestID := handlers.GinRequestID(c); requestID != "" {
+		entry = entry.WithField("request_id", requestID)
+	}
 	if hasCodexFailoverMarker(c) {
 		entry = entry.WithField("provider", "codex")
 	}

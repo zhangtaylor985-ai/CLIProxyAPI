@@ -13,11 +13,13 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/interfaces"
+	internallogging "github.com/router-for-me/CLIProxyAPI/v6/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/api/handlers"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 	coreexecutor "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/executor"
 	sdkconfig "github.com/router-for-me/CLIProxyAPI/v6/sdk/config"
+	log "github.com/sirupsen/logrus"
 )
 
 type claudeErrorPayload struct {
@@ -86,6 +88,19 @@ func (e emptyClaudeExecutor) HttpRequest(context.Context, *coreauth.Auth, *http.
 	return nil, nil
 }
 
+type captureLogHook struct {
+	entries chan *log.Entry
+}
+
+func (h captureLogHook) Levels() []log.Level {
+	return []log.Level{log.ErrorLevel}
+}
+
+func (h captureLogHook) Fire(entry *log.Entry) error {
+	h.entries <- entry
+	return nil
+}
+
 func TestWriteClientError_UsesClaudeErrorBody(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	base := handlers.NewBaseAPIHandlers(&sdkconfig.SDKConfig{}, nil)
@@ -148,6 +163,43 @@ func TestWriteClientError_SanitizesUnknownProviderModelLeak(t *testing.T) {
 		t.Fatalf("error.message = %q", payload.Error.Message)
 	}
 	assertNoClaudeClientInternalLeak(t, recorder.Body.String())
+}
+
+func TestSanitizeClientErrorLogsRequestID(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	base := handlers.NewBaseAPIHandlers(&sdkconfig.SDKConfig{}, nil)
+	h := NewClaudeCodeAPIHandler(base)
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	internallogging.SetGinRequestID(c, "req-alert-1")
+
+	logger := log.StandardLogger()
+	previousHooks := logger.Hooks
+	hook := captureLogHook{entries: make(chan *log.Entry, 1)}
+	logger.ReplaceHooks(log.LevelHooks{})
+	logger.AddHook(hook)
+	t.Cleanup(func() {
+		logger.ReplaceHooks(previousHooks)
+	})
+
+	sanitized := h.sanitizeClientError(c, &interfaces.ErrorMessage{
+		StatusCode: http.StatusBadGateway,
+		Error:      errors.New("empty upstream response"),
+	})
+
+	if sanitized == nil || sanitized.Error == nil || sanitized.Error.Error() != handlers.GenericSensitiveClientErrorMessage {
+		t.Fatalf("unexpected sanitized error: %#v", sanitized)
+	}
+	select {
+	case entry := <-hook.entries:
+		if got := entry.Data["request_id"]; got != "req-alert-1" {
+			t.Fatalf("request_id field = %#v, want req-alert-1", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected sanitize log entry")
+	}
 }
 
 func TestWriteClientError_SanitizesCodexAuthLeak(t *testing.T) {
