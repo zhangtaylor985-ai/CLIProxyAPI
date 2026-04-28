@@ -171,7 +171,7 @@ go test ./... -count=1
 
 待跟进：
 
-- 生产 `/root/cliapp/CLIProxyAPI/config.yaml` 当前观测到 `claude-to-gpt-target-family: "gpt-5.5"` 且 `claude-to-gpt-reasoning-effort: high`，与“默认保持 gpt-5.4，只显式用户走 5.5”的目标不一致；上线/观察前需复核是否为临时配置。
+- 生产 `/root/cliapp/CLIProxyAPI/config.yaml` 曾观测到 `claude-to-gpt-target-family: "gpt-5.5"` 且 `claude-to-gpt-reasoning-effort: high`，与“默认保持 gpt-5.4，只显式用户走 5.5”的目标不一致；后续上线步骤已纠正为 `gpt-5.4`。
 - `response.incomplete/max_output_tokens` 的根因仍未消除；本轮只是将它从泛化断流中准确分类，后续需要继续研究降低 GPT-5.5 high 大工具输出触发率的策略。
 
 ## 2026-04-28 GPT-5.5 high 工具请求降级策略
@@ -216,3 +216,19 @@ NO_PROXY=127.0.0.1,localhost,::1 no_proxy=127.0.0.1,localhost,::1 \
 HTTP_PROXY= HTTPS_PROXY= http_proxy= https_proxy= \
 go test ./... -count=1
 ```
+
+上线状态：
+
+- commit：`81198901 fix(claude): clamp gpt55 tool effort`
+- 线上路径：`/root/cliapp/CLIProxyAPI`
+- 部署方式：`scripts/deploy_systemd.sh`
+- 二进制 build commit：`81198901f343759256e711ac3fd2fcd45e125d10`
+- `cliproxyapi.service` 已重启，状态 `active (running)`。
+- 本地 HTTP 探测 `http://127.0.0.1:8317/` 成功。
+- 线上配置已复核并纠正：
+  - `claude-to-gpt-target-family: "gpt-5.4"`
+  - `claude-to-gpt-reasoning-effort: high`
+- raw SSE 诊断仍开启：
+  - `CLIPROXY_CODEX_RAW_SSE_LOG_DIR=/root/cliapp/CLIProxyAPI/logs/codex-raw-sse`
+  - `CLIPROXY_CODEX_RAW_SSE_MAX_BYTES=104857600`
+- 短窗口日志观察：默认流量显示为 `gpt-5.4(high)`；未见新的 `response.incomplete` / `unknown provider for model` 错误。
