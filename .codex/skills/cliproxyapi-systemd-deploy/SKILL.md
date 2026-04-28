@@ -46,13 +46,14 @@ description: Use when the user asks to pull the latest CLIProxyAPI code, rebuild
 - 代码有变更要上线时，不能只重启服务，必须先重编译 `bin/cliproxyapi`
 - 文档中的部署路径若和线上实际不一致，以 `systemctl cat cliproxyapi.service` 为准
 - 上线确认至少包含：运行中的 PID、日志里的 commit/build 时间、以及一次本地 HTTP 探测
+- 当前生产 shell 可能带有 `HTTP_PROXY` / `HTTPS_PROXY` / `http_proxy` / `https_proxy`；本地 `127.0.0.1` 探测必须 unset 这些变量，否则 curl 可能被外部代理拦截并返回误导性的 `403`
 
 ## Standard Workflow
 
 优先使用仓库脚本执行标准部署：
 
 ```bash
-bash scripts/deploy_systemd.sh
+env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY bash scripts/deploy_systemd.sh
 ```
 
 脚本会执行：
@@ -107,7 +108,8 @@ journalctl -u cliproxyapi.service -n 50 --no-pager -l
 6. 做本地 HTTP 探测。
 
 ```bash
-curl -fsS http://127.0.0.1:8317/
+env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY \
+  curl -fsS http://127.0.0.1:8317/healthz
 ```
 
 7. 若本次还包含提交与 push：
