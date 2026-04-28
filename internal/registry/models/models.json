@@ -1610,7 +1610,7 @@
       "display_name": "GPT 5.4",
       "version": "gpt-5.4",
       "description": "Stable version of GPT 5.4",
-      "context_length": 1050000,
+      "context_length": 272000,
       "max_completion_tokens": 128000,
       "supported_parameters": [
         "tools"
@@ -1633,7 +1633,7 @@
       "display_name": "GPT 5.5",
       "version": "gpt-5.5",
       "description": "Frontier model for complex coding, research, and real-world work.",
-      "context_length": 272000,
+      "context_length": 400000,
       "max_completion_tokens": 128000,
       "supported_parameters": [
         "tools"
@@ -1908,7 +1908,7 @@
       "display_name": "GPT 5.4",
       "version": "gpt-5.4",
       "description": "Stable version of GPT 5.4",
-      "context_length": 1050000,
+      "context_length": 272000,
       "max_completion_tokens": 128000,
       "supported_parameters": [
         "tools"
@@ -1931,7 +1931,7 @@
       "display_name": "GPT 5.5",
       "version": "gpt-5.5",
       "description": "Frontier model for complex coding, research, and real-world work.",
-      "context_length": 272000,
+      "context_length": 400000,
       "max_completion_tokens": 128000,
       "supported_parameters": [
         "tools"
@@ -2206,7 +2206,7 @@
       "display_name": "GPT 5.4",
       "version": "gpt-5.4",
       "description": "Stable version of GPT 5.4",
-      "context_length": 1050000,
+      "context_length": 272000,
       "max_completion_tokens": 128000,
       "supported_parameters": [
         "tools"
@@ -2229,7 +2229,7 @@
       "display_name": "GPT 5.5",
       "version": "gpt-5.5",
       "description": "Frontier model for complex coding, research, and real-world work.",
-      "context_length": 272000,
+      "context_length": 400000,
       "max_completion_tokens": 128000,
       "supported_parameters": [
         "tools"

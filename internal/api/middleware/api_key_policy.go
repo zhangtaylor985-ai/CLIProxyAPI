@@ -29,13 +29,12 @@ const (
 	claudeOpus1MHeaderName = "X-CPA-CLAUDE-1M"
 	claudeOpus1MBetaName   = "context-1m-2025-08-07"
 
-	// Keep a conservative hard cap for non-1M Claude Opus client keys even when
-	// the routed upstream advertises a larger window. GPT-5.5 is advertised
-	// locally with a 272k context window, so this preserves roughly 32k tokens
-	// for default Claude completions.
-	claudeBaseContextLimitTokens        = 240000
+	// Claude Code/Codex expose a product-side effective prompt window below the
+	// raw registry context window (for example 272k -> about 258k). Mirror that
+	// policy for non-1M Opus client keys so service-side preflight matches the
+	// client's practical session budget instead of API-level million-token caps.
 	claudeOrdinaryOpusContextTokens     = 200000
-	claudeDefaultOutputReserveTokens    = 32000
+	claudeCodexEffectiveContextPercent  = 95
 	claudePromptTooLongEstimateDivisor  = 3
 	claudePromptTooLongErrorContentType = "application/json"
 	claudePromptTooLongMessage          = "Prompt is too long. Please run /compact and try again."
@@ -197,7 +196,7 @@ func APIKeyPolicyMiddleware(getConfig func() *config.Config, limiter policy.Dail
 			}
 		}
 		if !allowClaudeOpus1M && shouldEnforceClaudeBaseContextLimit(c.Request, effectiveModel) {
-			contextLimit := claudePromptContextLimitTokens(bodyBytes, budgetModel)
+			contextLimit := claudePromptContextLimitTokens(budgetModel)
 			estimatedTokens := estimateClaudeRequestTokensWithinLimit(bodyBytes, contextLimit)
 			if estimatedTokens > contextLimit {
 				body := buildClaudePolicyErrorResponseBody(
@@ -510,18 +509,19 @@ func estimateClaudeRequestTokensWithinLimit(body []byte, limit int) int {
 	return rawEstimate
 }
 
-func claudePromptContextLimitTokens(body []byte, routedModel string) int {
-	limit := claudeBaseContextLimitTokens
-	if contextWindow := claudeModelContextWindowTokens(routedModel); contextWindow > 0 {
-		limit = contextWindow - claudeOutputReserveTokens(body)
-		if limit < 0 {
-			limit = 0
-		}
+func claudePromptContextLimitTokens(routedModel string) int {
+	contextWindow := claudeModelContextWindowTokens(routedModel)
+	if contextWindow <= 0 {
+		contextWindow = claudeOrdinaryOpusContextTokens
 	}
-	if limit > claudeBaseContextLimitTokens {
-		return claudeBaseContextLimitTokens
+	return claudeEffectivePromptContextLimitTokens(contextWindow)
+}
+
+func claudeEffectivePromptContextLimitTokens(contextWindow int) int {
+	if contextWindow <= 0 {
+		return 0
 	}
-	return limit
+	return contextWindow * claudeCodexEffectiveContextPercent / 100
 }
 
 func claudeModelContextWindowTokens(model string) int {
@@ -543,14 +543,6 @@ func claudeModelContextWindowTokens(model string) int {
 		return info.InputTokenLimit + info.OutputTokenLimit
 	}
 	return info.InputTokenLimit
-}
-
-func claudeOutputReserveTokens(body []byte) int {
-	reserve := int(gjson.GetBytes(body, "max_tokens").Int())
-	if reserve < claudeDefaultOutputReserveTokens {
-		return claudeDefaultOutputReserveTokens
-	}
-	return reserve
 }
 
 func estimateClaudeSemanticPromptBytes(body []byte) (int, bool) {

@@ -2,24 +2,44 @@ package registry
 
 import "testing"
 
-func TestCodexGPT55DefinitionsMatchCurrentMetadata(t *testing.T) {
+func TestCodexGPT54And55DefinitionsMatchCurrentMetadata(t *testing.T) {
 	for name, models := range map[string][]*ModelInfo{
 		"plus": GetCodexPlusModels(),
 		"pro":  GetCodexProModels(),
 		"team": GetCodexTeamModels(),
 	} {
-		model := findModelInfo(models, "gpt-5.5")
-		if model == nil {
-			t.Fatalf("expected gpt-5.5 in codex-%s models", name)
-		}
-		if model.Created != 1776902400 {
-			t.Fatalf("codex-%s gpt-5.5 created = %d, want 1776902400", name, model.Created)
-		}
-		if model.Description != "Frontier model for complex coding, research, and real-world work." {
-			t.Fatalf("codex-%s gpt-5.5 description = %q", name, model.Description)
-		}
-		if model.ContextLength != 272000 {
-			t.Fatalf("codex-%s gpt-5.5 context_length = %d, want 272000", name, model.ContextLength)
+		for _, tt := range []struct {
+			id            string
+			created       int64
+			description   string
+			contextLength int
+		}{
+			{
+				id:            "gpt-5.4",
+				created:       1772668800,
+				description:   "Stable version of GPT 5.4",
+				contextLength: 272000,
+			},
+			{
+				id:            "gpt-5.5",
+				created:       1776902400,
+				description:   "Frontier model for complex coding, research, and real-world work.",
+				contextLength: 400000,
+			},
+		} {
+			model := findModelInfo(models, tt.id)
+			if model == nil {
+				t.Fatalf("expected %s in codex-%s models", tt.id, name)
+			}
+			if model.Created != tt.created {
+				t.Fatalf("codex-%s %s created = %d, want %d", name, tt.id, model.Created, tt.created)
+			}
+			if model.Description != tt.description {
+				t.Fatalf("codex-%s %s description = %q", name, tt.id, model.Description)
+			}
+			if model.ContextLength != tt.contextLength {
+				t.Fatalf("codex-%s %s context_length = %d, want %d", name, tt.id, model.ContextLength, tt.contextLength)
+			}
 		}
 	}
 }

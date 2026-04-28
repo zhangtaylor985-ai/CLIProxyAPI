@@ -167,7 +167,8 @@ func TestAPIKeyPolicyMiddleware_RejectsOversizedOpusWhen1MDisabled(t *testing.T)
 		c.JSON(200, gin.H{"ok": true})
 	})
 
-	largeContent := strings.Repeat("a", claudeBaseContextLimitTokens*claudePromptTooLongEstimateDivisor+1)
+	limit := claudePromptContextLimitTokens("claude-opus-4-6")
+	largeContent := strings.Repeat("a", limit*claudePromptTooLongEstimateDivisor+1)
 	payload := fmt.Sprintf(`{"model":"claude-opus-4-6","messages":[{"role":"user","content":%q}]}`, largeContent)
 	req := httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewBufferString(payload))
 	req.Header.Set("Content-Type", "application/json")
@@ -203,13 +204,14 @@ func TestAPIKeyPolicyMiddleware_AllowsEscapedJSONBodyWhenSemanticPromptUnderLimi
 		c.JSON(200, gin.H{"ok": true})
 	})
 
-	content := strings.Repeat(`\`, claudeBaseContextLimitTokens*claudePromptTooLongEstimateDivisor/2)
+	limit := claudePromptContextLimitTokens("claude-opus-4-6")
+	content := strings.Repeat(`\`, limit*claudePromptTooLongEstimateDivisor/2)
 	payload := fmt.Sprintf(`{"model":"claude-opus-4-6","messages":[{"role":"user","content":%q}]}`, content)
-	if rawEstimate := (len(payload) + claudePromptTooLongEstimateDivisor - 1) / claudePromptTooLongEstimateDivisor; rawEstimate <= claudeBaseContextLimitTokens {
+	if rawEstimate := (len(payload) + claudePromptTooLongEstimateDivisor - 1) / claudePromptTooLongEstimateDivisor; rawEstimate <= limit {
 		t.Fatalf("test payload no longer exceeds raw body estimate: %d", rawEstimate)
 	}
-	if semanticEstimate := estimateClaudeRequestTokens([]byte(payload)); semanticEstimate >= claudeBaseContextLimitTokens {
-		t.Fatalf("semantic estimate=%d, want below %d", semanticEstimate, claudeBaseContextLimitTokens)
+	if semanticEstimate := estimateClaudeRequestTokens([]byte(payload)); semanticEstimate >= limit {
+		t.Fatalf("semantic estimate=%d, want below %d", semanticEstimate, limit)
 	}
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewBufferString(payload))
@@ -241,8 +243,8 @@ func TestAPIKeyPolicyMiddleware_UsesOrdinaryOpusWindowWhenNotRouted(t *testing.T
 		c.JSON(200, gin.H{"ok": true})
 	})
 
-	limit := claudePromptContextLimitTokens([]byte(`{}`), "claude-opus-4-6")
-	if limit != claudeOrdinaryOpusContextTokens-claudeDefaultOutputReserveTokens {
+	limit := claudePromptContextLimitTokens("claude-opus-4-6")
+	if limit != 190000 {
 		t.Fatalf("ordinary opus prompt limit=%d", limit)
 	}
 	largeContent := strings.Repeat("a", limit*claudePromptTooLongEstimateDivisor+1)
@@ -256,7 +258,42 @@ func TestAPIKeyPolicyMiddleware_UsesOrdinaryOpusWindowWhenNotRouted(t *testing.T
 	}
 }
 
-func TestAPIKeyPolicyMiddleware_UsesRoutedTargetReserveForOpusPreflight(t *testing.T) {
+func TestAPIKeyPolicyMiddleware_AllowsOrdinaryOpusPromptBelowEffectiveWindowWhenNotRouted(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	cfg := &config.Config{
+		SDKConfig: config.SDKConfig{DisableClaudeOpus1M: true},
+		APIKeyPolicies: []config.APIKeyPolicy{
+			{APIKey: "k", EnableClaudeModels: boolPtr(true)},
+		},
+	}
+	cfg.SanitizeAPIKeyPolicies()
+
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set("apiKey", "k")
+		c.Next()
+	})
+	r.Use(APIKeyPolicyMiddleware(func() *config.Config { return cfg }, nil, nil, nil))
+	r.POST("/v1/messages", func(c *gin.Context) {
+		c.JSON(200, gin.H{"ok": true})
+	})
+
+	content := strings.Repeat("a", 175900*claudePromptTooLongEstimateDivisor)
+	payload := fmt.Sprintf(`{"model":"claude-opus-4-6","messages":[{"role":"user","content":%q}]}`, content)
+	if semanticEstimate := estimateClaudeRequestTokens([]byte(payload)); semanticEstimate >= claudePromptContextLimitTokens("claude-opus-4-6") {
+		t.Fatalf("test payload estimate=%d should remain below ordinary opus effective window", semanticEstimate)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewBufferString(payload))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestAPIKeyPolicyMiddleware_UsesRoutedGPT55CodexWindowForOpusPreflight(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	cfg := &config.Config{
 		SDKConfig: config.SDKConfig{
@@ -275,8 +312,8 @@ func TestAPIKeyPolicyMiddleware_UsesRoutedTargetReserveForOpusPreflight(t *testi
 		c.JSON(200, gin.H{"ok": true})
 	})
 
-	limit := claudePromptContextLimitTokens([]byte(`{"max_tokens":64000}`), "gpt-5.5(high)")
-	if limit != 208000 {
+	limit := claudePromptContextLimitTokens("gpt-5.5(high)")
+	if limit != 380000 {
 		t.Fatalf("gpt-5.5 prompt limit=%d", limit)
 	}
 	largeContent := strings.Repeat("a", limit*claudePromptTooLongEstimateDivisor+1)
@@ -290,7 +327,7 @@ func TestAPIKeyPolicyMiddleware_UsesRoutedTargetReserveForOpusPreflight(t *testi
 	}
 }
 
-func TestAPIKeyPolicyMiddleware_CapsMillionTokenGPTTargetForOpusPreflight(t *testing.T) {
+func TestAPIKeyPolicyMiddleware_UsesRoutedGPT54CodexWindowForOpusPreflight(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	cfg := &config.Config{
 		SDKConfig: config.SDKConfig{
@@ -310,8 +347,8 @@ func TestAPIKeyPolicyMiddleware_CapsMillionTokenGPTTargetForOpusPreflight(t *tes
 		c.JSON(200, gin.H{"ok": true})
 	})
 
-	limit := claudePromptContextLimitTokens([]byte(`{}`), "gpt-5.4(high)")
-	if limit != claudeBaseContextLimitTokens {
+	limit := claudePromptContextLimitTokens("gpt-5.4(high)")
+	if limit != 258400 {
 		t.Fatalf("gpt-5.4 prompt limit=%d", limit)
 	}
 	largeContent := strings.Repeat("a", limit*claudePromptTooLongEstimateDivisor+1)
@@ -344,7 +381,8 @@ func TestAPIKeyPolicyMiddleware_AllowsOversizedOpusForPerKey1MOverride(t *testin
 		c.JSON(200, gin.H{"ok": true})
 	})
 
-	largeContent := strings.Repeat("a", claudeBaseContextLimitTokens*claudePromptTooLongEstimateDivisor+1)
+	limit := claudePromptContextLimitTokens("claude-opus-4-6")
+	largeContent := strings.Repeat("a", limit*claudePromptTooLongEstimateDivisor+1)
 	payload := fmt.Sprintf(`{"model":"claude-opus-4-6","messages":[{"role":"user","content":%q}]}`, largeContent)
 	req := httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewBufferString(payload))
 	req.Header.Set("Content-Type", "application/json")
