@@ -17,6 +17,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/clientidentity"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/policy"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/requesttrace"
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/api/handlers"
 	"github.com/tidwall/gjson"
@@ -28,10 +29,13 @@ const (
 	claudeOpus1MHeaderName = "X-CPA-CLAUDE-1M"
 	claudeOpus1MBetaName   = "context-1m-2025-08-07"
 
-	// GPT-5.5 is advertised locally with a 272k context window. Keep roughly
-	// 32k tokens for Claude's default max_tokens instead of preflighting up to
-	// the absolute upstream ceiling.
+	// Keep a conservative hard cap for non-1M Claude Opus client keys even when
+	// the routed upstream advertises a larger window. GPT-5.5 is advertised
+	// locally with a 272k context window, so this preserves roughly 32k tokens
+	// for default Claude completions.
 	claudeBaseContextLimitTokens        = 240000
+	claudeOrdinaryOpusContextTokens     = 200000
+	claudeDefaultOutputReserveTokens    = 32000
 	claudePromptTooLongEstimateDivisor  = 3
 	claudePromptTooLongErrorContentType = "application/json"
 	claudePromptTooLongMessage          = "Prompt is too long. Please run /compact and try again."
@@ -149,20 +153,6 @@ func APIKeyPolicyMiddleware(getConfig func() *config.Config, limiter policy.Dail
 			c.Next()
 			return
 		}
-		if !allowClaudeOpus1M && shouldEnforceClaudeBaseContextLimit(c.Request, model) {
-			estimatedTokens := estimateClaudeRequestTokens(bodyBytes)
-			if estimatedTokens > claudeBaseContextLimitTokens {
-				body := buildClaudePolicyErrorResponseBody(
-					c,
-					"invalid_request_error",
-					claudePromptTooLongMessage,
-				)
-				c.Abort()
-				c.Data(http.StatusBadRequest, claudePromptTooLongErrorContentType, body)
-				return
-			}
-		}
-
 		requestNow := time.Now()
 		// Access controls are evaluated against the client-requested model namespace.
 		// Downstream routing/fallback targets remain unaffected by excluded-models.
@@ -204,6 +194,20 @@ func APIKeyPolicyMiddleware(getConfig func() *config.Config, limiter policy.Dail
 		if policyEntry != nil {
 			if routed, decision := policyEntry.RoutedModelFor(apiKey, effectiveModel, requestNow); decision != nil && strings.TrimSpace(routed) != "" {
 				budgetModel = routed
+			}
+		}
+		if !allowClaudeOpus1M && shouldEnforceClaudeBaseContextLimit(c.Request, effectiveModel) {
+			contextLimit := claudePromptContextLimitTokens(bodyBytes, budgetModel)
+			estimatedTokens := estimateClaudeRequestTokensWithinLimit(bodyBytes, contextLimit)
+			if estimatedTokens > contextLimit {
+				body := buildClaudePolicyErrorResponseBody(
+					c,
+					"invalid_request_error",
+					claudePromptTooLongMessage,
+				)
+				c.Abort()
+				c.Data(http.StatusBadRequest, claudePromptTooLongErrorContentType, body)
+				return
 			}
 		}
 		if policyEntry != nil && policyEntry.FastModeEnabled() {
@@ -489,13 +493,64 @@ func isClaudeOpusModel(model string) bool {
 }
 
 func estimateClaudeRequestTokens(body []byte) int {
+	return estimateClaudeRequestTokensWithinLimit(body, 0)
+}
+
+func estimateClaudeRequestTokensWithinLimit(body []byte, limit int) int {
 	if len(body) == 0 {
 		return 0
+	}
+	rawEstimate := (len(body) + claudePromptTooLongEstimateDivisor - 1) / claudePromptTooLongEstimateDivisor
+	if limit > 0 && rawEstimate <= limit {
+		return rawEstimate
 	}
 	if semanticBytes, ok := estimateClaudeSemanticPromptBytes(body); ok {
 		return (semanticBytes + claudePromptTooLongEstimateDivisor - 1) / claudePromptTooLongEstimateDivisor
 	}
-	return (len(body) + claudePromptTooLongEstimateDivisor - 1) / claudePromptTooLongEstimateDivisor
+	return rawEstimate
+}
+
+func claudePromptContextLimitTokens(body []byte, routedModel string) int {
+	limit := claudeBaseContextLimitTokens
+	if contextWindow := claudeModelContextWindowTokens(routedModel); contextWindow > 0 {
+		limit = contextWindow - claudeOutputReserveTokens(body)
+		if limit < 0 {
+			limit = 0
+		}
+	}
+	if limit > claudeBaseContextLimitTokens {
+		return claudeBaseContextLimitTokens
+	}
+	return limit
+}
+
+func claudeModelContextWindowTokens(model string) int {
+	key := policy.NormaliseModelKey(model)
+	if key == "" {
+		return 0
+	}
+	if isClaudeOpusModel(key) {
+		return claudeOrdinaryOpusContextTokens
+	}
+	info := registry.LookupModelInfo(key)
+	if info == nil {
+		return 0
+	}
+	if info.ContextLength > 0 {
+		return info.ContextLength
+	}
+	if info.InputTokenLimit > 0 && info.OutputTokenLimit > 0 {
+		return info.InputTokenLimit + info.OutputTokenLimit
+	}
+	return info.InputTokenLimit
+}
+
+func claudeOutputReserveTokens(body []byte) int {
+	reserve := int(gjson.GetBytes(body, "max_tokens").Int())
+	if reserve < claudeDefaultOutputReserveTokens {
+		return claudeDefaultOutputReserveTokens
+	}
+	return reserve
 }
 
 func estimateClaudeSemanticPromptBytes(body []byte) (int, bool) {

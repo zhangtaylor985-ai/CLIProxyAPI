@@ -221,6 +221,110 @@ func TestAPIKeyPolicyMiddleware_AllowsEscapedJSONBodyWhenSemanticPromptUnderLimi
 	}
 }
 
+func TestAPIKeyPolicyMiddleware_UsesOrdinaryOpusWindowWhenNotRouted(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	cfg := &config.Config{
+		SDKConfig: config.SDKConfig{DisableClaudeOpus1M: true},
+		APIKeyPolicies: []config.APIKeyPolicy{
+			{APIKey: "k", EnableClaudeModels: boolPtr(true)},
+		},
+	}
+	cfg.SanitizeAPIKeyPolicies()
+
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set("apiKey", "k")
+		c.Next()
+	})
+	r.Use(APIKeyPolicyMiddleware(func() *config.Config { return cfg }, nil, nil, nil))
+	r.POST("/v1/messages", func(c *gin.Context) {
+		c.JSON(200, gin.H{"ok": true})
+	})
+
+	limit := claudePromptContextLimitTokens([]byte(`{}`), "claude-opus-4-6")
+	if limit != claudeOrdinaryOpusContextTokens-claudeDefaultOutputReserveTokens {
+		t.Fatalf("ordinary opus prompt limit=%d", limit)
+	}
+	largeContent := strings.Repeat("a", limit*claudePromptTooLongEstimateDivisor+1)
+	payload := fmt.Sprintf(`{"model":"claude-opus-4-6","messages":[{"role":"user","content":%q}]}`, largeContent)
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewBufferString(payload))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestAPIKeyPolicyMiddleware_UsesRoutedTargetReserveForOpusPreflight(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	cfg := &config.Config{
+		SDKConfig: config.SDKConfig{
+			DisableClaudeOpus1M:       true,
+			ClaudeToGPTRoutingEnabled: true,
+		},
+	}
+
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set("apiKey", "k")
+		c.Next()
+	})
+	r.Use(APIKeyPolicyMiddleware(func() *config.Config { return cfg }, nil, nil, nil))
+	r.POST("/v1/messages", func(c *gin.Context) {
+		c.JSON(200, gin.H{"ok": true})
+	})
+
+	limit := claudePromptContextLimitTokens([]byte(`{"max_tokens":64000}`), "gpt-5.5(high)")
+	if limit != 208000 {
+		t.Fatalf("gpt-5.5 prompt limit=%d", limit)
+	}
+	largeContent := strings.Repeat("a", limit*claudePromptTooLongEstimateDivisor+1)
+	payload := fmt.Sprintf(`{"model":"claude-opus-4-6","max_tokens":64000,"messages":[{"role":"user","content":%q}]}`, largeContent)
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewBufferString(payload))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestAPIKeyPolicyMiddleware_CapsMillionTokenGPTTargetForOpusPreflight(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	cfg := &config.Config{
+		SDKConfig: config.SDKConfig{
+			DisableClaudeOpus1M:       true,
+			ClaudeToGPTRoutingEnabled: true,
+			ClaudeToGPTTargetFamily:   "gpt-5.4",
+		},
+	}
+
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set("apiKey", "k")
+		c.Next()
+	})
+	r.Use(APIKeyPolicyMiddleware(func() *config.Config { return cfg }, nil, nil, nil))
+	r.POST("/v1/messages", func(c *gin.Context) {
+		c.JSON(200, gin.H{"ok": true})
+	})
+
+	limit := claudePromptContextLimitTokens([]byte(`{}`), "gpt-5.4(high)")
+	if limit != claudeBaseContextLimitTokens {
+		t.Fatalf("gpt-5.4 prompt limit=%d", limit)
+	}
+	largeContent := strings.Repeat("a", limit*claudePromptTooLongEstimateDivisor+1)
+	payload := fmt.Sprintf(`{"model":"claude-opus-4-6","messages":[{"role":"user","content":%q}]}`, largeContent)
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewBufferString(payload))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
 func TestAPIKeyPolicyMiddleware_AllowsOversizedOpusForPerKey1MOverride(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	cfg := &config.Config{
