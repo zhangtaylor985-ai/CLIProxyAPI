@@ -114,6 +114,7 @@ func (h *ClaudeCodeAPIHandler) ClaudeCountTokens(c *gin.Context) {
 	cliCtx, cliCancel := h.GetContextWithCancel(h, c, context.Background())
 
 	modelName := gjson.GetBytes(rawJSON, "model").String()
+	setClaudeAlertContext(c, "count_tokens", modelName, "upstream_execution")
 
 	resp, upstreamHeaders, errMsg := h.ExecuteCountWithAuthManager(cliCtx, h.HandlerType(), modelName, rawJSON, alt)
 	if errMsg != nil {
@@ -167,6 +168,7 @@ func (h *ClaudeCodeAPIHandler) handleNonStreamingResponse(c *gin.Context, rawJSO
 	cliCtx, cliCancel := h.GetContextWithCancel(h, c, context.Background())
 
 	modelName := gjson.GetBytes(rawJSON, "model").String()
+	setClaudeAlertContext(c, "non_stream", modelName, "upstream_execution")
 
 	// Claude Code treats any non-streaming body bytes as the final JSON response,
 	// so body keep-alives would commit HTTP 200 before an upstream error can be returned.
@@ -200,6 +202,7 @@ func (h *ClaudeCodeAPIHandler) handleNonStreamingResponse(c *gin.Context, rawJSO
 
 	if len(bytes.TrimSpace(resp)) == 0 {
 		errEmpty := errors.New("empty upstream response")
+		setClaudeAlertContext(c, "non_stream", modelName, "upstream_empty_response")
 		h.writeClientError(c, &interfaces.ErrorMessage{StatusCode: http.StatusBadGateway, Error: errEmpty})
 		cliCancel(errEmpty)
 		return
@@ -232,6 +235,7 @@ func (h *ClaudeCodeAPIHandler) handleStreamingResponse(c *gin.Context, rawJSON [
 	}
 
 	modelName := gjson.GetBytes(rawJSON, "model").String()
+	setClaudeAlertContext(c, "stream", modelName, "upstream_execution")
 
 	// Create a cancellable context for the backend client request
 	// This allows proper cleanup and cancellation of ongoing requests
@@ -267,6 +271,7 @@ func (h *ClaudeCodeAPIHandler) handleStreamingResponse(c *gin.Context, rawJSON [
 			return
 		case chunk, ok := <-dataChan:
 			if !ok {
+				setClaudeAlertContext(c, "stream", modelName, "upstream_stream_closed_before_first_payload")
 				h.writeClientError(c, &interfaces.ErrorMessage{
 					StatusCode: http.StatusBadGateway,
 					Error:      errors.New("upstream stream closed before first payload"),
@@ -341,6 +346,9 @@ func (h *ClaudeCodeAPIHandler) sanitizeClientError(c *gin.Context, msg *interfac
 		"component":   "claude_error_sanitize",
 		"status_code": msg.StatusCode,
 	})
+	for key, value := range claudeAlertLogFields(c, msg) {
+		entry = entry.WithField(key, value)
+	}
 	if requestID := handlers.GinRequestID(c); requestID != "" {
 		entry = entry.WithField("request_id", requestID)
 	}
@@ -361,6 +369,76 @@ func (h *ClaudeCodeAPIHandler) sanitizeClientError(c *gin.Context, msg *interfac
 	sanitized.StatusCode = http.StatusServiceUnavailable
 	sanitized.Error = errors.New(handlers.GenericSensitiveClientErrorMessage)
 	return &sanitized
+}
+
+func setClaudeAlertContext(c *gin.Context, mode, model, stage string) {
+	if c == nil {
+		return
+	}
+	if trimmed := strings.TrimSpace(mode); trimmed != "" {
+		c.Set("claude_alert_mode", trimmed)
+	}
+	if trimmed := strings.TrimSpace(model); trimmed != "" {
+		c.Set("claude_alert_model", trimmed)
+	}
+	if trimmed := strings.TrimSpace(stage); trimmed != "" {
+		c.Set("claude_alert_stage", trimmed)
+	}
+}
+
+func claudeAlertLogFields(c *gin.Context, msg *interfaces.ErrorMessage) log.Fields {
+	fields := log.Fields{
+		"handler_format": "claude",
+	}
+	mode := ""
+	stage := ""
+	if c != nil {
+		mode = strings.TrimSpace(c.GetString("claude_alert_mode"))
+		stage = strings.TrimSpace(c.GetString("claude_alert_stage"))
+		if model := strings.TrimSpace(c.GetString("claude_alert_model")); model != "" {
+			fields["model"] = model
+		}
+		if provider := strings.TrimSpace(c.GetString("claude_alert_provider")); provider != "" {
+			fields["provider"] = provider
+		}
+	}
+	if mode != "" {
+		fields["mode"] = mode
+	}
+	if stage != "" {
+		fields["stage"] = stage
+	}
+	if msg != nil && msg.Error != nil {
+		if upstreamErr := strings.TrimSpace(msg.Error.Error()); upstreamErr != "" {
+			fields["upstream_error"] = upstreamErr
+		}
+	}
+	if diagnosis := claudeClientErrorDiagnosis(mode, stage, msg); diagnosis != "" {
+		fields["diagnosis"] = diagnosis
+	}
+	return fields
+}
+
+func claudeClientErrorDiagnosis(mode, stage string, msg *interfaces.ErrorMessage) string {
+	mode = strings.TrimSpace(mode)
+	stage = strings.TrimSpace(stage)
+	errText := ""
+	if msg != nil && msg.Error != nil {
+		errText = strings.ToLower(strings.TrimSpace(msg.Error.Error()))
+	}
+	switch {
+	case stage == "upstream_empty_response" || strings.Contains(errText, "empty upstream response"):
+		return "Upstream execution completed but returned an empty non-streaming response body."
+	case stage == "upstream_stream_closed_before_first_payload" || strings.Contains(errText, "stream closed before first payload"):
+		return "Upstream stream closed before the first payload was received."
+	case mode == "count_tokens":
+		return "Claude count_tokens upstream request failed before a usable response was returned."
+	case mode == "stream":
+		return "Claude streaming upstream request failed; inspect upstream_error, provider, model, and Request ID."
+	case mode == "non_stream":
+		return "Claude non-streaming upstream request failed; inspect upstream_error, provider, model, and Request ID."
+	}
+	return "Raw upstream error was suppressed for the Claude client; inspect upstream_error and Request ID."
 }
 
 func shouldSuppressClientError(c *gin.Context, msg *interfaces.ErrorMessage) bool {

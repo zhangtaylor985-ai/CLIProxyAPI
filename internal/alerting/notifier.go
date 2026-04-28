@@ -546,6 +546,15 @@ func formatErrorEntry(entry *log.Entry, normalizedMessage string, suppressed int
 	if apiKey := firstLogFieldString(entry, "client_api_key", "api_key"); apiKey != "" {
 		builder.WriteString("API Key: " + trimForTelegram(apiKey, 120) + "\n")
 	}
+	writeLogFieldLine(&builder, "Diagnosis", entry, "diagnosis", 300)
+	writeLogFieldLine(&builder, "Component", entry, "component", 120)
+	writeLogFieldLine(&builder, "Format", entry, "handler_format", 80)
+	writeLogFieldLine(&builder, "Mode", entry, "mode", 80)
+	writeLogFieldLine(&builder, "Stage", entry, "stage", 120)
+	writeLogFieldLine(&builder, "Provider", entry, "provider", 80)
+	writeLogFieldLine(&builder, "Model", entry, "model", "requested_model", 160)
+	writeLogFieldLine(&builder, "HTTP Status", entry, "status_code", 40)
+	writeLogFieldLine(&builder, "Upstream error", entry, "upstream_error", "error", "api_error", 600)
 	if normalizedMessage != "" {
 		builder.WriteString("Message: " + trimForTelegram(normalizedMessage, 600) + "\n")
 	}
@@ -553,6 +562,25 @@ func formatErrorEntry(entry *log.Entry, normalizedMessage string, suppressed int
 		builder.WriteString(fmt.Sprintf("Suppressed similar alerts: %d\n", suppressed))
 	}
 	return strings.TrimRight(builder.String(), "\n")
+}
+
+func writeLogFieldLine(builder *strings.Builder, label string, entry *log.Entry, args ...any) {
+	if builder == nil || len(args) == 0 {
+		return
+	}
+	limit := 240
+	keys := make([]string, 0, len(args))
+	for _, arg := range args {
+		switch value := arg.(type) {
+		case string:
+			keys = append(keys, value)
+		case int:
+			limit = value
+		}
+	}
+	if value := firstLogFieldString(entry, keys...); value != "" {
+		builder.WriteString(label + ": " + trimForTelegram(value, limit) + "\n")
+	}
 }
 
 func firstLogFieldString(entry *log.Entry, keys ...string) string {

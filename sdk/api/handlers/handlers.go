@@ -531,6 +531,28 @@ func clientAPIKeyFromContext(ctx context.Context) string {
 	return strings.TrimSpace(ginCtx.GetString("apiKey"))
 }
 
+func setClaudeAlertExecutionContext(ctx context.Context, providers []string, model string) {
+	if ctx == nil {
+		return
+	}
+	ginCtx, ok := ctx.Value("gin").(*gin.Context)
+	if !ok || ginCtx == nil {
+		return
+	}
+	cleanProviders := make([]string, 0, len(providers))
+	for _, provider := range providers {
+		if trimmed := strings.TrimSpace(provider); trimmed != "" {
+			cleanProviders = append(cleanProviders, trimmed)
+		}
+	}
+	if len(cleanProviders) > 0 {
+		ginCtx.Set("claude_alert_provider", strings.Join(cleanProviders, ","))
+	}
+	if trimmed := strings.TrimSpace(model); trimmed != "" {
+		ginCtx.Set("claude_alert_model", trimmed)
+	}
+}
+
 func requestPathFromContext(ctx context.Context) string {
 	if ctx == nil {
 		return ""
@@ -1665,6 +1687,7 @@ func (h *BaseAPIHandler) ExecuteWithAuthManager(ctx context.Context, handlerType
 	if originalRequestedModel == "" {
 		originalRequestedModel = normalizedModel
 	}
+	setClaudeAlertExecutionContext(ctx, providers, normalizedModel)
 	if errMsg != nil {
 		if probeRoutingBypass {
 			return nil, nil, errMsg
@@ -1785,6 +1808,7 @@ func (h *BaseAPIHandler) ExecuteWithAuthManager(ctx context.Context, handlerType
 				failoverOpts.OriginalRequest = failoverPayload
 				failoverOpts.Metadata = failoverReqMeta
 
+				setClaudeAlertExecutionContext(ctx, failoverProviders, failoverModel)
 				clientKey := util.HideAPIKey(clientAPIKeyFromContext(ctx))
 				log.WithFields(log.Fields{
 					"component":       "failover",
@@ -1866,6 +1890,7 @@ func (h *BaseAPIHandler) ExecuteCountWithAuthManager(ctx context.Context, handle
 	if originalRequestedModel == "" {
 		originalRequestedModel = normalizedModel
 	}
+	setClaudeAlertExecutionContext(ctx, providers, normalizedModel)
 	if errMsg != nil {
 		if probeRoutingBypass {
 			return nil, nil, errMsg
@@ -1985,7 +2010,7 @@ func (h *BaseAPIHandler) ExecuteCountWithAuthManager(ctx context.Context, handle
 				failoverOpts := opts
 				failoverOpts.OriginalRequest = failoverPayload
 				failoverOpts.Metadata = failoverReqMeta
-
+				setClaudeAlertExecutionContext(ctx, failoverProviders, failoverModel)
 				markFailoverProvider(ctx, failoverProviders[0])
 				failoverOut, failoverHeaders, failoverErr := execOnce(failoverProviders, failoverReq, failoverOpts)
 				if failoverErr == nil {
@@ -2055,6 +2080,7 @@ func (h *BaseAPIHandler) ExecuteStreamWithAuthManager(ctx context.Context, handl
 	if originalRequestedModel == "" {
 		originalRequestedModel = normalizedModel
 	}
+	setClaudeAlertExecutionContext(ctx, providers, normalizedModel)
 	if errMsg != nil {
 		if probeRoutingBypass {
 			errChan := make(chan *interfaces.ErrorMessage, 1)
@@ -2085,6 +2111,7 @@ func (h *BaseAPIHandler) ExecuteStreamWithAuthManager(ctx context.Context, handl
 					rawJSON = failoverPayload
 					providers = failoverProviders
 					normalizedModel = failoverModel
+					setClaudeAlertExecutionContext(ctx, providers, normalizedModel)
 					markFailoverProvider(ctx, failoverProviders[0])
 					setEffectiveModelHeader(ctx, originalRequestedModel, normalizedModel)
 				} else {
@@ -2181,6 +2208,7 @@ func (h *BaseAPIHandler) ExecuteStreamWithAuthManager(ctx context.Context, handl
 				failoverOpts.OriginalRequest = failoverPayload
 				failoverOpts.Metadata = failoverReqMeta
 
+				setClaudeAlertExecutionContext(ctx, failoverProviders, failoverModel)
 				clientKey := util.HideAPIKey(clientAPIKeyFromContext(ctx))
 				log.WithFields(log.Fields{
 					"component":       "failover",

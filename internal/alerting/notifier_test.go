@@ -140,6 +140,15 @@ func TestFormatErrorEntryIncludesAPIKey(t *testing.T) {
 	entry.Message = "suppressing raw upstream error for Claude client"
 	entry.Data["request_id"] = "req-alert-1"
 	entry.Data["client_api_key"] = "sk-user-alert-test-123456"
+	entry.Data["diagnosis"] = "Upstream execution completed but returned an empty non-streaming response body."
+	entry.Data["component"] = "claude_error_sanitize"
+	entry.Data["handler_format"] = "claude"
+	entry.Data["mode"] = "non_stream"
+	entry.Data["stage"] = "upstream_empty_response"
+	entry.Data["provider"] = "codex"
+	entry.Data["model"] = "claude-empty-response-test"
+	entry.Data["status_code"] = 502
+	entry.Data["upstream_error"] = "empty upstream response"
 
 	text := formatErrorEntry(entry, normalizeLogMessage(entry), 7)
 
@@ -147,6 +156,15 @@ func TestFormatErrorEntryIncludesAPIKey(t *testing.T) {
 		"Error log alert",
 		"Request ID: req-alert-1",
 		"API Key: sk-user-alert-test-123456",
+		"Diagnosis: Upstream execution completed but returned an empty non-streaming response body.",
+		"Component: claude_error_sanitize",
+		"Format: claude",
+		"Mode: non_stream",
+		"Stage: upstream_empty_response",
+		"Provider: codex",
+		"Model: claude-empty-response-test",
+		"HTTP Status: 502",
+		"Upstream error: empty upstream response",
 		"Message: suppressing raw upstream error for Claude client",
 		"Suppressed similar alerts: 7",
 	}

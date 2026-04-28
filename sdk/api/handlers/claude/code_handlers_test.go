@@ -175,6 +175,8 @@ func TestSanitizeClientErrorLogsRequestIDAndAPIKey(t *testing.T) {
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
 	internallogging.SetGinRequestID(c, "req-alert-1")
 	c.Set("apiKey", "sk-user-alert-test-123456")
+	setClaudeAlertContext(c, "non_stream", "claude-empty-response-test", "upstream_empty_response")
+	c.Set("claude_alert_provider", "codex")
 
 	logger := log.StandardLogger()
 	previousHooks := logger.Hooks
@@ -200,6 +202,24 @@ func TestSanitizeClientErrorLogsRequestIDAndAPIKey(t *testing.T) {
 		}
 		if got := entry.Data["client_api_key"]; got != "sk-user-alert-test-123456" {
 			t.Fatalf("client_api_key field = %#v, want sk-user-alert-test-123456", got)
+		}
+		if got := entry.Data["model"]; got != "claude-empty-response-test" {
+			t.Fatalf("model field = %#v, want claude-empty-response-test", got)
+		}
+		if got := entry.Data["mode"]; got != "non_stream" {
+			t.Fatalf("mode field = %#v, want non_stream", got)
+		}
+		if got := entry.Data["stage"]; got != "upstream_empty_response" {
+			t.Fatalf("stage field = %#v, want upstream_empty_response", got)
+		}
+		if got := entry.Data["provider"]; got != "codex" {
+			t.Fatalf("provider field = %#v, want codex", got)
+		}
+		if got := entry.Data["upstream_error"]; got != "empty upstream response" {
+			t.Fatalf("upstream_error field = %#v, want empty upstream response", got)
+		}
+		if got := entry.Data["diagnosis"]; got != "Upstream execution completed but returned an empty non-streaming response body." {
+			t.Fatalf("diagnosis field = %#v", got)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("expected sanitize log entry")
