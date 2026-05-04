@@ -1,6 +1,7 @@
 package claude
 
 import (
+	"encoding/base64"
 	"testing"
 
 	"github.com/tidwall/gjson"
@@ -292,6 +293,33 @@ func TestConvertClaudeRequestToCodex_MapsDocumentBlocksToInputFile(t *testing.T)
 	}
 }
 
+func TestConvertClaudeRequestToCodex_EncodesTextDocumentBlocksToInputFile(t *testing.T) {
+	input := `{
+		"model": "claude-opus-4-6",
+		"messages": [{
+			"role": "user",
+			"content": [
+				{"type": "text", "text": "please read this markdown"},
+				{"type": "document", "title": "notes.md", "source": {"type": "text", "media_type": "text/plain", "data": "# Title\nhello"}}
+			]
+		}]
+	}`
+
+	result := ConvertClaudeRequestToCodex("gpt-5.4", []byte(input), true)
+	message := gjson.GetBytes(result, "input.0")
+	wantData := "data:text/plain;base64," + base64.StdEncoding.EncodeToString([]byte("# Title\nhello"))
+
+	if got := message.Get("content.1.type").String(); got != "input_file" {
+		t.Fatalf("content.1.type = %q, want %q; output=%s", got, "input_file", string(result))
+	}
+	if got := message.Get("content.1.file_data").String(); got != wantData {
+		t.Fatalf("content.1.file_data = %q, want %q; output=%s", got, wantData, string(result))
+	}
+	if got := message.Get("content.1.filename").String(); got != "notes.md" {
+		t.Fatalf("content.1.filename = %q, want notes.md; output=%s", got, string(result))
+	}
+}
+
 func TestConvertClaudeRequestToCodex_MapsToolResultDocumentBlocksToInputFile(t *testing.T) {
 	input := `{
 		"model": "claude-opus-4-6",
@@ -322,6 +350,37 @@ func TestConvertClaudeRequestToCodex_MapsToolResultDocumentBlocksToInputFile(t *
 	}
 	if got := output.Get("output.1.filename").String(); got != "artifact.pdf" {
 		t.Fatalf("output.1.filename = %q, want artifact.pdf; output=%s", got, string(result))
+	}
+}
+
+func TestConvertClaudeRequestToCodex_EncodesToolResultTextDocumentBlocksToInputFile(t *testing.T) {
+	input := `{
+		"model": "claude-opus-4-6",
+		"messages": [{
+			"role": "user",
+			"content": [{
+				"type": "tool_result",
+				"tool_use_id": "toolu_123",
+				"content": [
+					{"type": "text", "text": "generated"},
+					{"type": "document", "title": "artifact.md", "source": {"type": "text", "media_type": "text/markdown", "data": "# Done\ncontent"}}
+				]
+			}]
+		}]
+	}`
+
+	result := ConvertClaudeRequestToCodex("gpt-5.4", []byte(input), true)
+	output := gjson.GetBytes(result, "input.0")
+	wantData := "data:text/markdown;base64," + base64.StdEncoding.EncodeToString([]byte("# Done\ncontent"))
+
+	if got := output.Get("output.1.type").String(); got != "input_file" {
+		t.Fatalf("output.1.type = %q, want %q; output=%s", got, "input_file", string(result))
+	}
+	if got := output.Get("output.1.file_data").String(); got != wantData {
+		t.Fatalf("output.1.file_data = %q, want %q; output=%s", got, wantData, string(result))
+	}
+	if got := output.Get("output.1.filename").String(); got != "artifact.md" {
+		t.Fatalf("output.1.filename = %q, want artifact.md; output=%s", got, string(result))
 	}
 }
 

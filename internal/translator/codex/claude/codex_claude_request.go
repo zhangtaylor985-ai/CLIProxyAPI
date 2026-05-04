@@ -6,6 +6,7 @@
 package claude
 
 import (
+	"encoding/base64"
 	"fmt"
 	"strconv"
 	"strings"
@@ -156,12 +157,12 @@ func ConvertClaudeRequestToCodex(modelName string, inputRawJSON []byte, _ bool) 
 						appendTextContent(messageContentResult.Get("text").String())
 					case "image":
 						sourceResult := messageContentResult.Get("source")
-						if dataURL := claudeBase64DataURL(sourceResult); dataURL != "" {
+						if dataURL := claudeSourceDataURL(sourceResult); dataURL != "" {
 							appendImageContent(dataURL)
 						}
 					case "document":
 						sourceResult := messageContentResult.Get("source")
-						appendFileContent(claudeBase64DataURL(sourceResult), claudeDocumentFilename(messageContentResult))
+						appendFileContent(claudeSourceDataURL(sourceResult), claudeDocumentFilename(messageContentResult))
 					case "tool_use":
 						flushMessage()
 						functionCallMessage := []byte(`{"type":"function_call"}`)
@@ -192,14 +193,14 @@ func ConvertClaudeRequestToCodex(modelName string, inputRawJSON []byte, _ bool) 
 								toolResultContentType := contentResults[k].Get("type").String()
 								if toolResultContentType == "image" {
 									sourceResult := contentResults[k].Get("source")
-									if dataURL := claudeBase64DataURL(sourceResult); dataURL != "" {
+									if dataURL := claudeSourceDataURL(sourceResult); dataURL != "" {
 										toolResultContent, _ = sjson.SetBytes(toolResultContent, fmt.Sprintf("%d.type", toolResultContentIndex), "input_image")
 										toolResultContent, _ = sjson.SetBytes(toolResultContent, fmt.Sprintf("%d.image_url", toolResultContentIndex), dataURL)
 										toolResultContentIndex++
 									}
 								} else if toolResultContentType == "document" {
 									sourceResult := contentResults[k].Get("source")
-									if dataURL := claudeBase64DataURL(sourceResult); dataURL != "" {
+									if dataURL := claudeSourceDataURL(sourceResult); dataURL != "" {
 										toolResultContent, _ = sjson.SetBytes(toolResultContent, fmt.Sprintf("%d.type", toolResultContentIndex), "input_file")
 										toolResultContent, _ = sjson.SetBytes(toolResultContent, fmt.Sprintf("%d.file_data", toolResultContentIndex), dataURL)
 										if filename := claudeDocumentFilename(contentResults[k]); filename != "" {
@@ -330,7 +331,7 @@ func ConvertClaudeRequestToCodex(modelName string, inputRawJSON []byte, _ bool) 
 	return template
 }
 
-func claudeBase64DataURL(sourceResult gjson.Result) string {
+func claudeSourceDataURL(sourceResult gjson.Result) string {
 	if !sourceResult.Exists() {
 		return ""
 	}
@@ -347,6 +348,9 @@ func claudeBase64DataURL(sourceResult gjson.Result) string {
 	}
 	if mediaType == "" {
 		mediaType = "application/octet-stream"
+	}
+	if strings.EqualFold(strings.TrimSpace(sourceResult.Get("type").String()), "text") {
+		data = base64.StdEncoding.EncodeToString([]byte(data))
 	}
 	return fmt.Sprintf("data:%s;base64,%s", mediaType, data)
 }
