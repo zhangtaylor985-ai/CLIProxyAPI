@@ -191,7 +191,7 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 		return resp, err
 	}
 
-	body, wsHeaders := applyCodexPromptCacheHeaders(from, req, body)
+	body, wsHeaders := applyCodexPromptCacheHeaders(auth, from, req, body)
 	wsHeaders = applyCodexWebsocketHeaders(ctx, wsHeaders, auth, apiKey, e.cfg)
 
 	var authID, authLabel, authType, authValue string
@@ -204,7 +204,7 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 	executionSessionID := executionSessionIDFromOptions(opts)
 	var sess *codexWebsocketSession
 	if executionSessionID != "" {
-		sess = e.getOrCreateSession(executionSessionID)
+		sess = e.getOrCreateSession(executionSessionID, auth, wsURL)
 		sess.reqMu.Lock()
 		defer sess.reqMu.Unlock()
 	}
@@ -387,7 +387,7 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 		return nil, err
 	}
 
-	body, wsHeaders := applyCodexPromptCacheHeaders(from, req, body)
+	body, wsHeaders := applyCodexPromptCacheHeaders(auth, from, req, body)
 	wsHeaders = applyCodexWebsocketHeaders(ctx, wsHeaders, auth, apiKey, e.cfg)
 
 	var authID, authLabel, authType, authValue string
@@ -398,7 +398,7 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 	executionSessionID := executionSessionIDFromOptions(opts)
 	var sess *codexWebsocketSession
 	if executionSessionID != "" {
-		sess = e.getOrCreateSession(executionSessionID)
+		sess = e.getOrCreateSession(executionSessionID, auth, wsURL)
 		if sess != nil {
 			sess.reqMu.Lock()
 		}
@@ -766,7 +766,7 @@ func buildCodexResponsesWebsocketURL(httpURL string) (string, error) {
 	return parsed.String(), nil
 }
 
-func applyCodexPromptCacheHeaders(from sdktranslator.Format, req cliproxyexecutor.Request, rawJSON []byte) ([]byte, http.Header) {
+func applyCodexPromptCacheHeaders(auth *cliproxyauth.Auth, from sdktranslator.Format, req cliproxyexecutor.Request, rawJSON []byte) ([]byte, http.Header) {
 	headers := http.Header{}
 	if len(rawJSON) == 0 {
 		return rawJSON, headers
@@ -776,7 +776,7 @@ func applyCodexPromptCacheHeaders(from sdktranslator.Format, req cliproxyexecuto
 	if from == "claude" {
 		userIDResult := gjson.GetBytes(req.Payload, "metadata.user_id")
 		if userIDResult.Exists() {
-			key := fmt.Sprintf("%s-%s", req.Model, userIDResult.String())
+			key := codexScopedCacheKey(auth, "claude", req.Model, userIDResult.String())
 			if cached, ok := getCodexCache(key); ok {
 				cache = cached
 			} else {
@@ -1054,9 +1054,25 @@ func executionSessionIDFromOptions(opts cliproxyexecutor.Options) string {
 	}
 }
 
-func (e *CodexWebsocketsExecutor) getOrCreateSession(sessionID string) *codexWebsocketSession {
+func codexWebsocketSessionMapKey(sessionID string, auth *cliproxyauth.Auth, wsURL string) string {
 	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" {
+		return ""
+	}
+	scoped := codexScopedCacheKey(auth, "websocket", wsURL)
+	if scoped == "" {
+		return sessionID
+	}
+	return sessionID + "\x00" + scoped
+}
+
+func (e *CodexWebsocketsExecutor) getOrCreateSession(sessionID string, auth *cliproxyauth.Auth, wsURL string) *codexWebsocketSession {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return nil
+	}
+	mapKey := codexWebsocketSessionMapKey(sessionID, auth, wsURL)
+	if mapKey == "" {
 		return nil
 	}
 	e.sessMu.Lock()
@@ -1064,11 +1080,11 @@ func (e *CodexWebsocketsExecutor) getOrCreateSession(sessionID string) *codexWeb
 	if e.sessions == nil {
 		e.sessions = make(map[string]*codexWebsocketSession)
 	}
-	if sess, ok := e.sessions[sessionID]; ok && sess != nil {
+	if sess, ok := e.sessions[mapKey]; ok && sess != nil {
 		return sess
 	}
 	sess := &codexWebsocketSession{sessionID: sessionID}
-	e.sessions[sessionID] = sess
+	e.sessions[mapKey] = sess
 	return sess
 }
 
@@ -1218,12 +1234,20 @@ func (e *CodexWebsocketsExecutor) CloseExecutionSession(sessionID string) {
 		return
 	}
 
+	var sessions []*codexWebsocketSession
 	e.sessMu.Lock()
-	sess := e.sessions[sessionID]
-	delete(e.sessions, sessionID)
+	for key, sess := range e.sessions {
+		if sess == nil || strings.TrimSpace(sess.sessionID) != sessionID {
+			continue
+		}
+		sessions = append(sessions, sess)
+		delete(e.sessions, key)
+	}
 	e.sessMu.Unlock()
 
-	e.closeExecutionSession(sess, "session_closed")
+	for _, sess := range sessions {
+		e.closeExecutionSession(sess, "session_closed")
+	}
 }
 
 func (e *CodexWebsocketsExecutor) closeAllExecutionSessions(reason string) {

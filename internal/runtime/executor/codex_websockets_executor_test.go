@@ -227,3 +227,31 @@ func TestNewProxyAwareWebsocketDialerDirectDisablesProxy(t *testing.T) {
 		t.Fatal("expected websocket proxy function to be nil for direct mode")
 	}
 }
+
+func TestCodexWebsocketSessionIsScopedByAuth(t *testing.T) {
+	executor := NewCodexWebsocketsExecutor(nil)
+	authA := &cliproxyauth.Auth{ID: "codex-a", Provider: "codex", ProxyURL: "http://127.0.0.1:18081"}
+	authB := &cliproxyauth.Auth{ID: "codex-b", Provider: "codex", ProxyURL: "http://127.0.0.1:18082"}
+
+	sessA1 := executor.getOrCreateSession("shared-session", authA, "wss://chatgpt.com/backend-api/codex/responses")
+	sessA2 := executor.getOrCreateSession("shared-session", authA, "wss://chatgpt.com/backend-api/codex/responses")
+	sessB := executor.getOrCreateSession("shared-session", authB, "wss://chatgpt.com/backend-api/codex/responses")
+
+	if sessA1 == nil || sessA2 == nil || sessB == nil {
+		t.Fatal("expected non-nil sessions")
+	}
+	if sessA1 != sessA2 {
+		t.Fatal("same auth should reuse the scoped websocket session")
+	}
+	if sessA1 == sessB {
+		t.Fatal("different auths must not share the same websocket session")
+	}
+	if len(executor.sessions) != 2 {
+		t.Fatalf("session map size = %d, want 2", len(executor.sessions))
+	}
+
+	executor.CloseExecutionSession("shared-session")
+	if len(executor.sessions) != 0 {
+		t.Fatalf("CloseExecutionSession left %d scoped sessions, want 0", len(executor.sessions))
+	}
+}

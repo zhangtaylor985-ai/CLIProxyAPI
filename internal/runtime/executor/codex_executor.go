@@ -184,7 +184,7 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 	body = e.applyConfiguredCodexServiceTier(body, auth)
 
 	url := strings.TrimSuffix(baseURL, "/") + "/responses"
-	httpReq, err := e.cacheHelper(ctx, from, url, req, body)
+	httpReq, err := e.cacheHelper(ctx, auth, from, url, req, body)
 	if err != nil {
 		return resp, err
 	}
@@ -308,7 +308,7 @@ func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.A
 	body = e.applyConfiguredCodexServiceTier(body, auth)
 
 	url := strings.TrimSuffix(baseURL, "/") + "/responses/compact"
-	httpReq, err := e.cacheHelper(ctx, from, url, req, body)
+	httpReq, err := e.cacheHelper(ctx, auth, from, url, req, body)
 	if err != nil {
 		return resp, err
 	}
@@ -404,7 +404,7 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 	body = e.applyConfiguredCodexServiceTier(body, auth)
 
 	url := strings.TrimSuffix(baseURL, "/") + "/responses"
-	httpReq, err := e.cacheHelper(ctx, from, url, req, body)
+	httpReq, err := e.cacheHelper(ctx, auth, from, url, req, body)
 	if err != nil {
 		return nil, err
 	}
@@ -848,12 +848,12 @@ func (e *CodexExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth) (*
 	return auth, nil
 }
 
-func (e *CodexExecutor) cacheHelper(ctx context.Context, from sdktranslator.Format, url string, req cliproxyexecutor.Request, rawJSON []byte) (*http.Request, error) {
+func (e *CodexExecutor) cacheHelper(ctx context.Context, auth *cliproxyauth.Auth, from sdktranslator.Format, url string, req cliproxyexecutor.Request, rawJSON []byte) (*http.Request, error) {
 	var cache codexCache
 	if from == "claude" {
 		userIDResult := gjson.GetBytes(req.Payload, "metadata.user_id")
 		if userIDResult.Exists() {
-			key := fmt.Sprintf("%s-%s", req.Model, userIDResult.String())
+			key := codexScopedCacheKey(auth, "claude", req.Model, userIDResult.String())
 			var ok bool
 			if cache, ok = getCodexCache(key); !ok {
 				cache = codexCache{
@@ -870,7 +870,11 @@ func (e *CodexExecutor) cacheHelper(ctx context.Context, from sdktranslator.Form
 		}
 	} else if from == "openai" {
 		if apiKey := strings.TrimSpace(apiKeyFromContext(ctx)); apiKey != "" {
-			cache.ID = uuid.NewSHA1(uuid.NameSpaceOID, []byte("cli-proxy-api:codex:prompt-cache:"+apiKey)).String()
+			cacheScope := apiKey
+			if codexAuthIsolationKey(auth) != "" {
+				cacheScope = codexScopedCacheKey(auth, "openai", apiKey)
+			}
+			cache.ID = uuid.NewSHA1(uuid.NameSpaceOID, []byte("cli-proxy-api:codex:prompt-cache:"+cacheScope)).String()
 		}
 	}
 

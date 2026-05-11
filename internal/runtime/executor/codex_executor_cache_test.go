@@ -3,11 +3,13 @@ package executor
 import (
 	"context"
 	"io"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v6/sdk/translator"
 	"github.com/tidwall/gjson"
@@ -27,7 +29,7 @@ func TestCodexExecutorCacheHelper_OpenAIChatCompletions_StablePromptCacheKeyFrom
 	}
 	url := "https://example.com/responses"
 
-	httpReq, err := executor.cacheHelper(ctx, sdktranslator.FromString("openai"), url, req, rawJSON)
+	httpReq, err := executor.cacheHelper(ctx, nil, sdktranslator.FromString("openai"), url, req, rawJSON)
 	if err != nil {
 		t.Fatalf("cacheHelper error: %v", err)
 	}
@@ -49,7 +51,7 @@ func TestCodexExecutorCacheHelper_OpenAIChatCompletions_StablePromptCacheKeyFrom
 		t.Fatalf("Session_id = %q, want %q", gotSession, expectedKey)
 	}
 
-	httpReq2, err := executor.cacheHelper(ctx, sdktranslator.FromString("openai"), url, req, rawJSON)
+	httpReq2, err := executor.cacheHelper(ctx, nil, sdktranslator.FromString("openai"), url, req, rawJSON)
 	if err != nil {
 		t.Fatalf("cacheHelper error (second call): %v", err)
 	}
@@ -61,4 +63,51 @@ func TestCodexExecutorCacheHelper_OpenAIChatCompletions_StablePromptCacheKeyFrom
 	if gotKey2 != expectedKey {
 		t.Fatalf("prompt_cache_key (second call) = %q, want %q", gotKey2, expectedKey)
 	}
+}
+
+func TestCodexExecutorCacheHelper_ClaudePromptCacheKeyIsScopedByAuth(t *testing.T) {
+	executor := &CodexExecutor{}
+	rawJSON := []byte(`{"model":"gpt-5-codex","stream":true}`)
+	req := cliproxyexecutor.Request{
+		Model:   "gpt-5-codex",
+		Payload: []byte(`{"metadata":{"user_id":"shared-user-for-auth-scope-test"}}`),
+	}
+	url := "https://example.com/responses"
+	authA := &cliproxyauth.Auth{ID: "codex-a", Provider: "codex", ProxyURL: "http://127.0.0.1:18081"}
+	authB := &cliproxyauth.Auth{ID: "codex-b", Provider: "codex", ProxyURL: "http://127.0.0.1:18082"}
+
+	reqA1, err := executor.cacheHelper(context.Background(), authA, sdktranslator.FromString("claude"), url, req, rawJSON)
+	if err != nil {
+		t.Fatalf("cacheHelper auth A first call error: %v", err)
+	}
+	reqA2, err := executor.cacheHelper(context.Background(), authA, sdktranslator.FromString("claude"), url, req, rawJSON)
+	if err != nil {
+		t.Fatalf("cacheHelper auth A second call error: %v", err)
+	}
+	reqB, err := executor.cacheHelper(context.Background(), authB, sdktranslator.FromString("claude"), url, req, rawJSON)
+	if err != nil {
+		t.Fatalf("cacheHelper auth B error: %v", err)
+	}
+
+	keyA1 := promptCacheKeyFromRequest(t, reqA1)
+	keyA2 := promptCacheKeyFromRequest(t, reqA2)
+	keyB := promptCacheKeyFromRequest(t, reqB)
+	if keyA1 == "" || keyB == "" {
+		t.Fatalf("expected non-empty cache keys, got authA=%q authB=%q", keyA1, keyB)
+	}
+	if keyA1 != keyA2 {
+		t.Fatalf("same auth cache key changed: first=%q second=%q", keyA1, keyA2)
+	}
+	if keyA1 == keyB {
+		t.Fatalf("different auths shared prompt_cache_key %q", keyA1)
+	}
+}
+
+func promptCacheKeyFromRequest(t *testing.T, req *http.Request) string {
+	t.Helper()
+	body, err := io.ReadAll(req.Body)
+	if err != nil {
+		t.Fatalf("read request body: %v", err)
+	}
+	return gjson.GetBytes(body, "prompt_cache_key").String()
 }
