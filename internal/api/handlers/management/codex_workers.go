@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 )
 
 const (
@@ -70,6 +71,10 @@ type codexWorkerView struct {
 	Error           string                    `json:"error,omitempty"`
 	AuthFiles       []codexWorkerAuthFileView `json:"auth_files,omitempty"`
 	Quota           *codexWorkerQuotaView     `json:"quota,omitempty"`
+	RouteConfigured bool                      `json:"route_configured"`
+	RouteEnabled    bool                      `json:"route_enabled"`
+	RouteProvider   string                    `json:"route_provider,omitempty"`
+	RouteIndex      int                       `json:"route_index,omitempty"`
 }
 
 type codexWorkerActionRequest struct {
@@ -78,6 +83,10 @@ type codexWorkerActionRequest struct {
 
 type codexWorkerProxyRequest struct {
 	ProxyURL string `json:"proxy_url"`
+}
+
+type codexWorkerRoutingRequest struct {
+	Enabled *bool `json:"enabled"`
 }
 
 type codexWorkerSaveAuthRequest struct {
@@ -211,6 +220,39 @@ func (h *Handler) UpdateCodexWorkerProxy(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
+func (h *Handler) UpdateCodexWorkerRouting(c *gin.Context) {
+	worker, ok := h.findCodexWorkerConfig(c)
+	if !ok {
+		return
+	}
+	var req codexWorkerRoutingRequest
+	if err := c.ShouldBindJSON(&req); err != nil || req.Enabled == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "enabled is required"})
+		return
+	}
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.cfg == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "config is unavailable"})
+		return
+	}
+	idx, _ := findCodexWorkerRouteProviderIndex(h.cfg.OpenAICompatibility, worker)
+	if idx < 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "worker provider route not found"})
+		return
+	}
+	entry := h.cfg.OpenAICompatibility[idx]
+	if *req.Enabled {
+		entry.ExcludedModels = withoutDisableAllModelsRule(entry.ExcludedModels)
+	} else {
+		entry.ExcludedModels = withDisableAllModelsRule(entry.ExcludedModels)
+	}
+	h.cfg.OpenAICompatibility[idx] = entry
+	h.cfg.SanitizeOpenAICompatibility()
+	h.persistLocked(c)
+}
+
 func (h *Handler) ControlCodexWorkerContainer(c *gin.Context) {
 	worker, ok := h.findCodexWorkerConfig(c)
 	if !ok {
@@ -247,6 +289,11 @@ func (h *Handler) buildCodexWorkerView(ctx context.Context, worker codexWorkerMa
 	if view.Name == "" {
 		view.Name = view.ID
 	}
+	routeView := h.codexWorkerRouteView(worker)
+	view.RouteConfigured = routeView.configured
+	view.RouteEnabled = routeView.enabled
+	view.RouteProvider = routeView.provider
+	view.RouteIndex = routeView.index
 	if status, err := h.codexWorkerContainerStatus(ctx, worker); err == nil {
 		view.ContainerStatus = status
 	} else if view.SSHConfigured {
@@ -273,6 +320,34 @@ func (h *Handler) buildCodexWorkerView(ctx context.Context, worker codexWorkerMa
 		view.Health = "degraded"
 	}
 	return view
+}
+
+type codexWorkerRouteView struct {
+	configured bool
+	enabled    bool
+	provider   string
+	index      int
+}
+
+func (h *Handler) codexWorkerRouteView(worker codexWorkerManagementConfig) codexWorkerRouteView {
+	if h == nil {
+		return codexWorkerRouteView{index: -1}
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.cfg == nil {
+		return codexWorkerRouteView{index: -1}
+	}
+	idx, provider := findCodexWorkerRouteProviderIndex(h.cfg.OpenAICompatibility, worker)
+	if idx < 0 {
+		return codexWorkerRouteView{index: -1}
+	}
+	return codexWorkerRouteView{
+		configured: true,
+		enabled:    !hasDisableAllModelsRule(provider.ExcludedModels),
+		provider:   provider.Name,
+		index:      idx,
+	}
 }
 
 func (h *Handler) codexWorkerAuthFiles(ctx context.Context, worker codexWorkerManagementConfig) ([]codexWorkerAuthFileView, error) {
@@ -431,6 +506,53 @@ func (h *Handler) codexWorkerRequest(ctx context.Context, worker codexWorkerMana
 		},
 	}
 	return client.Do(req)
+}
+
+func findCodexWorkerRouteProviderIndex(entries []config.OpenAICompatibility, worker codexWorkerManagementConfig) (int, config.OpenAICompatibility) {
+	workerID := strings.ToLower(strings.TrimSpace(worker.ID))
+	workerName := strings.ToLower(strings.TrimSpace(worker.Name))
+	workerBaseURL := sanitizeWorkerBaseURL(worker.BaseURL)
+	for i := range entries {
+		entry := entries[i]
+		providerName := strings.ToLower(strings.TrimSpace(entry.Name))
+		baseURL := sanitizeWorkerBaseURL(entry.BaseURL)
+		if workerBaseURL != "" && baseURL == workerBaseURL {
+			return i, entry
+		}
+		if workerID != "" && providerName == workerID {
+			return i, entry
+		}
+		if workerName != "" && providerName == workerName {
+			return i, entry
+		}
+	}
+	return -1, config.OpenAICompatibility{}
+}
+
+func hasDisableAllModelsRule(models []string) bool {
+	for _, model := range models {
+		if strings.TrimSpace(model) == "*" {
+			return true
+		}
+	}
+	return false
+}
+
+func withoutDisableAllModelsRule(models []string) []string {
+	out := make([]string, 0, len(models))
+	for _, model := range models {
+		if strings.TrimSpace(model) == "*" {
+			continue
+		}
+		out = append(out, model)
+	}
+	return config.NormalizeExcludedModels(out)
+}
+
+func withDisableAllModelsRule(models []string) []string {
+	out := withoutDisableAllModelsRule(models)
+	out = append(out, "*")
+	return config.NormalizeExcludedModels(out)
 }
 
 func (h *Handler) findCodexWorkerConfig(c *gin.Context) (codexWorkerManagementConfig, bool) {

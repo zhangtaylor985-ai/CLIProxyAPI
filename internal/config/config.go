@@ -616,6 +616,9 @@ type OpenAICompatibility struct {
 	// Headers optionally adds extra HTTP headers for requests sent to this provider.
 	Headers map[string]string `yaml:"headers,omitempty" json:"headers,omitempty"`
 
+	// ExcludedModels lists model IDs that should be excluded for this provider.
+	ExcludedModels []string `yaml:"excluded-models,omitempty" json:"excluded-models,omitempty"`
+
 	// ProbeMode overrides the active health probe protocol for this provider.
 	// Supported values include: auto, claude_messages, openai_chat, openai_responses,
 	// codex_responses, gemini_generate_content.
@@ -978,6 +981,7 @@ func (cfg *Config) SanitizeOpenAICompatibility() {
 		e.Prefix = normalizeModelPrefix(e.Prefix)
 		e.BaseURL = strings.TrimSpace(e.BaseURL)
 		e.Headers = NormalizeHeaders(e.Headers)
+		e.ExcludedModels = NormalizeExcludedModels(e.ExcludedModels)
 		normalizeHealthCheckConfig(&e.ProbeMode, &e.ProbePath, e.CanaryEnabled, &e.CanaryPrompt, &e.CanaryIntervalSeconds)
 		if e.BaseURL == "" {
 			// Skip providers with no base-url; treated as removed

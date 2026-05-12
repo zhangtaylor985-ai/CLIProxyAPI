@@ -255,6 +255,7 @@ func (s *ConfigSynthesizer) synthesizeOpenAICompat(ctx *SynthesisContext) []*cor
 				CreatedAt:  now,
 				UpdatedAt:  now,
 			}
+			ApplyAuthExcludedModelsMeta(a, cfg, compat.ExcludedModels, "apikey")
 			out = append(out, a)
 			createdEntries++
 		}
@@ -286,6 +287,7 @@ func (s *ConfigSynthesizer) synthesizeOpenAICompat(ctx *SynthesisContext) []*cor
 				CreatedAt:  now,
 				UpdatedAt:  now,
 			}
+			ApplyAuthExcludedModelsMeta(a, cfg, compat.ExcludedModels, "apikey")
 			out = append(out, a)
 		}
 	}

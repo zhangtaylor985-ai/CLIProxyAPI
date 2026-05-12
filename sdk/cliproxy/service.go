@@ -1019,6 +1019,11 @@ func (s *Service) registerModelsForAuth(a *coreauth.Auth) {
 						if providerKey == "" {
 							providerKey = "openai-compatibility"
 						}
+						ms = applyExcludedModels(ms, compat.ExcludedModels)
+						if len(ms) == 0 {
+							GlobalModelRegistry().UnregisterClient(a.ID)
+							return
+						}
 						s.registerResolvedModelsForAuth(a, providerKey, applyModelPrefixes(ms, a.Prefix, s.cfg.ForceModelPrefix))
 					} else {
 						// Ensure stale registrations are cleared when model list becomes empty.

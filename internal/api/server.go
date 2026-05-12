@@ -920,6 +920,7 @@ func (s *Server) registerManagementRoutes() {
 		adminMgmt.GET("/codex-workers", s.mgmt.ListCodexWorkers)
 		adminMgmt.POST("/codex-workers/:id/container", s.mgmt.ControlCodexWorkerContainer)
 		adminMgmt.PUT("/codex-workers/:id/proxy", s.mgmt.UpdateCodexWorkerProxy)
+		adminMgmt.PUT("/codex-workers/:id/routing", s.mgmt.UpdateCodexWorkerRouting)
 		adminMgmt.GET("/codex-workers/:id/auth-file", s.mgmt.DownloadCodexWorkerAuthFile)
 		adminMgmt.PUT("/codex-workers/:id/auth-file", s.mgmt.SaveCodexWorkerAuthFile)
 
