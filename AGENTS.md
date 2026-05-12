@@ -44,6 +44,7 @@
 - 判断当前环境时，优先读取当前后端仓库 `.env` 的 `IS_PROD`：`IS_PROD=0` / `false` / 空值默认视为本地环境；只有 `IS_PROD=1` / `true` / `prod` / `production` 才按生产环境处理。
 - 当 `.env` 判定为本地环境时，只做本地上线前回归、构建、测试和本地 smoke；不要自动执行线上 SSH、systemd 重启、生产部署或生产配置改动。
 - 当 `.env` 判定为生产环境时，涉及重启/发布/确认运行状态，优先提示并使用这套 systemd 管理方式，不要假设是手工前台启动。
+- 生产代码发布必须走 GitHub 主线流程：本地完成修改、测试、commit、`git fetch origin main`、确认不落后、push 到 `origin/main` 后，再登录线上服务器 `git fetch && git pull --ff-only`，由线上目录重新构建并重启服务。即使用户要求“直接改线上”或线上故障需要快速恢复，也不得用 `scp`、`rsync`、远程编辑器或 heredoc 直接覆盖线上源码作为默认发布方式；除非用户明确批准一次性应急热修，否则必须拒绝直接覆盖并改走 GitHub 发布流程。若发生经批准的应急热修，必须立刻补齐同内容的 commit/push，再让线上仓库 fast-forward 到该提交，保证 git HEAD、源码和运行二进制一致。
 - 线上重启命令：
   - `sudo systemctl restart cliproxyapi && sleep 2 && systemctl status cliproxyapi --no-pager -l`
 - 查看 unit 原始配置：
