@@ -2,6 +2,7 @@
 
 - 我们项目的源后端：`/Users/taylor/code/tools/CLIProxyAPI-ori`
 - 我们项目的源前端：`/Users/taylor/code/tools/Cli-Proxy-API-Management-Center-ori`
+- 管理端 UI 工作只改源前端；不要把后端内置 `/management.html` 当成主程序管理前端。
 - 迁移来源后端：`/Users/taylor/code/tools/CLIProxyAPI`
 - 迁移来源前端：`/Users/taylor/code/tools/Cli-Proxy-API-Management-Center`
 - 凡是需要查询数据库，默认使用当前仓库 `.env` 中配置的数据库连接；除非任务明确指定其他连接，否则不要自行切换到别的库。
@@ -40,13 +41,35 @@
   - `WorkingDirectory=/root/cliapp/CLIProxyAPI`
   - `EnvironmentFile=/root/cliapp/CLIProxyAPI/.env`
   - `ExecStart=/root/cliapp/CLIProxyAPI/bin/cliproxyapi -config /root/cliapp/CLIProxyAPI/config.yaml`
-- 如果当前仓库 `.env` 中 `IS_PROD=true`，默认按线上环境处理；涉及重启/发布/确认运行状态时，优先提示并使用这套 systemd 管理方式，不要假设是手工前台启动。
+- 判断当前环境时，优先读取当前后端仓库 `.env` 的 `IS_PROD`：`IS_PROD=0` / `false` / 空值默认视为本地环境；只有 `IS_PROD=1` / `true` / `prod` / `production` 才按生产环境处理。
+- 当 `.env` 判定为本地环境时，只做本地上线前回归、构建、测试和本地 smoke；不要自动执行线上 SSH、systemd 重启、生产部署或生产配置改动。
+- 当 `.env` 判定为生产环境时，涉及重启/发布/确认运行状态，优先提示并使用这套 systemd 管理方式，不要假设是手工前台启动。
 - 线上重启命令：
   - `sudo systemctl restart cliproxyapi && sleep 2 && systemctl status cliproxyapi --no-pager -l`
 - 查看 unit 原始配置：
   - `systemctl cat cliproxyapi`
 - 若文档记录与线上实例不一致，以 `systemctl cat cliproxyapi` 的当前输出为准，并同步回写仓库文档。
 - 做了代码修改但要让线上生效时，先确认 `bin/cliproxyapi` 已重编译为最新二进制，再执行 systemd 重启；不要只重启旧二进制。
+
+# Codex Worker 隔离部署记录
+
+- 2026-05-11 已将 Codex 文件型 auth 从主程序拆到 worker VPS：主程序 `204.168.245.138`，worker VPS `178.105.98.15`。
+- SSH 入口：主程序服务器 `ssh root@204.168.245.138`；worker 服务器 `ssh root@178.105.98.15`。
+- 主程序错误日志入口：优先 `journalctl -u cliproxyapi --since '1 hour ago' --no-pager`；落盘错误样本在 `/root/cliapp/CLIProxyAPI/logs/error-v1-messages-*.log`；Codex raw SSE 诊断在 `/root/cliapp/CLIProxyAPI/logs/codex-raw-sse/`。
+- worker 排查入口：`docker ps --filter name=cliproxy-worker`、`docker logs cliproxy-workerNN --tail 200`、`systemctl status cliproxy-workers-reverse-tunnel.service --no-pager -l`、`systemctl status cliproxy-workers-firewall.service --no-pager -l`。
+- worker VPS 使用官方镜像 `eceasy/cli-proxy-api:latest` 运行 7 个 Docker 容器：`cliproxy-worker01` 到 `cliproxy-worker07`；每个容器只挂载 1 个 Codex auth file、1 份独立 `config.yaml`、1 个独立住宅代理。
+- worker 目录统一在 `/root/cliproxy-workers/`；注册表为 `/root/cliproxy-workers/worker_registry.tsv`，包含敏感 API key，不能外传或写入仓库。
+- worker 容器本机端口为 `18317-18323`；主程序不直接通过公网访问这些端口，而是通过 worker VPS 主动建立的 SSH 反向隧道访问主程序本机 `127.0.0.1:18317-18323`。
+- worker VPS 的反向隧道 systemd unit：`cliproxy-workers-reverse-tunnel.service`；端口访问限制 unit：`cliproxy-workers-firewall.service`。
+- 主程序 `config.yaml` 中的 worker provider 块用 `# BEGIN CODEX WORKER PROVIDERS` / `# END CODEX WORKER PROVIDERS` 标记；当前仅接入健康的 `worker02-worker07` 共 6 个 OpenAI-compatible provider，provider 名称采用 `codex-workerNN-shortlabel`，方便在主程序管理端按 provider 查看每个 auth file 的用量。
+- 不含密钥和代理的用量映射表放在主程序 `/root/cliapp/CLIProxyAPI/codex-worker-usage-map.tsv`，worker VPS 同步一份在 `/root/cliproxy-workers/worker_usage_map.tsv`；敏感 API key 仍只在 worker 注册表和主程序配置中保存。
+- `worker01` 对应 `codex-aritaser346@gmail.com-pro.json`，部署后 `/v1/models` 返回空列表且日志出现 `refresh_token_reused`，暂未接入主程序路由；需要重新登录或替换 auth 后再启用。
+- 主程序本地 `auths/codex-*.json` 已从 `auths/` 移出，备份目录为 `/root/cliapp/CLIProxyAPI/auths.disabled-main-codex.20260511T142253Z`；主程序配置备份为 `/root/cliapp/CLIProxyAPI/config.yaml.bak.20260511T142035Z`。
+- 验证命令示例：在 worker VPS 执行 `docker ps --filter name=cliproxy-worker` 和 `systemctl status cliproxy-workers-reverse-tunnel.service --no-pager -l`；在主程序 VPS 执行 `journalctl -u cliproxyapi --since '5 minutes ago' --no-pager | rg 'codex-worker|OpenAI-compat|auth files'`。
+- 2026-05-11 线上恢复结论：`gpt-5.4` 不可用时，先区分“worker 真实冷却”和“worker 被误下线”。当日确认 `worker05`、`worker06` 对 `gpt-5.4` 仍可用，`worker02/03/04/07` 处于不同长度冷却；不得因为早期 `empty_stream` 就整体禁用 `worker05/06`，必须先做 worker 直连探测和主程序真实请求验证。
+- 恢复生产时不要擅自把 `claude-to-gpt-target-family` 从 `gpt-5.4` 切到其它模型族；worker 冷却应由调度/冷却逻辑处理，临时改模型只允许在用户明确批准后执行。
+- `cc2` 真实黑盒口径：`cc2` 等价于 `CLAUDE_CONFIG_DIR=~/.claude_cc claude2 --dangerously-skip-permissions`，其配置指向 `https://cc.claudepool.com/`。2026-05-11 回归命令使用 `~/.claude_cc` 和 `~/.local/bin/claude2 --debug-file`，最小提示 `Reply with exactly WORKER56_OK`，结果返回 `WORKER56_OK`，debug log 证实命中 `/v1/messages` 并收到首个 stream chunk。
+- 2026-05-12 已上线 `empty_stream before first payload` 稳定性修复：单个 worker/模型在首包前空流时先做一次短 jitter 重试；连续空流才进入短暂 provider degraded 冷却，避免一次毛刺就永久下线好 worker，同时避免坏 worker 持续坑用户。第二次补丁覆盖“stream 已建立但第一条 chunk 就是 `upstream stream closed before first payload` 错误”的路径。上线后观察口径：`journalctl -u cliproxyapi.service --since '10 minutes ago' --no-pager | rg 'empty_stream|suppressing raw upstream error|/v1/messages'`。
 
 # 文档入口
 
@@ -107,76 +130,77 @@
 <claude-mem-context>
 # Memory Context
 
-# [CLIProxyAPI-ori] recent context, 2026-04-24 10:21am GMT+8
+# [CLIProxyAPI-ori] recent context, 2026-04-25 7:40pm PDT
 
 Legend: 🎯session 🔴bugfix 🟣feature 🔄refactor ✅change 🔵discovery ⚖️decision
 Format: ID TIME TYPE TITLE
 Fetch details: get_observations([IDs]) | Search: mem-search skill
 
-Stats: 50 obs (21,089t read) | 1,491,595t work | 99% savings
+Stats: 50 obs (24,952t read) | 845,925t work | 97% savings
 
 ### Apr 22, 2026
-S41 Local Memory Hit Liveness Probe — "Reply with exactly LOCAL_HIT" (Apr 22 at 5:56 PM)
-S80 User Requested Bug Registry + Daily Cron for Claude Code "Failed to parse JSON" Debugging Workflow (Apr 22 at 6:31 PM)
-S93 Daily TTY Health Check — Claude Code cc1 session responded DAILY_TTY_OK to ping (Apr 22 at 8:42 PM)
-S101 Daily TTY Regression Probe: cc1 Session Responded DAILY_TTY_OK (Apr 22 at 9:05 PM)
-S143 Daily TTY Regression Liveness Probe — cc1 Session Responded DAILY_TTY_OK (Apr 22 at 9:11 PM)
-227 9:34p 🔵 Smoke Test Still Hangs: "bypass permissions on" Pattern Broken by ANSI Escape Codes Between Words
-228 9:36p ⚖️ TTY Regression Scripts Excluded from Stable Baseline; Docs Retained
-247 9:47p 🔵 Exa Code Context Tool Unavailable: Credits Limit Exceeded
-249 9:48p 🔵 cc1 Marketplace Cache Miss Root Cause: Stale /Users/zhangbo Path in Plugin Config
-250 9:50p 🔴 cc1_tty_regression.expect: Startup Detection Rewritten to ANSI-Safe + Debug-Log Verified
-251 " 🔴 run_cc1_daily_regression.sh: awk Filter Direction Fixed + Hook Stop Threshold Raised to 3
-S158 Inspect working tree changes and run 3 specific Go translator tests in CLIProxyAPI-ori (Apr 22 at 10:05 PM)
-255 10:11p 🔵 CLIProxyAPI-ori Working Tree State: Doc Updates + Untracked Regression Scripts
-S159 Daily TTY Regression Liveness Probe — cc1 Session Responded DAILY_TTY_OK (Apr 22 at 10:12 PM)
-256 10:17p 🔵 Daily TTY Regression Liveness Probe — cc1 Session Responded DAILY_TTY_OK
-S161 CLIProxyAPI Codex/Claude Translator: All 3 Regression Tests Pass (Apr 22 at 10:18 PM)
-258 10:19p 🔵 CLIProxyAPI Codex/Claude Translator: All 3 Regression Tests Pass
-S196 Daily TTY health check + initiate Claude translator test run in CLIProxyAPI-ori (Apr 22 at 10:19 PM)
-263 11:42p 🔵 API Key `created_at` Storage Architecture in CLIProxyAPI-ori
-264 11:43p ✅ API Key `created_at` Updated to 2026-03-24 in PostgreSQL
-### Apr 23, 2026
-368 10:33a 🔵 cc1 Daily Regression Script: Structure, Prompts, and PASS/FAIL Criteria
-369 " 🔵 cc1-tty-blackbox-testing Skill: Critical Pitfalls for TTY Evidence Interpretation
-370 " 🔵 CLIProxyAPI-ori Repo: Untracked Regression Infrastructure Files Not Yet Committed
-372 10:34a ✅ cc1 Daily Regression Run 2026-04-23T103302 Started Successfully
-374 10:35a 🔵 cc1 Regression Run 2026-04-23T103302: Prompt 1 Passed, Prompt 2 In Progress
-376 10:36a 🔵 Expect Driver (Session 67459) Exited While cc1 Process Still Running — Possible Premature TTY Handoff
-377 10:38a 🔵 cc1 Regression 2026-04-23T103302: Prompt 2 Complete, Prompt 3 Now Streaming — No Errors Detected
-S199 Daily TTY check + CLIProxyAPI-ori Claude translator regression test run (Apr 23 at 10:39 AM)
-378 10:39a ✅ cc1 Daily Regression 2026-04-23T103302: PASS — All 5 Target Error Classes Absent, Automation Memory Written
-381 4:54p 🔵 JSON Parse Error Multi-Root-Cause Analysis: Production Users Still Reporting After Partial Fixes
-382 4:56p 🔵 Production User Session 582c04dc: 4 Synthetic Parse Errors Pinpointed to Large Parallel Context Moments
-383 " 🔵 Production PostgreSQL: session_trajectory Tables Confirmed Live in cliproxy_business DB
-386 5:03p ✅ cc1 (claude2) Settings: claude-mem and Hooks Removed from ~/.claude_local/settings.json
-387 5:06p ✅ cc1 (claude2) ~/.claude_local/settings.json: claude-mem Removed, No Hooks Were Present
-388 5:11p 🟣 CLIProxyAPI Session Recording: Global and Per-Key Disable Toggles
-390 5:12p 🔵 CLIProxyAPI Session Trajectory Toggle Architecture: Global and Per-Key Extension Points
-394 5:16p ⚖️ CLIProxyAPI Session Recording: Two-Level Disable Toggle Architecture
-395 " 🟣 CLIProxyAPI Per-API-Key Session Trajectory Disable: Backend + Frontend Types
-448 5:29p ⚖️ CLIProxyAPI: Production Regression Test Initiated for Per-API-Key Session Trajectory Disable
-452 5:30p 🔵 CLIProxyAPI: JSON Parse Errors Recurring in Production Despite Prior Fix
-453 5:31p 🔴 CLIProxyAPI: Fix "avoid rewriting committed claude stream status" Landed on origin/main
-454 " 🟣 CLIProxyAPI Management Center: Session Trajectory Toggle UI Added to Policy Editor
-455 " 🟣 CLIProxyAPI: SessionTrajectoryDisabled Added to Paginated List Lite View (api_key_records_list.go)
-456 " ✅ CLIProxyAPI config.example.yaml: session-trajectory-disabled Documented
-457 " 🟣 CLIProxyAPI Production Regression Passed: Per-API-Key Session Trajectory Disable Feature Production-Ready
-458 5:33p 🟣 CLIProxyAPI: End-to-End Finalize() Test Added for Per-API-Key Session Trajectory Disable
-459 " 🔴 CLIProxyAPI: Mid-Stream Status Override Causing JSON Parse Errors — Root Cause and Fix Confirmed
-460 " 🔵 CLIProxyAPI: OpenAI/Gemini Handlers Still Lack c.Writer.Written() Guard in WriteTerminalError
-461 5:34p 🔵 CLIProxyAPI: Full Test Suite Passes on Commit d432bbef — Fix Verified Green
-463 5:36p 🔵 CLIProxyAPI: SessionTrajectoryDisabled Persists via policy_json JSONB Column — No Schema Migration Required
-466 5:40p 🟣 CLIProxyAPI: New Skill `cliproxyapi-production-regression` Created as Production Release Decision Framework
-473 5:47p ✅ CLIProxyAPI: SESSION_TRAJECTORY_PG_DSN Configured in Local .env
-476 5:49p 🔵 CLIProxyAPI Local Dev: No Native Postgres — Docker via OrbStack Required
-477 " 🟣 CLIProxyAPI Local Dev: Docker Container cliproxy-postgres-local Created with postgres:16
-479 5:51p 🔵 CLIProxyAPI Local Dev: Port 5432 Already Occupied by docker-db-1 (postgres:17.6)
-480 " 🟣 CLIProxyAPI: Local cliproxy_session_live Database Created with Full Schema
-481 " ✅ CLIProxyAPI Triage Skill: DSN Fallback Chain and Schema-Variable psql Queries
-517 8:38p 🔵 CLIProxyAPI Billing Time Zone: Daily Limits Use UTC+8, Storage Timestamps Use UTC
-518 8:39p 🔵 CLIProxyAPI Billing Time Zone Full Audit: All Quota Enforcement Uses UTC+8 Day Boundaries
-532 8:46p 🔵 CLIProxyAPI: JSON Parse Errors Still Occurring in Production Despite Prior Fix
+S41 Local Memory Hit Liveness Probe — "Reply with exactly LOCAL_HIT" (Apr 22 at 2:56 AM)
+S80 User Requested Bug Registry + Daily Cron for Claude Code "Failed to parse JSON" Debugging Workflow (Apr 22 at 3:31 AM)
+S93 Daily TTY Health Check — Claude Code cc1 session responded DAILY_TTY_OK to ping (Apr 22 at 5:42 AM)
+S101 Daily TTY Regression Probe: cc1 Session Responded DAILY_TTY_OK (Apr 22 at 6:05 AM)
+S143 Daily TTY Regression Liveness Probe — cc1 Session Responded DAILY_TTY_OK (Apr 22 at 6:11 AM)
+S158 Inspect working tree changes and run 3 specific Go translator tests in CLIProxyAPI-ori (Apr 22 at 7:05 AM)
+S159 Daily TTY Regression Liveness Probe — cc1 Session Responded DAILY_TTY_OK (Apr 22 at 7:12 AM)
+S161 CLIProxyAPI Codex/Claude Translator: All 3 Regression Tests Pass (Apr 22 at 7:18 AM)
+S196 Daily TTY health check + initiate Claude translator test run in CLIProxyAPI-ori (Apr 22 at 7:19 AM)
+S199 Daily TTY check + CLIProxyAPI-ori Claude translator regression test run (Apr 22 at 7:39 PM)
+### Apr 24, 2026
+1512 7:37p 🔵 CC1 Daily Regression Apr 25 — FAIL: Startup Hook Timeout, Zero Requests Issued
+### Apr 25, 2026
+1657 4:33a 🟣 Codex Auth File SOCKS Proxy Fallback on Unavailability
+1659 4:35a 🔵 CLIProxyAPI Proxy Architecture Mapped for Auth-File Proxy Fallback Feature
+1661 " ⚖️ Codex Auth File SOCKS Proxy Fallback — Design Intent
+1663 " 🔵 CLIProxyAPI Codex WebSocket Proxy Architecture — No Fallback Path Exists
+1664 4:37a ⚖️ CLIProxyAPI — SOCKS Proxy Fallback to Direct Connection Design Intent
+1665 " ⚖️ CLIProxyAPI — SOCKS Proxy Fallback to Direct Connection Per Auth File
+1667 " 🟣 CLIProxyAPI — WebSocket Dial Proxy Fallback to Direct Connection Implemented
+1669 4:39a 🟣 CLIProxyAPI — Per-Auth-File Proxy Fallback Tests Added for HTTP Client and WebSocket Dialer
+1671 " ⚖️ CLIProxyAPI — Per-Auth-File SOCKS Proxy Fallback to Direct Connection
+1674 4:40a ⚖️ Codex Auth File SOCKS Proxy Fallback — Automatic Direct Connection on Proxy Unreachable
+1676 " 🟣 CLIProxyAPI — SOCKS Proxy Fallback to Direct Connection Implemented for Codex WebSocket Executor
+1677 4:41a 🟣 CLIProxyAPI — Auth-File SOCKS Proxy Fallback to Direct Connection Implemented and Tests Passing
+1678 4:42a ⚖️ CLIProxyAPI — Per-Auth-File SOCKS Proxy Fallback to Direct Connection Feature Request
+1679 4:44a ⚖️ CLIProxyAPI — Per-Auth-File SOCKS Proxy Fallback to Direct Connection Feature Request
+1680 " ⚖️ Codex Auth File SOCKS Proxy Fallback — Feature Request Scoped
+1681 4:45a 🔵 CLIProxyAPI Auth Proxy Fallback — Worktree and Implementation Scope Identified
+1682 " 🔵 CLIProxyAPI — CodexExecutor Credential and Config Resolution Code Path
+1685 4:47a 🔵 CLIProxyAPI Live Test — Codex API Request Constraints Discovered via TestLiveCodexAuthProxyDirectFallback
+1686 4:48a 🟣 CLIProxyAPI — SOCKS Proxy Fallback to Direct Connection Passes Live Test
+1691 4:51a 🟣 CLIProxyAPI — Auth Proxy Direct Fallback Implementation: Build Passes, Changed Files Identified
+1695 4:56a ⚖️ CLIProxyAPI — Per-auth-file Proxy Freeze / Exponential Backoff Design Inquiry
+1696 4:57a 🟣 CLIProxyAPI — Per-auth-file Proxy Freeze with Exponential Backoff Implemented and Tested
+1697 4:58a 🟣 CLIProxyAPI — Auth Proxy Freeze / Exponential Backoff Circuit Breaker Implemented
+1698 " 🟣 CLIProxyAPI — Freeze + Exponential Backoff Regression Tests Added
+1703 5:00a 🔵 CLIProxyAPI + Management Center — Auth File Health Pipeline Traced for Proxy Freeze Status UI
+1704 5:02a 🟣 CLIProxyAPI — New `internal/proxyhealth` Package Extracted with Rich Stats and API Snapshot
+1705 5:03a 🔄 proxyhealth — Sliding Window Replaced with Fixed 60-Bucket Circular Ring Buffer
+1710 5:05a 🔄 proxy_helpers.go + codex_websockets_executor.go — Inline Freeze State Migrated to proxyhealth Package
+1714 5:08a 🟣 proxyhealth — Today-scoped Failure Counter, SHA256 Key Hashing, Persistence Store Interface Added
+1717 5:10a 🟣 proxyhealth — Store Interface + Postgres Backend Implemented for Freeze State Persistence
+1719 5:12a 🟣 CLIProxyAPI — Proxy Health State Wired into Server Startup, Auth File API, and Management Test
+1739 5:27a 🟣 Per-Auth-File Proxy Freeze Circuit-Breaker with Exponential Backoff
+1740 " ⚖️ Fixed 60-Bucket Circular Ring Buffer for Sliding Window Stats
+1741 " ⚖️ SHA256-Hashed Proxy URL as Registry Map Key
+1742 " 🟣 Write-Behind Async Postgres Persistence for Proxy Health State
+1743 " 🟣 Management API `proxy_health` Field in Auth File Responses
+1744 " 🟣 Frontend Proxy Health Panel in `AuthFileCard.tsx`
+1746 5:29a 🔵 AuthFileCard.tsx Dual-Key Field Normalization for proxy_health API Response
+1747 " 🔵 Exponential Backoff Formula and Memory Cleanup in proxyhealth.go
+1748 " 🔵 PostgresStore Auto-Migrates Schema on Connection; EnsureSchema Standalone Helper Pattern
+1750 " 🔵 ESLint Passes Clean; Frontend Dev Server Started for Browser Verification
+1751 " 🔵 Proxy Health Panel Correctly Suppressed When Backend Lacks `proxy_health` Field
+1752 " 🟣 Complete Changeset Ready to Commit — Both Repos Verified Clean
+1754 5:30a 🔴 Debug Log Credential Leak Fixed — Proxy URL Sanitized Before Logging
+1755 " 🔵 `initProxyHealthStore` Placement and Non-Fatal Failure Pattern in server.go
+1756 5:31a 🟣 CLIProxyAPI Auth Proxy Freeze Feature — Final Backend Changeset Ready to Commit
+1769 6:04a ✅ CLIProxyAPI Systemd Deploy Skill Updated with PG Migration Gate
+1777 6:06a 🔵 scripts/deploy_systemd.sh Does Not Run Migrations — Manual Step Required
+1783 6:08a 🟣 deploy_systemd.sh Now Auto-Runs PG Migrations Before Binary Rebuild
 
-Access 1492k tokens of past work via get_observations([IDs]) or mem-search skill.
+Access 846k tokens of past work via get_observations([IDs]) or mem-search skill.
 </claude-mem-context>

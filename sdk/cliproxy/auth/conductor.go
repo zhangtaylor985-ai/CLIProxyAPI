@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math/rand"
 	"net/http"
 	"path/filepath"
 	"strconv"
@@ -86,7 +87,18 @@ var (
 		30 * time.Minute,
 		60 * time.Minute,
 	}
+	emptyStreamConsecutiveThreshold = 2
+	emptyStreamCooldownSchedule     = []time.Duration{
+		30 * time.Second,
+		1 * time.Minute,
+		3 * time.Minute,
+		5 * time.Minute,
+	}
+	emptyStreamBootstrapRetryMin = 250 * time.Millisecond
+	emptyStreamBootstrapRetryMax = 900 * time.Millisecond
 )
+
+var emptyStreamBootstrapRetryDelay = jitterEmptyStreamBootstrapRetryDelay
 
 const ()
 
@@ -418,6 +430,92 @@ func providerHealthCooldownForBackoffLevel(level int) time.Duration {
 	return providerHealthCooldownSchedule[index]
 }
 
+func nextEmptyStreamHealthCooldown(prevLevel int) (time.Duration, int) {
+	if len(emptyStreamCooldownSchedule) == 0 {
+		return 0, prevLevel
+	}
+	if prevLevel < 0 {
+		prevLevel = 0
+	}
+	if prevLevel >= len(emptyStreamCooldownSchedule) {
+		prevLevel = len(emptyStreamCooldownSchedule) - 1
+	}
+	cooldown := emptyStreamCooldownSchedule[prevLevel]
+	nextLevel := prevLevel + 1
+	if nextLevel > len(emptyStreamCooldownSchedule) {
+		nextLevel = len(emptyStreamCooldownSchedule)
+	}
+	return cooldown, nextLevel
+}
+
+func jitterEmptyStreamBootstrapRetryDelay(int) time.Duration {
+	minDelay := emptyStreamBootstrapRetryMin
+	maxDelay := emptyStreamBootstrapRetryMax
+	if minDelay <= 0 || maxDelay <= 0 {
+		return 0
+	}
+	if maxDelay <= minDelay {
+		return minDelay
+	}
+	spread := maxDelay - minDelay
+	return minDelay + time.Duration(rand.Int63n(int64(spread)+1))
+}
+
+func shouldRetryEmptyStreamBootstrap(auth *Auth, attempt int) bool {
+	return attempt == 0 && providerHealthPolicyApplies(auth)
+}
+
+func emptyStreamError() *Error {
+	return &Error{
+		Code:       "empty_stream",
+		Message:    "upstream stream closed before first payload",
+		Retryable:  true,
+		HTTPStatus: http.StatusServiceUnavailable,
+	}
+}
+
+func isEmptyStreamResultError(err *Error) bool {
+	if err == nil {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(err.Code), "empty_stream") {
+		return true
+	}
+	return strings.Contains(strings.ToLower(strings.TrimSpace(err.Message)), "upstream stream closed before first payload")
+}
+
+func applyProviderHealthEmptyStreamFailure(auth *Auth, state *ModelState, now time.Time) bool {
+	if !providerHealthPolicyApplies(auth) || state == nil {
+		return false
+	}
+	health := &state.Health
+	health.EmptyStreams++
+	health.ConsecutiveEmptyStreams++
+	health.LastEmptyStreamAt = now
+	if health.ConsecutiveEmptyStreams < emptyStreamConsecutiveThreshold {
+		state.Unavailable = false
+		state.Status = StatusError
+		state.StatusMessage = "empty_stream"
+		state.NextRetryAfter = time.Time{}
+		state.UpdatedAt = now
+		return false
+	}
+	cooldown, nextLevel := nextEmptyStreamHealthCooldown(health.BackoffLevel)
+	if cooldown <= 0 {
+		state.Unavailable = false
+		state.NextRetryAfter = time.Time{}
+		return false
+	}
+	health.Score = 0
+	health.BackoffLevel = nextLevel
+	state.Unavailable = true
+	state.Status = StatusError
+	state.StatusMessage = "provider empty_stream degraded"
+	state.NextRetryAfter = now.Add(cooldown)
+	state.UpdatedAt = now
+	return true
+}
+
 func applyProviderHealthSuccess(auth *Auth, state *ModelState, result Result, now time.Time) bool {
 	if !providerHealthPolicyApplies(auth) || state == nil {
 		return false
@@ -463,6 +561,8 @@ func applyProviderHealthSuccess(auth *Auth, state *ModelState, result Result, no
 		health.BackoffLevel = 0
 		health.SlowStarts = 0
 		health.SlowCompletions = 0
+		health.ConsecutiveEmptyStreams = 0
+		health.EmptyStreams = 0
 		return false
 	}
 
@@ -644,6 +744,55 @@ func discardStreamChunks(ch <-chan cliproxyexecutor.StreamChunk) {
 	}()
 }
 
+type cooldownAttemptTracker struct {
+	nextByAuth map[string]time.Time
+}
+
+func (t *cooldownAttemptTracker) Record(authID string, err error, now time.Time) {
+	authID = strings.TrimSpace(authID)
+	if authID == "" || err == nil {
+		return
+	}
+	if statusCodeFromError(err) != http.StatusTooManyRequests {
+		return
+	}
+	retryAfter := retryAfterFromError(err)
+	if retryAfter == nil {
+		return
+	}
+	next := now.Add(*retryAfter)
+	if t.nextByAuth == nil {
+		t.nextByAuth = make(map[string]time.Time)
+	}
+	if existing, ok := t.nextByAuth[authID]; !ok || next.Before(existing) {
+		t.nextByAuth[authID] = next
+	}
+}
+
+func (t *cooldownAttemptTracker) ModelCooldownErrorIfAllAttempted(attempted map[string]struct{}, model string, now time.Time) error {
+	if t == nil || len(attempted) == 0 || len(t.nextByAuth) == 0 {
+		return nil
+	}
+	var earliest time.Time
+	for authID := range attempted {
+		next, ok := t.nextByAuth[authID]
+		if !ok || next.IsZero() {
+			return nil
+		}
+		if earliest.IsZero() || next.Before(earliest) {
+			earliest = next
+		}
+	}
+	if earliest.IsZero() {
+		return nil
+	}
+	resetIn := earliest.Sub(now)
+	if resetIn < 0 {
+		resetIn = 0
+	}
+	return newModelCooldownError(model, "", resetIn)
+}
+
 type streamBootstrapError struct {
 	cause   error
 	headers http.Header
@@ -800,6 +949,8 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 	}
 	var lastErr error
 	for idx, execModel := range execModels {
+		emptyStreamAttempts := 0
+	retryExecModel:
 		resultModel := executionResultModel(routeModel, execModel, pooled)
 		execReq := req
 		execReq.Model = execModel
@@ -816,15 +967,20 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 			if errCtx := ctx.Err(); errCtx != nil {
 				return nil, errCtx
 			}
-			rerr := &Error{Message: errStream.Error()}
-			if se, ok := errors.AsType[cliproxyexecutor.StatusError](errStream); ok && se != nil {
-				rerr.HTTPStatus = se.StatusCode()
-			}
+			rerr := providerErrorToResultError(errStream)
 			result := Result{AuthID: auth.ID, Provider: provider, Model: resultModel, Success: false, Error: rerr}
 			result.RetryAfter = retryAfterFromError(errStream)
 			m.MarkResult(ctx, result)
 			if isRequestInvalidError(errStream) {
 				return nil, errStream
+			}
+			if idx == len(execModels)-1 && isEmptyStreamResultError(rerr) && shouldRetryEmptyStreamBootstrap(auth, emptyStreamAttempts) {
+				emptyStreamAttempts++
+				lastErr = errStream
+				if errWait := waitForCooldown(ctx, emptyStreamBootstrapRetryDelay(emptyStreamAttempts)); errWait != nil {
+					return nil, errWait
+				}
+				goto retryExecModel
 			}
 			lastErr = errStream
 			continue
@@ -852,10 +1008,7 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 				}
 			}
 			if isRequestInvalidError(bootstrapErr) {
-				rerr := &Error{Message: bootstrapErr.Error()}
-				if se, ok := errors.AsType[cliproxyexecutor.StatusError](bootstrapErr); ok && se != nil {
-					rerr.HTTPStatus = se.StatusCode()
-				}
+				rerr := providerErrorToResultError(bootstrapErr)
 				result := Result{AuthID: auth.ID, Provider: provider, Model: resultModel, Success: false, Error: rerr}
 				result.RetryAfter = retryAfterFromError(bootstrapErr)
 				m.MarkResult(ctx, result)
@@ -863,10 +1016,7 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 				return nil, bootstrapErr
 			}
 			if idx < len(execModels)-1 {
-				rerr := &Error{Message: bootstrapErr.Error()}
-				if se, ok := errors.AsType[cliproxyexecutor.StatusError](bootstrapErr); ok && se != nil {
-					rerr.HTTPStatus = se.StatusCode()
-				}
+				rerr := providerErrorToResultError(bootstrapErr)
 				result := Result{AuthID: auth.ID, Provider: provider, Model: resultModel, Success: false, Error: rerr}
 				result.RetryAfter = retryAfterFromError(bootstrapErr)
 				m.MarkResult(ctx, result)
@@ -874,22 +1024,35 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 				lastErr = bootstrapErr
 				continue
 			}
-			rerr := &Error{Message: bootstrapErr.Error()}
-			if se, ok := errors.AsType[cliproxyexecutor.StatusError](bootstrapErr); ok && se != nil {
-				rerr.HTTPStatus = se.StatusCode()
-			}
+			rerr := providerErrorToResultError(bootstrapErr)
 			result := Result{AuthID: auth.ID, Provider: provider, Model: resultModel, Success: false, Error: rerr}
 			result.RetryAfter = retryAfterFromError(bootstrapErr)
 			m.MarkResult(ctx, result)
 			discardStreamChunks(streamResult.Chunks)
+			if idx == len(execModels)-1 && isEmptyStreamResultError(rerr) && shouldRetryEmptyStreamBootstrap(auth, emptyStreamAttempts) {
+				emptyStreamAttempts++
+				lastErr = bootstrapErr
+				if errWait := waitForCooldown(ctx, emptyStreamBootstrapRetryDelay(emptyStreamAttempts)); errWait != nil {
+					return nil, errWait
+				}
+				goto retryExecModel
+			}
 			return nil, newStreamBootstrapError(bootstrapErr, streamResult.Headers)
 		}
 
 		if closed && len(buffered) == 0 {
 			cancelAttempt()
-			emptyErr := &Error{Code: "empty_stream", Message: "upstream stream closed before first payload", Retryable: true}
+			emptyErr := emptyStreamError()
 			result := Result{AuthID: auth.ID, Provider: provider, Model: resultModel, Success: false, Error: emptyErr}
 			m.MarkResult(ctx, result)
+			if idx == len(execModels)-1 && shouldRetryEmptyStreamBootstrap(auth, emptyStreamAttempts) {
+				emptyStreamAttempts++
+				lastErr = emptyErr
+				if errWait := waitForCooldown(ctx, emptyStreamBootstrapRetryDelay(emptyStreamAttempts)); errWait != nil {
+					return nil, errWait
+				}
+				goto retryExecModel
+			}
 			if idx < len(execModels)-1 {
 				lastErr = emptyErr
 				continue
@@ -1270,6 +1433,7 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 	opts = ensureRequestedModelMetadata(opts, routeModel)
 	tried := make(map[string]struct{})
 	attempted := make(map[string]struct{})
+	var cooldownAttempts cooldownAttemptTracker
 	var lastErr error
 	var pendingAlert *alerting.ProviderEvent
 	for {
@@ -1282,6 +1446,9 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 		auth, executor, provider, errPick := m.pickNextMixed(ctx, providers, routeModel, opts, tried)
 		if errPick != nil {
 			if lastErr != nil {
+				if cooldownErr := cooldownAttempts.ModelCooldownErrorIfAllAttempted(attempted, routeModel, time.Now()); cooldownErr != nil {
+					return cliproxyexecutor.Response{}, cooldownErr
+				}
 				return cliproxyexecutor.Response{}, lastErr
 			}
 			return cliproxyexecutor.Response{}, errPick
@@ -1365,6 +1532,7 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 			} else {
 				pendingAlert = nil
 			}
+			cooldownAttempts.Record(auth.ID, authErr, time.Now())
 			lastErr = authErr
 			continue
 		}
@@ -1379,6 +1547,7 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 	opts = ensureRequestedModelMetadata(opts, routeModel)
 	tried := make(map[string]struct{})
 	attempted := make(map[string]struct{})
+	var cooldownAttempts cooldownAttemptTracker
 	var lastErr error
 	var pendingAlert *alerting.ProviderEvent
 	for {
@@ -1391,6 +1560,9 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 		auth, executor, provider, errPick := m.pickNextMixed(ctx, providers, routeModel, opts, tried)
 		if errPick != nil {
 			if lastErr != nil {
+				if cooldownErr := cooldownAttempts.ModelCooldownErrorIfAllAttempted(attempted, routeModel, time.Now()); cooldownErr != nil {
+					return cliproxyexecutor.Response{}, cooldownErr
+				}
 				return cliproxyexecutor.Response{}, lastErr
 			}
 			return cliproxyexecutor.Response{}, errPick
@@ -1470,6 +1642,7 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 			} else {
 				pendingAlert = nil
 			}
+			cooldownAttempts.Record(auth.ID, authErr, time.Now())
 			lastErr = authErr
 			continue
 		}
@@ -1484,6 +1657,7 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 	opts = ensureRequestedModelMetadata(opts, routeModel)
 	tried := make(map[string]struct{})
 	attempted := make(map[string]struct{})
+	var cooldownAttempts cooldownAttemptTracker
 	var lastErr error
 	var pendingAlert *alerting.ProviderEvent
 	for {
@@ -1500,6 +1674,9 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 		auth, executor, provider, errPick := m.pickNextMixed(ctx, providers, routeModel, opts, tried)
 		if errPick != nil {
 			if lastErr != nil {
+				if cooldownErr := cooldownAttempts.ModelCooldownErrorIfAllAttempted(attempted, routeModel, time.Now()); cooldownErr != nil {
+					return nil, cooldownErr
+				}
 				var bootstrapErr *streamBootstrapError
 				if errors.As(lastErr, &bootstrapErr) && bootstrapErr != nil {
 					return streamErrorResult(bootstrapErr.Headers(), bootstrapErr.cause), nil
@@ -1550,6 +1727,7 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 			} else {
 				pendingAlert = nil
 			}
+			cooldownAttempts.Record(auth.ID, errStream, time.Now())
 			lastErr = errStream
 			continue
 		}
@@ -2270,6 +2448,7 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 	if result.AuthID == "" {
 		return
 	}
+	resultModelKey := canonicalModelKey(result.Model)
 
 	shouldResumeModel := false
 	shouldSuspendModel := false
@@ -2284,8 +2463,8 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 		now := time.Now()
 
 		if result.Success {
-			if result.Model != "" {
-				state := ensureModelState(auth, result.Model)
+			if resultModelKey != "" {
+				state := ensureModelState(auth, resultModelKey)
 				wasDegraded := wasProviderDegraded(state)
 				recoveredFromCooldown := providerHealthCooldownForBackoffLevel(state.Health.BackoffLevel)
 				resetModelState(state, now)
@@ -2295,7 +2474,7 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 					auth.LastError = nil
 					auth.Status = StatusError
 					auth.StatusMessage = state.StatusMessage
-					alertCtx := providerAlertContextFromAuth(auth, result.Model, result, now)
+					alertCtx := providerAlertContextFromAuth(auth, resultModelKey, result, now)
 					alertCtx.Cooldown = recoveredFromCooldown
 					if !state.NextRetryAfter.IsZero() {
 						if wait := state.NextRetryAfter.Sub(now); wait > 0 {
@@ -2309,7 +2488,7 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 					auth.LastError = nil
 					auth.StatusMessage = ""
 					auth.Status = StatusActive
-					alertCtx := providerAlertContextFromAuth(auth, result.Model, result, now)
+					alertCtx := providerAlertContextFromAuth(auth, resultModelKey, result, now)
 					event := providerAlertEventFromContext(ctx, "recovered", alertCtx, nil)
 					providerEvent = &event
 				} else if !hasModelError(auth, now) {
@@ -2324,8 +2503,8 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 				clearAuthStateOnSuccess(auth, now)
 			}
 		} else {
-			if result.Model != "" {
-				state := ensureModelState(auth, result.Model)
+			if resultModelKey != "" {
+				state := ensureModelState(auth, resultModelKey)
 				state.Unavailable = true
 				state.Status = StatusError
 				state.UpdatedAt = now
@@ -2343,7 +2522,9 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 				statusCode := normalizeProviderFailureStatusCode(statusCodeFromResult(result.Error), errorMessage)
 				backoffLevel := state.Quota.BackoffLevel
 				state.Quota = QuotaState{}
-				if isModelSupportResultError(result.Error) {
+				if isEmptyStreamResultError(result.Error) && providerHealthPolicyApplies(auth) {
+					applyProviderHealthEmptyStreamFailure(auth, state, now)
+				} else if isModelSupportResultError(result.Error) {
 					next := now.Add(12 * time.Hour)
 					state.NextRetryAfter = next
 					suspendReason = "model_not_supported"
@@ -2429,16 +2610,16 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 		m.scheduler.upsertAuth(authSnapshot)
 	}
 
-	if clearModelQuota && result.Model != "" {
-		registry.GetGlobalRegistry().ClearModelQuotaExceeded(result.AuthID, result.Model)
+	if clearModelQuota && resultModelKey != "" {
+		registry.GetGlobalRegistry().ClearModelQuotaExceeded(result.AuthID, resultModelKey)
 	}
-	if setModelQuota && result.Model != "" {
-		registry.GetGlobalRegistry().SetModelQuotaExceeded(result.AuthID, result.Model)
+	if setModelQuota && resultModelKey != "" {
+		registry.GetGlobalRegistry().SetModelQuotaExceeded(result.AuthID, resultModelKey)
 	}
 	if shouldResumeModel {
-		registry.GetGlobalRegistry().ResumeClientModel(result.AuthID, result.Model)
+		registry.GetGlobalRegistry().ResumeClientModel(result.AuthID, resultModelKey)
 	} else if shouldSuspendModel {
-		registry.GetGlobalRegistry().SuspendClientModel(result.AuthID, result.Model, suspendReason)
+		registry.GetGlobalRegistry().SuspendClientModel(result.AuthID, resultModelKey, suspendReason)
 	}
 	if providerEvent != nil {
 		alerting.NotifyProviderEvent(*providerEvent)
@@ -2448,6 +2629,7 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 }
 
 func ensureModelState(auth *Auth, model string) *ModelState {
+	model = canonicalModelKey(model)
 	if auth == nil || model == "" {
 		return nil
 	}
@@ -2611,6 +2793,34 @@ func statusCodeFromError(err error) int {
 	return 0
 }
 
+func providerErrorToResultError(err error) *Error {
+	if err == nil {
+		return nil
+	}
+	var authErr *Error
+	if errors.As(err, &authErr) && authErr != nil {
+		if isEmptyStreamResultError(authErr) {
+			return emptyStreamError()
+		}
+		return &Error{
+			Code:       authErr.Code,
+			Message:    authErr.Message,
+			Retryable:  authErr.Retryable,
+			HTTPStatus: authErr.HTTPStatus,
+		}
+	}
+	message := err.Error()
+	if strings.Contains(strings.ToLower(strings.TrimSpace(message)), "empty_stream") ||
+		strings.Contains(strings.ToLower(strings.TrimSpace(message)), "upstream stream closed before first payload") {
+		return emptyStreamError()
+	}
+	rerr := &Error{Message: message}
+	if se, ok := errors.AsType[cliproxyexecutor.StatusError](err); ok && se != nil {
+		rerr.HTTPStatus = se.StatusCode()
+	}
+	return rerr
+}
+
 func retryAfterFromError(err error) *time.Duration {
 	if err == nil {
 		return nil
@@ -2618,8 +2828,8 @@ func retryAfterFromError(err error) *time.Duration {
 	type retryAfterProvider interface {
 		RetryAfter() *time.Duration
 	}
-	rap, ok := err.(retryAfterProvider)
-	if !ok || rap == nil {
+	var rap retryAfterProvider
+	if !errors.As(err, &rap) || rap == nil {
 		return nil
 	}
 	retryAfter := rap.RetryAfter()

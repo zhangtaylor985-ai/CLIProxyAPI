@@ -363,12 +363,28 @@ func (h *ClaudeCodeAPIHandler) sanitizeClientError(c *gin.Context, msg *interfac
 	if msg != nil && msg.Error != nil {
 		entry = entry.WithError(msg.Error)
 	}
-	entry.Error("suppressing raw upstream error for Claude client")
+	isCooldown := isClaudeModelCooldownError(msg)
+	if isCooldown {
+		entry.Warn("suppressing raw upstream cooldown for Claude client")
+	} else {
+		entry.Error("suppressing raw upstream error for Claude client")
+	}
 
 	sanitized := *msg
 	sanitized.StatusCode = http.StatusServiceUnavailable
+	if isCooldown {
+		sanitized.StatusCode = http.StatusTooManyRequests
+	}
 	sanitized.Error = errors.New(handlers.GenericSensitiveClientErrorMessage)
 	return &sanitized
+}
+
+func isClaudeModelCooldownError(msg *interfaces.ErrorMessage) bool {
+	if msg == nil || msg.StatusCode != http.StatusTooManyRequests || msg.Error == nil {
+		return false
+	}
+	text := strings.ToLower(msg.Error.Error())
+	return strings.Contains(text, "model_cooldown") || strings.Contains(text, "cooling down")
 }
 
 func setClaudeAlertContext(c *gin.Context, mode, model, stage string) {

@@ -93,7 +93,7 @@ type captureLogHook struct {
 }
 
 func (h captureLogHook) Levels() []log.Level {
-	return []log.Level{log.ErrorLevel}
+	return []log.Level{log.ErrorLevel, log.WarnLevel}
 }
 
 func (h captureLogHook) Fire(entry *log.Entry) error {
@@ -252,6 +252,56 @@ func TestWriteClientError_SanitizesCodexAuthLeak(t *testing.T) {
 		t.Fatalf("error.message = %q", payload.Error.Message)
 	}
 	assertNoClaudeClientInternalLeak(t, recorder.Body.String())
+}
+
+func TestWriteClientError_SanitizesModelCooldownAsWarn429(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	base := handlers.NewBaseAPIHandlers(&sdkconfig.SDKConfig{}, nil)
+	h := NewClaudeCodeAPIHandler(base)
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	internallogging.SetGinRequestID(c, "req-cooldown-1")
+	setClaudeAlertContext(c, "stream", "gpt-5.4(high)", "upstream_execution")
+
+	logger := log.StandardLogger()
+	previousHooks := logger.Hooks
+	hook := captureLogHook{entries: make(chan *log.Entry, 1)}
+	logger.ReplaceHooks(log.LevelHooks{})
+	logger.AddHook(hook)
+	t.Cleanup(func() {
+		logger.ReplaceHooks(previousHooks)
+	})
+
+	h.writeClientError(c, &interfaces.ErrorMessage{
+		StatusCode: http.StatusTooManyRequests,
+		Error:      errors.New(`{"error":{"code":"model_cooldown","message":"All credentials are cooling down","reset_seconds":300}}`),
+	})
+
+	if recorder.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusTooManyRequests)
+	}
+	var payload claudeErrorPayload
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if payload.Error.Message != handlers.GenericSensitiveClientErrorMessage {
+		t.Fatalf("error.message = %q", payload.Error.Message)
+	}
+	assertNoClaudeClientInternalLeak(t, recorder.Body.String())
+
+	select {
+	case entry := <-hook.entries:
+		if entry.Level != log.WarnLevel {
+			t.Fatalf("log level = %s, want warn", entry.Level)
+		}
+		if got := entry.Data["request_id"]; got != "req-cooldown-1" {
+			t.Fatalf("request_id field = %#v, want req-cooldown-1", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected sanitize warning entry")
+	}
 }
 
 func TestClaudeNonStreamingResponse_DoesNotBodyKeepAliveBeforeError(t *testing.T) {

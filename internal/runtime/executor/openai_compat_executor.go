@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v6/sdk/translator"
 	log "github.com/sirupsen/logrus"
+	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
 
@@ -161,7 +163,7 @@ func (e *OpenAICompatExecutor) Execute(ctx context.Context, auth *cliproxyauth.A
 		b, _ := io.ReadAll(httpResp.Body)
 		appendAPIResponseChunk(ctx, e.cfg, b)
 		logWithRequestID(ctx).Debugf("request error, error status: %d, error message: %s", httpResp.StatusCode, summarizeErrorBody(httpResp.Header.Get("Content-Type"), b))
-		err = statusErr{code: httpResp.StatusCode, msg: string(b)}
+		err = newOpenAICompatStatusErr(httpResp.StatusCode, httpResp.Header, b)
 		return resp, err
 	}
 	body, err := io.ReadAll(httpResp.Body)
@@ -266,7 +268,7 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 		if errClose := httpResp.Body.Close(); errClose != nil {
 			log.Errorf("openai compat executor: close response body error: %v", errClose)
 		}
-		err = statusErr{code: httpResp.StatusCode, msg: string(b)}
+		err = newOpenAICompatStatusErr(httpResp.StatusCode, httpResp.Header, b)
 		return nil, err
 	}
 	out := make(chan cliproxyexecutor.StreamChunk)
@@ -408,3 +410,73 @@ func (e statusErr) Error() string {
 }
 func (e statusErr) StatusCode() int            { return e.code }
 func (e statusErr) RetryAfter() *time.Duration { return e.retryAfter }
+
+func newOpenAICompatStatusErr(statusCode int, headers http.Header, body []byte) statusErr {
+	err := statusErr{code: statusCode, msg: string(body)}
+	if retryAfter := parseOpenAICompatRetryAfter(statusCode, headers, body, time.Now()); retryAfter != nil {
+		err.retryAfter = retryAfter
+	}
+	return err
+}
+
+func parseOpenAICompatRetryAfter(statusCode int, headers http.Header, body []byte, now time.Time) *time.Duration {
+	if statusCode != http.StatusTooManyRequests && statusCode != http.StatusServiceUnavailable {
+		return nil
+	}
+	if retryAfter := parseRetryAfterHeader(headers, now); retryAfter != nil {
+		return retryAfter
+	}
+	if len(body) == 0 {
+		return nil
+	}
+	for _, path := range []string{
+		"error.reset_seconds",
+		"error.resets_in_seconds",
+		"error.retry_after_seconds",
+		"error.retry_after",
+		"reset_seconds",
+		"resets_in_seconds",
+		"retry_after_seconds",
+		"retry_after",
+	} {
+		if seconds := gjson.GetBytes(body, path).Float(); seconds > 0 {
+			retryAfter := time.Duration(seconds * float64(time.Second))
+			if retryAfter < time.Second {
+				retryAfter = time.Second
+			}
+			return &retryAfter
+		}
+	}
+	for _, path := range []string{"error.resets_at", "resets_at"} {
+		if resetAt := gjson.GetBytes(body, path).Int(); resetAt > 0 {
+			resetAtTime := time.Unix(resetAt, 0)
+			if resetAtTime.After(now) {
+				retryAfter := resetAtTime.Sub(now)
+				return &retryAfter
+			}
+		}
+	}
+	return nil
+}
+
+func parseRetryAfterHeader(headers http.Header, now time.Time) *time.Duration {
+	if headers == nil {
+		return nil
+	}
+	raw := strings.TrimSpace(headers.Get("Retry-After"))
+	if raw == "" {
+		return nil
+	}
+	if seconds, err := strconv.ParseFloat(raw, 64); err == nil && seconds > 0 {
+		retryAfter := time.Duration(seconds * float64(time.Second))
+		if retryAfter < time.Second {
+			retryAfter = time.Second
+		}
+		return &retryAfter
+	}
+	if resetAt, err := http.ParseTime(raw); err == nil && resetAt.After(now) {
+		retryAfter := resetAt.Sub(now)
+		return &retryAfter
+	}
+	return nil
+}

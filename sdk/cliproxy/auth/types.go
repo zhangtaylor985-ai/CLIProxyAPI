@@ -113,6 +113,12 @@ type ProviderHealthState struct {
 	Score int `json:"score,omitempty"`
 	// BackoffLevel tracks progressive cooldown level for degraded provider behaviour.
 	BackoffLevel int `json:"backoff_level,omitempty"`
+	// EmptyStreams counts stream bootstrap closures before the first payload.
+	EmptyStreams int `json:"empty_streams,omitempty"`
+	// ConsecutiveEmptyStreams tracks the current empty-stream failure streak.
+	ConsecutiveEmptyStreams int `json:"consecutive_empty_streams,omitempty"`
+	// LastEmptyStreamAt records the most recent empty-stream failure.
+	LastEmptyStreamAt time.Time `json:"last_empty_stream_at,omitempty"`
 	// LastFirstActivityMs stores the most recent first-activity latency in milliseconds.
 	LastFirstActivityMs int64 `json:"last_first_activity_ms,omitempty"`
 	// LastCompletedMs stores the most recent completion latency in milliseconds.

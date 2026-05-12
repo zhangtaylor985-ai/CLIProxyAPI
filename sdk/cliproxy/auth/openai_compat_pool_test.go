@@ -2,15 +2,31 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	internalconfig "github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/executor"
 )
+
+type retryAfterTestError struct {
+	statusCode int
+	message    string
+	retryAfter time.Duration
+}
+
+func (e retryAfterTestError) Error() string { return e.message }
+func (e retryAfterTestError) StatusCode() int {
+	return e.statusCode
+}
+func (e retryAfterTestError) RetryAfter() *time.Duration {
+	return &e.retryAfter
+}
 
 type openAICompatPoolExecutor struct {
 	id string
@@ -155,6 +171,66 @@ func (e *authScopedOpenAICompatPoolExecutor) ExecuteCalls() []string {
 	defer e.mu.Unlock()
 	out := make([]string, len(e.executeCalls))
 	copy(out, e.executeCalls)
+	return out
+}
+
+type authSequenceStreamExecutor struct {
+	id string
+
+	mu      sync.Mutex
+	calls   []string
+	streams map[string][][]cliproxyexecutor.StreamChunk
+}
+
+func (e *authSequenceStreamExecutor) Identifier() string { return e.id }
+
+func (e *authSequenceStreamExecutor) Execute(context.Context, *Auth, cliproxyexecutor.Request, cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
+	return cliproxyexecutor.Response{}, &Error{HTTPStatus: http.StatusNotImplemented, Message: "Execute not implemented"}
+}
+
+func (e *authSequenceStreamExecutor) ExecuteStream(_ context.Context, auth *Auth, req cliproxyexecutor.Request, _ cliproxyexecutor.Options) (*cliproxyexecutor.StreamResult, error) {
+	key := auth.ID + "|" + req.Model
+	e.mu.Lock()
+	e.calls = append(e.calls, key)
+	callIndex := 0
+	for _, call := range e.calls[:len(e.calls)-1] {
+		if call == key {
+			callIndex++
+		}
+	}
+	streams := e.streams[key]
+	var chunks []cliproxyexecutor.StreamChunk
+	if callIndex < len(streams) {
+		chunks = append([]cliproxyexecutor.StreamChunk(nil), streams[callIndex]...)
+	} else {
+		chunks = []cliproxyexecutor.StreamChunk{{Payload: []byte(req.Model)}}
+	}
+	e.mu.Unlock()
+	ch := make(chan cliproxyexecutor.StreamChunk, max(1, len(chunks)))
+	for _, chunk := range chunks {
+		ch <- chunk
+	}
+	close(ch)
+	return &cliproxyexecutor.StreamResult{Headers: http.Header{"X-Model": {req.Model}}, Chunks: ch}, nil
+}
+
+func (e *authSequenceStreamExecutor) Refresh(_ context.Context, auth *Auth) (*Auth, error) {
+	return auth, nil
+}
+
+func (e *authSequenceStreamExecutor) CountTokens(context.Context, *Auth, cliproxyexecutor.Request, cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
+	return cliproxyexecutor.Response{}, &Error{HTTPStatus: http.StatusNotImplemented, Message: "CountTokens not implemented"}
+}
+
+func (e *authSequenceStreamExecutor) HttpRequest(context.Context, *Auth, *http.Request) (*http.Response, error) {
+	return nil, &Error{HTTPStatus: http.StatusNotImplemented, Message: "HttpRequest not implemented"}
+}
+
+func (e *authSequenceStreamExecutor) Calls() []string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	out := make([]string, len(e.calls))
+	copy(out, e.calls)
 	return out
 }
 
@@ -444,6 +520,146 @@ func TestManagerExecuteStream_OpenAICompatAliasPoolRetriesOnEmptyBootstrap(t *te
 	}
 }
 
+func TestManagerExecuteStream_RetriesEmptyStreamSameWorkerOnce(t *testing.T) {
+	previousDelay := emptyStreamBootstrapRetryDelay
+	emptyStreamBootstrapRetryDelay = func(int) time.Duration { return 0 }
+	t.Cleanup(func() { emptyStreamBootstrapRetryDelay = previousDelay })
+
+	model := "gpt-5.4"
+	authID := "worker05"
+	executor := &authSequenceStreamExecutor{
+		id: "pool",
+		streams: map[string][][]cliproxyexecutor.StreamChunk{
+			authID + "|" + model: {
+				{},
+				{{Payload: []byte("ok")}},
+			},
+		},
+	}
+	cfg := &internalconfig.Config{
+		OpenAICompatibility: []internalconfig.OpenAICompatibility{{
+			Name: "pool",
+			Models: []internalconfig.OpenAICompatibilityModel{
+				{Name: model, Alias: model},
+			},
+		}},
+	}
+	m := NewManager(nil, nil, nil)
+	m.SetConfig(cfg)
+	m.RegisterExecutor(executor)
+	auth := &Auth{
+		ID:       authID,
+		Provider: "pool",
+		Status:   StatusActive,
+		Attributes: map[string]string{
+			"api_key":      "worker05-key",
+			"compat_name":  "pool",
+			"provider_key": "pool",
+		},
+	}
+	if _, err := m.Register(context.Background(), auth); err != nil {
+		t.Fatalf("register auth: %v", err)
+	}
+	reg := registry.GetGlobalRegistry()
+	reg.RegisterClient(authID, "pool", []*registry.ModelInfo{{ID: model}})
+	t.Cleanup(func() { reg.UnregisterClient(authID) })
+
+	streamResult, err := m.ExecuteStream(context.Background(), []string{"pool"}, cliproxyexecutor.Request{Model: model}, cliproxyexecutor.Options{})
+	if err != nil {
+		t.Fatalf("ExecuteStream error: %v", err)
+	}
+	if payload := readOpenAICompatStreamPayload(t, streamResult); payload != "ok" {
+		t.Fatalf("payload = %q, want ok", payload)
+	}
+	got := executor.Calls()
+	want := []string{authID + "|" + model, authID + "|" + model}
+	if len(got) != len(want) {
+		t.Fatalf("calls = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("call %d = %q, want %q", i, got[i], want[i])
+		}
+	}
+	updated, ok := m.GetByID(authID)
+	if !ok || updated == nil {
+		t.Fatalf("expected auth after execution")
+	}
+	if state := updated.ModelStates[model]; state == nil || state.Unavailable || state.Health.ConsecutiveEmptyStreams != 0 {
+		t.Fatalf("state after recovery = %+v, want available with reset empty-stream streak", state)
+	}
+}
+
+func TestManagerExecuteStream_RetriesEmptyStreamChunkErrorSameWorkerOnce(t *testing.T) {
+	previousDelay := emptyStreamBootstrapRetryDelay
+	emptyStreamBootstrapRetryDelay = func(int) time.Duration { return 0 }
+	t.Cleanup(func() { emptyStreamBootstrapRetryDelay = previousDelay })
+
+	model := "gpt-5.4"
+	authID := "worker06"
+	executor := &authSequenceStreamExecutor{
+		id: "pool",
+		streams: map[string][][]cliproxyexecutor.StreamChunk{
+			authID + "|" + model: {
+				{{Err: errors.New("upstream stream closed before first payload")}},
+				{{Payload: []byte("ok")}},
+			},
+		},
+	}
+	cfg := &internalconfig.Config{
+		OpenAICompatibility: []internalconfig.OpenAICompatibility{{
+			Name: "pool",
+			Models: []internalconfig.OpenAICompatibilityModel{
+				{Name: model, Alias: model},
+			},
+		}},
+	}
+	m := NewManager(nil, nil, nil)
+	m.SetConfig(cfg)
+	m.RegisterExecutor(executor)
+	auth := &Auth{
+		ID:       authID,
+		Provider: "pool",
+		Status:   StatusActive,
+		Attributes: map[string]string{
+			"api_key":      "worker06-key",
+			"compat_name":  "pool",
+			"provider_key": "pool",
+		},
+	}
+	if _, err := m.Register(context.Background(), auth); err != nil {
+		t.Fatalf("register auth: %v", err)
+	}
+	reg := registry.GetGlobalRegistry()
+	reg.RegisterClient(authID, "pool", []*registry.ModelInfo{{ID: model}})
+	t.Cleanup(func() { reg.UnregisterClient(authID) })
+
+	streamResult, err := m.ExecuteStream(context.Background(), []string{"pool"}, cliproxyexecutor.Request{Model: model}, cliproxyexecutor.Options{})
+	if err != nil {
+		t.Fatalf("ExecuteStream error: %v", err)
+	}
+	if payload := readOpenAICompatStreamPayload(t, streamResult); payload != "ok" {
+		t.Fatalf("payload = %q, want ok", payload)
+	}
+	got := executor.Calls()
+	want := []string{authID + "|" + model, authID + "|" + model}
+	if len(got) != len(want) {
+		t.Fatalf("calls = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("call %d = %q, want %q", i, got[i], want[i])
+		}
+	}
+	updated, ok := m.GetByID(authID)
+	if !ok || updated == nil {
+		t.Fatalf("expected auth after execution")
+	}
+	if state := updated.ModelStates[model]; state == nil || state.Unavailable || state.Health.ConsecutiveEmptyStreams != 0 {
+		t.Fatalf("state after recovery = %+v, want available with reset empty-stream streak", state)
+	}
+}
+
 func TestManagerExecuteStream_OpenAICompatAliasPoolFallsBackBeforeFirstByte(t *testing.T) {
 	alias := "claude-opus-4.66"
 	executor := &openAICompatPoolExecutor{
@@ -500,6 +716,74 @@ func TestManagerExecuteStream_OpenAICompatAliasPoolStopsOnInvalidRequest(t *test
 	got := executor.StreamModels()
 	if len(got) != 1 || got[0] != "qwen3.5-plus" {
 		t.Fatalf("stream calls = %v, want only first invalid model", got)
+	}
+}
+
+func TestManagerMarkResult_EmptyStreamDegradesAfterConsecutiveFailures(t *testing.T) {
+	model := "gpt-5.4"
+	authID := "worker05-" + t.Name()
+	m := NewManager(nil, nil, nil)
+	m.RegisterExecutor(&authScopedOpenAICompatPoolExecutor{id: "pool"})
+
+	reg := registry.GetGlobalRegistry()
+	reg.RegisterClient(authID, "pool", []*registry.ModelInfo{{ID: model}})
+	t.Cleanup(func() {
+		reg.UnregisterClient(authID)
+	})
+
+	auth := &Auth{
+		ID:       authID,
+		Provider: "pool",
+		Status:   StatusActive,
+		Attributes: map[string]string{
+			"api_key":      "worker-key",
+			"compat_name":  "pool",
+			"provider_key": "pool",
+		},
+	}
+	if _, err := m.Register(context.Background(), auth); err != nil {
+		t.Fatalf("register auth: %v", err)
+	}
+
+	m.MarkResult(context.Background(), Result{
+		AuthID:   authID,
+		Provider: "pool",
+		Model:    model,
+		Success:  false,
+		Error:    emptyStreamError(),
+	})
+	afterFirst, ok := m.GetByID(authID)
+	if !ok || afterFirst == nil {
+		t.Fatalf("expected auth after first empty stream")
+	}
+	firstState := afterFirst.ModelStates[model]
+	if firstState == nil {
+		t.Fatalf("expected model state after first empty stream")
+	}
+	if firstState.NextRetryAfter.After(time.Now()) {
+		t.Fatalf("first empty stream NextRetryAfter = %v, want no cooldown", firstState.NextRetryAfter)
+	}
+	if firstState.Health.ConsecutiveEmptyStreams != 1 {
+		t.Fatalf("first empty stream streak = %d, want 1", firstState.Health.ConsecutiveEmptyStreams)
+	}
+
+	m.MarkResult(context.Background(), Result{
+		AuthID:   authID,
+		Provider: "pool",
+		Model:    model,
+		Success:  false,
+		Error:    emptyStreamError(),
+	})
+	afterSecond, ok := m.GetByID(authID)
+	if !ok || afterSecond == nil {
+		t.Fatalf("expected auth after second empty stream")
+	}
+	secondState := afterSecond.ModelStates[model]
+	if secondState == nil || !secondState.Unavailable || !secondState.NextRetryAfter.After(time.Now()) {
+		t.Fatalf("state after second empty stream = %+v, want temporary cooldown", secondState)
+	}
+	if secondState.Health.ConsecutiveEmptyStreams != 2 {
+		t.Fatalf("second empty stream streak = %d, want 2", secondState.Health.ConsecutiveEmptyStreams)
 	}
 }
 
@@ -752,5 +1036,117 @@ func TestManagerExecuteStream_OpenAICompatAliasPoolStopsOnInvalidBootstrap(t *te
 	}
 	if got := executor.StreamModels(); len(got) != 1 || got[0] != "qwen3.5-plus" {
 		t.Fatalf("stream calls = %v, want only first upstream model", got)
+	}
+}
+
+func TestManagerExecuteStream_OpenAICompatPoolAggregatesAllAuthCooldowns(t *testing.T) {
+	model := "gpt-5.4"
+	rawWorkerErr := retryAfterTestError{
+		statusCode: http.StatusTooManyRequests,
+		message:    `{"error":{"code":"model_cooldown","provider":"codex","reset_seconds":300}}`,
+		retryAfter: 5 * time.Minute,
+	}
+	executor := &openAICompatPoolExecutor{
+		id:                "pool",
+		streamFirstErrors: map[string]error{model: rawWorkerErr},
+	}
+	cfg := &internalconfig.Config{
+		OpenAICompatibility: []internalconfig.OpenAICompatibility{{
+			Name: "pool",
+			Models: []internalconfig.OpenAICompatibilityModel{
+				{Name: model, Alias: model},
+			},
+		}},
+	}
+	m := NewManager(nil, nil, nil)
+	m.SetConfig(cfg)
+	m.RegisterExecutor(executor)
+
+	reg := registry.GetGlobalRegistry()
+	for _, authID := range []string{"pool-auth-a", "pool-auth-b"} {
+		auth := &Auth{
+			ID:       authID,
+			Provider: "pool",
+			Status:   StatusActive,
+			Attributes: map[string]string{
+				"api_key":      authID + "-key",
+				"compat_name":  "pool",
+				"provider_key": "pool",
+			},
+		}
+		if _, err := m.Register(context.Background(), auth); err != nil {
+			t.Fatalf("register auth %s: %v", authID, err)
+		}
+		reg.RegisterClient(authID, "pool", []*registry.ModelInfo{{ID: model}})
+		t.Cleanup(func(id string) func() {
+			return func() { reg.UnregisterClient(id) }
+		}(authID))
+	}
+
+	_, err := m.ExecuteStream(context.Background(), []string{"pool"}, cliproxyexecutor.Request{Model: model}, cliproxyexecutor.Options{})
+	if err == nil {
+		t.Fatal("ExecuteStream error = nil, want model cooldown")
+	}
+	var cooldownErr *modelCooldownError
+	if !errors.As(err, &cooldownErr) {
+		t.Fatalf("ExecuteStream error = %T %v, want modelCooldownError", err, err)
+	}
+	if strings.Contains(err.Error(), `"provider":"codex"`) {
+		t.Fatalf("aggregate cooldown leaked worker provider detail: %v", err)
+	}
+	if got := executor.StreamModels(); len(got) != 2 {
+		t.Fatalf("stream calls = %v, want both auths attempted once", got)
+	}
+}
+
+func TestManagerMarkResult_CanonicalizesThinkingSuffixCooldown(t *testing.T) {
+	model := "gpt-5.4"
+	requestedModel := "gpt-5.4(high)"
+	authID := "pool-auth-" + t.Name()
+	m := NewManager(nil, nil, nil)
+	m.RegisterExecutor(&authScopedOpenAICompatPoolExecutor{id: "pool"})
+
+	reg := registry.GetGlobalRegistry()
+	reg.RegisterClient(authID, "pool", []*registry.ModelInfo{{ID: model}})
+	t.Cleanup(func() {
+		reg.UnregisterClient(authID)
+	})
+
+	auth := &Auth{
+		ID:       authID,
+		Provider: "pool",
+		Status:   StatusActive,
+	}
+	if _, err := m.Register(context.Background(), auth); err != nil {
+		t.Fatalf("register auth: %v", err)
+	}
+
+	retryAfter := 5 * time.Minute
+	m.MarkResult(context.Background(), Result{
+		AuthID:     authID,
+		Provider:   "pool",
+		Model:      requestedModel,
+		Success:    false,
+		RetryAfter: &retryAfter,
+		Error:      &Error{HTTPStatus: http.StatusTooManyRequests, Message: "rate limited"},
+	})
+
+	updated, ok := m.GetByID(authID)
+	if !ok || updated == nil {
+		t.Fatalf("expected auth to remain registered")
+	}
+	if state := updated.ModelStates[model]; state == nil || !state.Unavailable || state.NextRetryAfter.IsZero() {
+		t.Fatalf("base model state = %+v, want cooldown", state)
+	}
+	if state := updated.ModelStates[requestedModel]; state != nil {
+		t.Fatalf("unexpected suffixed model state: %+v", state)
+	}
+	_, _, _, err := m.pickNextMixed(context.Background(), []string{"pool"}, model, cliproxyexecutor.Options{}, nil)
+	if err == nil {
+		t.Fatal("pickNextMixed error = nil, want cooldown")
+	}
+	var cooldownErr *modelCooldownError
+	if !errors.As(err, &cooldownErr) {
+		t.Fatalf("pickNextMixed error = %T %v, want modelCooldownError", err, err)
 	}
 }
