@@ -917,6 +917,11 @@ func (s *Server) registerManagementRoutes() {
 		adminMgmt.PUT("/openai-compatibility", s.mgmt.PutOpenAICompat)
 		adminMgmt.PATCH("/openai-compatibility", s.mgmt.PatchOpenAICompat)
 		adminMgmt.DELETE("/openai-compatibility", s.mgmt.DeleteOpenAICompat)
+		adminMgmt.GET("/codex-workers", s.mgmt.ListCodexWorkers)
+		adminMgmt.POST("/codex-workers/:id/container", s.mgmt.ControlCodexWorkerContainer)
+		adminMgmt.PUT("/codex-workers/:id/proxy", s.mgmt.UpdateCodexWorkerProxy)
+		adminMgmt.GET("/codex-workers/:id/auth-file", s.mgmt.DownloadCodexWorkerAuthFile)
+		adminMgmt.PUT("/codex-workers/:id/auth-file", s.mgmt.SaveCodexWorkerAuthFile)
 
 		adminMgmt.GET("/vertex-api-key", s.mgmt.GetVertexCompatKeys)
 		adminMgmt.PUT("/vertex-api-key", s.mgmt.PutVertexCompatKeys)
