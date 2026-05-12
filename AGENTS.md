@@ -3,6 +3,8 @@
 - 我们项目的源后端：`/Users/taylor/code/tools/CLIProxyAPI-ori`
 - 我们项目的源前端：`/Users/taylor/code/tools/Cli-Proxy-API-Management-Center-ori`
 - 管理端 UI 工作只改源前端；不要把后端内置 `/management.html` 当成主程序管理前端。
+- 生产管理端前端入口是主程序 VPS `204.168.245.138` 上的 `/root/cliapp/Cli-Proxy-API-Management-Center`，由该目录内独立 Caddy 进程在 `127.0.0.1:5173` 服务 `dist/index.html`，系统 Caddy `/etc/caddy/Caddyfile` 的 `admin.claudepool.com` 再反代到 `127.0.0.1:5173`。
+- `/root/cliapp/CLIProxyAPI/static/management.html` 是后端内置旧管理页资产，不是主程序管理前端；生产域名上的 `/management.html` 应重定向到 `admin.claudepool.com` 新前端，避免看到旧 UI。
 - 迁移来源后端：`/Users/taylor/code/tools/CLIProxyAPI`
 - 迁移来源前端：`/Users/taylor/code/tools/Cli-Proxy-API-Management-Center`
 - 凡是需要查询数据库，默认使用当前仓库 `.env` 中配置的数据库连接；除非任务明确指定其他连接，否则不要自行切换到别的库。
