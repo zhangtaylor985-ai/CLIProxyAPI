@@ -65,3 +65,15 @@ func TestLongContextPremiumInputThresholdTokens_UsesInputThreshold(t *testing.T)
 		t.Fatalf("gpt-5.5 window = %d, want 272000", got)
 	}
 }
+
+func TestResolveDefaultPrice_CoversCodexAliasesUsedByWorkers(t *testing.T) {
+	for _, model := range []string{"codex-auto-review", "gpt-5.4-mini"} {
+		price, ok := ResolveDefaultPrice(model)
+		if !ok {
+			t.Fatalf("expected default price for %s", model)
+		}
+		if price.Prompt == 0 || price.Completion == 0 || price.Cached == 0 {
+			t.Fatalf("incomplete default price for %s: %+v", model, price)
+		}
+	}
+}
