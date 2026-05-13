@@ -71,6 +71,22 @@ auth isolation key + base model + 会话/用户身份
 
 这就是“worker 失败才切换，切换后接受 cache 损失”的实现方式。
 
+## 滚动缓存策略
+
+长会话不能永远只用同一个 prompt cache key。否则第一次命中的稳定前缀可能只有早期的十几 K token，后续会话继续增长时，新增的大段历史不会自动进入更大的缓存层，表现为 `input_tokens` 持续上涨，但 `cached_tokens` 长时间停在同一个数值。
+
+当前 Claude 到 Codex 路径使用滚动缓存：
+
+- 同一个会话仍然固定在同一个 worker 上。
+- 同一个缓存层仍然按 `auth isolation key + base model + 会话/用户身份` 隔离。
+- 初始请求使用第 0 代 cache key。
+- 只有当上游已经返回过 `cached_tokens > 0`，说明当前 cache key 已经真正命中过，才允许滚动升级。
+- 当 `input_tokens + cached_tokens` 相比上一次滚动点增长超过约 `16k` token 时，生成下一代 cache key。
+- 低于阈值时继续复用当前 cache key，避免频繁换 key 造成缓存还没暖好就失效。
+- 如果 worker 失败并切换，新 worker 会重新从自己的缓存层开始，旧 worker 的缓存不跨 auth 复用。
+
+这套策略的目标是让长会话逐步把更长的稳定前缀放进缓存，而不是永远只省最早一小段 token。它不会让每一轮立刻都满命中；升级新 cache key 后需要后续请求把新一代缓存暖起来。
+
 ## 冷却策略
 
 Codex worker provider 使用整 worker/auth 级冷却，而不是单模型冷却。
@@ -91,6 +107,7 @@ Codex worker provider 使用整 worker/auth 级冷却，而不是单模型冷却
 1. 同一会话频繁切 worker，导致 prompt cache 命中率下降。
 2. 某个 worker 已经失败或冷却，却继续接其他模型名请求，导致线上出现连续失败。
 3. 不同 worker/auth 之间误共享 prompt cache key 或 Conversation ID，造成跨 auth 状态污染。
+4. 长会话只命中早期缓存层，后续输入越来越长但缓存 token 不继续增长。
 
 最终效果是：同一个会话稳定留在同一个可用 worker 上；worker 正常时尽量吃到 cache；worker 失败时及时切走，并明确接受这次 worker 切换带来的 cache 损失。
 
