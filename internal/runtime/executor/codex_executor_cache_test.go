@@ -67,6 +67,8 @@ func TestCodexExecutorCacheHelper_OpenAIChatCompletions_StablePromptCacheKeyFrom
 }
 
 func TestCodexExecutorCacheHelper_ClaudePromptCacheKeyIsScopedByAuth(t *testing.T) {
+	resetCodexCacheForTest(t)
+
 	executor := &CodexExecutor{}
 	rawJSON := []byte(`{"model":"gpt-5-codex","stream":true}`)
 	req := cliproxyexecutor.Request{
@@ -105,6 +107,8 @@ func TestCodexExecutorCacheHelper_ClaudePromptCacheKeyIsScopedByAuth(t *testing.
 }
 
 func TestCodexExecutorCacheHelper_ClaudePromptCacheKeyUsesBaseModel(t *testing.T) {
+	resetCodexCacheForTest(t)
+
 	executor := &CodexExecutor{}
 	rawJSON := []byte(`{"model":"gpt-5.4","stream":true}`)
 	url := "https://example.com/responses"
@@ -150,6 +154,98 @@ func TestCodexExecutorCacheHelper_ClaudePromptCacheKeyUsesBaseModel(t *testing.T
 	}
 }
 
+func TestCodexExecutorCacheHelper_ClaudeRollingPromptCacheAdvancesAfterCachedGrowth(t *testing.T) {
+	resetCodexCacheForTest(t)
+
+	executor := &CodexExecutor{}
+	rawJSON := []byte(`{"model":"gpt-5.4","stream":true}`)
+	url := "https://example.com/responses"
+	auth := &cliproxyauth.Auth{ID: "codex-rolling", Provider: "codex", ProxyURL: "http://127.0.0.1:18081"}
+	req := cliproxyexecutor.Request{
+		Model:   "gpt-5.4(high)",
+		Payload: []byte(`{"metadata":{"user_id":"rolling-cache-user"}}`),
+	}
+	scope := codexClaudePromptCacheScope(auth, req.Model, req.Payload)
+	if scope == "" {
+		t.Fatal("expected non-empty rolling cache scope")
+	}
+
+	firstReq, err := executor.cacheHelper(context.Background(), auth, sdktranslator.FromString("claude"), url, req, rawJSON)
+	if err != nil {
+		t.Fatalf("cacheHelper first: %v", err)
+	}
+	key0 := promptCacheKeyFromRequest(t, firstReq)
+
+	observeCodexRollingCacheUsage(scope, 33859, 0)
+	secondReq, err := executor.cacheHelper(context.Background(), auth, sdktranslator.FromString("claude"), url, req, rawJSON)
+	if err != nil {
+		t.Fatalf("cacheHelper second: %v", err)
+	}
+	if keyAfterMiss := promptCacheKeyFromRequest(t, secondReq); keyAfterMiss != key0 {
+		t.Fatalf("cache key changed after uncached usage: got %q want %q", keyAfterMiss, key0)
+	}
+
+	observeCodexRollingCacheUsage(scope, 15808, 18432)
+	thirdReq, err := executor.cacheHelper(context.Background(), auth, sdktranslator.FromString("claude"), url, req, rawJSON)
+	if err != nil {
+		t.Fatalf("cacheHelper third: %v", err)
+	}
+	key1 := promptCacheKeyFromRequest(t, thirdReq)
+	if key1 == "" || key1 == key0 {
+		t.Fatalf("expected rolling cache key to advance after cached growth, key0=%q key1=%q", key0, key1)
+	}
+
+	observeCodexRollingCacheUsage(scope, 20000, 18432)
+	fourthReq, err := executor.cacheHelper(context.Background(), auth, sdktranslator.FromString("claude"), url, req, rawJSON)
+	if err != nil {
+		t.Fatalf("cacheHelper fourth: %v", err)
+	}
+	if keyBelowStep := promptCacheKeyFromRequest(t, fourthReq); keyBelowStep != key1 {
+		t.Fatalf("cache key changed below rolling step: got %q want %q", keyBelowStep, key1)
+	}
+
+	observeCodexRollingCacheUsage(scope, 33000, 18432)
+	fifthReq, err := executor.cacheHelper(context.Background(), auth, sdktranslator.FromString("claude"), url, req, rawJSON)
+	if err != nil {
+		t.Fatalf("cacheHelper fifth: %v", err)
+	}
+	key2 := promptCacheKeyFromRequest(t, fifthReq)
+	if key2 == "" || key2 == key1 || key2 == key0 {
+		t.Fatalf("expected second rolling cache advance, key0=%q key1=%q key2=%q", key0, key1, key2)
+	}
+}
+
+func TestCodexWebsocketPromptCacheHeaders_UseRollingClaudeCacheState(t *testing.T) {
+	resetCodexCacheForTest(t)
+
+	auth := &cliproxyauth.Auth{ID: "codex-ws-rolling", Provider: "codex", ProxyURL: "http://127.0.0.1:18081"}
+	req := cliproxyexecutor.Request{
+		Model:   "gpt-5.4(medium)",
+		Payload: []byte(`{"metadata":{"user_id":"rolling-cache-ws-user"}}`),
+	}
+	rawJSON := []byte(`{"model":"gpt-5.4","stream":true}`)
+	scope := codexClaudePromptCacheScope(auth, req.Model, req.Payload)
+	if scope == "" {
+		t.Fatal("expected non-empty websocket rolling cache scope")
+	}
+
+	body0, headers0 := applyCodexPromptCacheHeaders(auth, sdktranslator.FromString("claude"), req, rawJSON)
+	key0 := gjson.GetBytes(body0, "prompt_cache_key").String()
+	if key0 == "" || headers0.Get("Conversation_id") != key0 || headers0.Get("Session_id") != key0 {
+		t.Fatalf("unexpected initial websocket cache key/body/header: key=%q headers=%v", key0, headers0)
+	}
+
+	observeCodexRollingCacheUsage(scope, 24000, 18432)
+	body1, headers1 := applyCodexPromptCacheHeaders(auth, sdktranslator.FromString("claude"), req, rawJSON)
+	key1 := gjson.GetBytes(body1, "prompt_cache_key").String()
+	if key1 == "" || key1 == key0 {
+		t.Fatalf("expected websocket cache key to advance, key0=%q key1=%q", key0, key1)
+	}
+	if headers1.Get("Conversation_id") != key1 || headers1.Get("Session_id") != key1 {
+		t.Fatalf("websocket headers did not use rolling key: key=%q headers=%v", key1, headers1)
+	}
+}
+
 func promptCacheKeyFromRequest(t *testing.T, req *http.Request) string {
 	t.Helper()
 	body, err := io.ReadAll(req.Body)
@@ -157,4 +253,11 @@ func promptCacheKeyFromRequest(t *testing.T, req *http.Request) string {
 		t.Fatalf("read request body: %v", err)
 	}
 	return gjson.GetBytes(body, "prompt_cache_key").String()
+}
+
+func resetCodexCacheForTest(t *testing.T) {
+	t.Helper()
+	codexCacheMu.Lock()
+	codexCacheMap = make(map[string]codexCache)
+	codexCacheMu.Unlock()
 }

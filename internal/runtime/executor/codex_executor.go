@@ -252,6 +252,9 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 			terminalState.Observe(data)
 			if detail, ok := parseCodexUsage(data); ok {
 				reporter.publish(ctx, detail)
+				if from == "claude" {
+					observeCodexClaudeRollingCacheUsage(auth, req.Model, req.Payload, detail.InputTokens, detail.CachedTokens)
+				}
 			}
 			patchedData := patchCodexCompletedOutput(data, outputItemsByIndex, outputItemsFallback)
 			if !bytes.Equal(patchedData, data) {
@@ -355,7 +358,11 @@ func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.A
 		return resp, err
 	}
 	appendAPIResponseChunk(ctx, e.cfg, data)
-	reporter.publish(ctx, parseOpenAIUsage(data))
+	compactUsage := parseOpenAIUsage(data)
+	reporter.publish(ctx, compactUsage)
+	if from == "claude" {
+		observeCodexClaudeRollingCacheUsage(auth, req.Model, req.Payload, compactUsage.InputTokens, compactUsage.CachedTokens)
+	}
 	reporter.ensurePublished(ctx)
 	var param any
 	out := sdktranslator.TranslateNonStream(ctx, to, from, req.Model, originalPayload, body, data, &param)
@@ -483,6 +490,9 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 				case "response.completed", "response.done":
 					if detail, ok := parseCodexUsage(data); ok {
 						reporter.publish(ctx, detail)
+						if from == "claude" {
+							observeCodexClaudeRollingCacheUsage(auth, req.Model, req.Payload, detail.InputTokens, detail.CachedTokens)
+						}
 					}
 					data = patchCodexCompletedOutput(data, outputItemsByIndex, outputItemsFallback)
 					translatedLine = append([]byte("data: "), data...)
@@ -851,17 +861,8 @@ func (e *CodexExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth) (*
 func (e *CodexExecutor) cacheHelper(ctx context.Context, auth *cliproxyauth.Auth, from sdktranslator.Format, url string, req cliproxyexecutor.Request, rawJSON []byte) (*http.Request, error) {
 	var cache codexCache
 	if from == "claude" {
-		userIDResult := gjson.GetBytes(req.Payload, "metadata.user_id")
-		if userIDResult.Exists() {
-			key := codexScopedCacheKey(auth, "claude", codexBaseModelCachePart(req.Model), userIDResult.String())
-			var ok bool
-			if cache, ok = getCodexCache(key); !ok {
-				cache = codexCache{
-					ID:     uuid.New().String(),
-					Expire: time.Now().Add(1 * time.Hour),
-				}
-				setCodexCache(key, cache)
-			}
+		if scope := codexClaudePromptCacheScope(auth, req.Model, req.Payload); scope != "" {
+			cache = getOrCreateCodexRollingCache(scope)
 		}
 	} else if from == "openai-response" {
 		promptCacheKey := gjson.GetBytes(req.Payload, "prompt_cache_key")
