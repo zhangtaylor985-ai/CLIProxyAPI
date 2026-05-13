@@ -39,7 +39,8 @@ func TestCodexExecutorCacheHelper_OpenAIChatCompletions_StablePromptCacheKeyFrom
 		t.Fatalf("read request body: %v", errRead)
 	}
 
-	expectedKey := uuid.NewSHA1(uuid.NameSpaceOID, []byte("cli-proxy-api:codex:prompt-cache:test-api-key")).String()
+	expectedScope := codexScopedCacheKey(nil, "openai", "gpt-5.3-codex", "test-api-key")
+	expectedKey := uuid.NewSHA1(uuid.NameSpaceOID, []byte("cli-proxy-api:codex:prompt-cache:"+expectedScope)).String()
 	gotKey := gjson.GetBytes(body, "prompt_cache_key").String()
 	if gotKey != expectedKey {
 		t.Fatalf("prompt_cache_key = %q, want %q", gotKey, expectedKey)
@@ -100,6 +101,52 @@ func TestCodexExecutorCacheHelper_ClaudePromptCacheKeyIsScopedByAuth(t *testing.
 	}
 	if keyA1 == keyB {
 		t.Fatalf("different auths shared prompt_cache_key %q", keyA1)
+	}
+}
+
+func TestCodexExecutorCacheHelper_ClaudePromptCacheKeyUsesBaseModel(t *testing.T) {
+	executor := &CodexExecutor{}
+	rawJSON := []byte(`{"model":"gpt-5.4","stream":true}`)
+	url := "https://example.com/responses"
+	auth := &cliproxyauth.Auth{ID: "codex-a", Provider: "codex", ProxyURL: "http://127.0.0.1:18081"}
+
+	reqHigh := cliproxyexecutor.Request{
+		Model:   "gpt-5.4(high)",
+		Payload: []byte(`{"metadata":{"user_id":"same-user-base-model-cache"}}`),
+	}
+	reqMedium := cliproxyexecutor.Request{
+		Model:   "gpt-5.4(medium)",
+		Payload: []byte(`{"metadata":{"user_id":"same-user-base-model-cache"}}`),
+	}
+	reqDifferentBase := cliproxyexecutor.Request{
+		Model:   "gpt-5.3-codex(high)",
+		Payload: []byte(`{"metadata":{"user_id":"same-user-base-model-cache"}}`),
+	}
+
+	httpReqHigh, err := executor.cacheHelper(context.Background(), auth, sdktranslator.FromString("claude"), url, reqHigh, rawJSON)
+	if err != nil {
+		t.Fatalf("cacheHelper high error: %v", err)
+	}
+	httpReqMedium, err := executor.cacheHelper(context.Background(), auth, sdktranslator.FromString("claude"), url, reqMedium, rawJSON)
+	if err != nil {
+		t.Fatalf("cacheHelper medium error: %v", err)
+	}
+	httpReqDifferentBase, err := executor.cacheHelper(context.Background(), auth, sdktranslator.FromString("claude"), url, reqDifferentBase, rawJSON)
+	if err != nil {
+		t.Fatalf("cacheHelper different base error: %v", err)
+	}
+
+	keyHigh := promptCacheKeyFromRequest(t, httpReqHigh)
+	keyMedium := promptCacheKeyFromRequest(t, httpReqMedium)
+	keyDifferentBase := promptCacheKeyFromRequest(t, httpReqDifferentBase)
+	if keyHigh == "" || keyDifferentBase == "" {
+		t.Fatalf("expected non-empty cache keys, got high=%q different=%q", keyHigh, keyDifferentBase)
+	}
+	if keyHigh != keyMedium {
+		t.Fatalf("same base model cache key changed: high=%q medium=%q", keyHigh, keyMedium)
+	}
+	if keyHigh == keyDifferentBase {
+		t.Fatalf("different base models shared prompt_cache_key %q", keyHigh)
 	}
 }
 

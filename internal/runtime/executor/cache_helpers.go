@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/thinking"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 )
 
@@ -137,4 +138,16 @@ func codexScopedCacheKey(auth *cliproxyauth.Auth, parts ...string) string {
 		keyParts = append(keyParts, trimmed)
 	}
 	return strings.Join(keyParts, "\x00")
+}
+
+func codexBaseModelCachePart(model string) string {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return ""
+	}
+	parsed := thinking.ParseSuffix(model)
+	if base := strings.TrimSpace(parsed.ModelName); base != "" {
+		return base
+	}
+	return model
 }

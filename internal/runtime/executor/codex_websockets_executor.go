@@ -776,7 +776,7 @@ func applyCodexPromptCacheHeaders(auth *cliproxyauth.Auth, from sdktranslator.Fo
 	if from == "claude" {
 		userIDResult := gjson.GetBytes(req.Payload, "metadata.user_id")
 		if userIDResult.Exists() {
-			key := codexScopedCacheKey(auth, "claude", req.Model, userIDResult.String())
+			key := codexScopedCacheKey(auth, "claude", codexBaseModelCachePart(req.Model), userIDResult.String())
 			if cached, ok := getCodexCache(key); ok {
 				cache = cached
 			} else {

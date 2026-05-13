@@ -787,6 +787,124 @@ func TestManagerMarkResult_EmptyStreamDegradesAfterConsecutiveFailures(t *testin
 	}
 }
 
+func TestManagerMarkResult_CodexWorkerCooldownAppliesToWholeAuth(t *testing.T) {
+	provider := "codex-worker02-haoran"
+	authID := provider + "-auth"
+	model := "gpt-5.4"
+	otherModel := "gpt-5.3-codex"
+
+	m := NewManager(nil, nil, nil)
+	m.RegisterExecutor(&authScopedOpenAICompatPoolExecutor{id: provider})
+
+	reg := registry.GetGlobalRegistry()
+	reg.RegisterClient(authID, provider, []*registry.ModelInfo{{ID: model}, {ID: otherModel}})
+	t.Cleanup(func() {
+		reg.UnregisterClient(authID)
+	})
+
+	auth := &Auth{
+		ID:       authID,
+		Provider: provider,
+		Status:   StatusActive,
+		Attributes: map[string]string{
+			"api_key":      "worker-key",
+			"compat_name":  provider,
+			"provider_key": provider,
+		},
+	}
+	if _, err := m.Register(context.Background(), auth); err != nil {
+		t.Fatalf("register auth: %v", err)
+	}
+
+	retryAfter := 10 * time.Minute
+	m.MarkResult(context.Background(), Result{
+		AuthID:     authID,
+		Provider:   provider,
+		Model:      model,
+		Success:    false,
+		RetryAfter: &retryAfter,
+		Error:      &Error{HTTPStatus: http.StatusTooManyRequests, Message: "worker cooling down"},
+	})
+
+	updated, ok := m.GetByID(authID)
+	if !ok || updated == nil {
+		t.Fatalf("expected auth after cooldown")
+	}
+	if !updated.Unavailable || !updated.NextRetryAfter.After(time.Now()) {
+		t.Fatalf("auth state = %+v, want whole auth cooldown", updated)
+	}
+	if len(updated.ModelStates) != 0 {
+		t.Fatalf("codex worker should not keep model-scoped states, got %+v", updated.ModelStates)
+	}
+
+	_, _, err := m.pickNext(context.Background(), provider, otherModel, cliproxyexecutor.Options{}, nil)
+	if err == nil {
+		t.Fatal("pickNext for other model error = nil, want cooldown")
+	}
+	var cooldownErr *modelCooldownError
+	if !errors.As(err, &cooldownErr) {
+		t.Fatalf("pickNext error = %T %v, want modelCooldownError", err, err)
+	}
+}
+
+func TestManagerMarkResult_CodexWorkerInFlightSuccessDoesNotClearActiveCooldown(t *testing.T) {
+	provider := "codex-worker05-taylor"
+	authID := provider + "-auth"
+	model := "gpt-5.4"
+
+	m := NewManager(nil, nil, nil)
+	m.RegisterExecutor(&authScopedOpenAICompatPoolExecutor{id: provider})
+
+	reg := registry.GetGlobalRegistry()
+	reg.RegisterClient(authID, provider, []*registry.ModelInfo{{ID: model}})
+	t.Cleanup(func() {
+		reg.UnregisterClient(authID)
+	})
+
+	auth := &Auth{
+		ID:       authID,
+		Provider: provider,
+		Status:   StatusActive,
+		Attributes: map[string]string{
+			"api_key":      "worker-key",
+			"compat_name":  provider,
+			"provider_key": provider,
+		},
+	}
+	if _, err := m.Register(context.Background(), auth); err != nil {
+		t.Fatalf("register auth: %v", err)
+	}
+
+	retryAfter := time.Minute
+	m.MarkResult(context.Background(), Result{
+		AuthID:     authID,
+		Provider:   provider,
+		Model:      model,
+		Success:    false,
+		RetryAfter: &retryAfter,
+		Error:      &Error{HTTPStatus: http.StatusServiceUnavailable, Message: "upstream stream closed before first payload"},
+	})
+	cooled, ok := m.GetByID(authID)
+	if !ok || cooled == nil || !cooled.Unavailable || !cooled.NextRetryAfter.After(time.Now()) {
+		t.Fatalf("cooled auth = %+v, want active cooldown", cooled)
+	}
+	cooldownUntil := cooled.NextRetryAfter
+
+	m.MarkResult(context.Background(), Result{
+		AuthID:   authID,
+		Provider: provider,
+		Model:    model,
+		Success:  true,
+	})
+	afterSuccess, ok := m.GetByID(authID)
+	if !ok || afterSuccess == nil {
+		t.Fatalf("expected auth after in-flight success")
+	}
+	if !afterSuccess.Unavailable || !afterSuccess.NextRetryAfter.Equal(cooldownUntil) {
+		t.Fatalf("in-flight success cleared cooldown: %+v want until %v", afterSuccess, cooldownUntil)
+	}
+}
+
 func TestManagerExecute_OpenAICompatAliasPoolSkipsSuspendedUpstreamOnLaterRequests(t *testing.T) {
 	alias := "claude-opus-4.66"
 	modelSupportErr := &Error{

@@ -383,6 +383,27 @@ func isOpenAICompatAPIKeyAuth(auth *Auth) bool {
 	return strings.TrimSpace(auth.Attributes["compat_name"]) != ""
 }
 
+func isCodexWorkerAuth(auth *Auth) bool {
+	if auth == nil {
+		return false
+	}
+	matches := func(value string) bool {
+		value = strings.ToLower(strings.TrimSpace(value))
+		return strings.HasPrefix(value, "codex-worker")
+	}
+	if matches(auth.ID) || matches(auth.Provider) || matches(auth.Label) {
+		return true
+	}
+	if auth.Attributes == nil {
+		return false
+	}
+	return matches(auth.Attributes["compat_name"]) || matches(auth.Attributes["provider_key"])
+}
+
+func wholeAuthCooldownApplies(auth *Auth) bool {
+	return isCodexWorkerAuth(auth)
+}
+
 func providerHealthPolicyApplies(auth *Auth) bool {
 	return isAPIKeyAuth(auth)
 }
@@ -2461,9 +2482,19 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 	m.mu.Lock()
 	if auth, ok := m.auths[result.AuthID]; ok && auth != nil {
 		now := time.Now()
+		wholeAuthCooldown := wholeAuthCooldownApplies(auth)
 
 		if result.Success {
-			if resultModelKey != "" {
+			if wholeAuthCooldown {
+				if auth.Unavailable && auth.NextRetryAfter.After(now) {
+					auth.UpdatedAt = now
+				} else {
+					clearAuthStateOnSuccess(auth, now)
+					auth.ModelStates = nil
+					shouldResumeModel = resultModelKey != ""
+					clearModelQuota = resultModelKey != ""
+				}
+			} else if resultModelKey != "" {
 				state := ensureModelState(auth, resultModelKey)
 				wasDegraded := wasProviderDegraded(state)
 				recoveredFromCooldown := providerHealthCooldownForBackoffLevel(state.Health.BackoffLevel)
@@ -2503,7 +2534,15 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 				clearAuthStateOnSuccess(auth, now)
 			}
 		} else {
-			if resultModelKey != "" {
+			if wholeAuthCooldown {
+				applyAuthFailureState(auth, result.Error, result.RetryAfter, now)
+				auth.ModelStates = nil
+				shouldSuspendModel = resultModelKey != ""
+				suspendReason = authSuspendReasonFromStatus(auth.StatusMessage)
+				if auth.Quota.Exceeded {
+					setModelQuota = resultModelKey != ""
+				}
+			} else if resultModelKey != "" {
 				state := ensureModelState(auth, resultModelKey)
 				state.Unavailable = true
 				state.Status = StatusError
@@ -3041,6 +3080,23 @@ func applyAuthFailureState(auth *Auth, resultErr *Error, retryAfter *time.Durati
 		if auth.StatusMessage == "" {
 			auth.StatusMessage = "request failed"
 		}
+	}
+}
+
+func authSuspendReasonFromStatus(status string) string {
+	switch strings.TrimSpace(status) {
+	case "quota exhausted":
+		return "quota"
+	case "unauthorized":
+		return "unauthorized"
+	case "payment_required", "account_deactivated":
+		return "payment_required"
+	case "not_found":
+		return "not_found"
+	case "transient upstream error":
+		return "transient"
+	default:
+		return "auth_unavailable"
 	}
 }
 
