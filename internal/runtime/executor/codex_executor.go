@@ -853,7 +853,7 @@ func (e *CodexExecutor) cacheHelper(ctx context.Context, auth *cliproxyauth.Auth
 	if from == "claude" {
 		userIDResult := gjson.GetBytes(req.Payload, "metadata.user_id")
 		if userIDResult.Exists() {
-			key := codexScopedCacheKey(auth, "claude", req.Model, userIDResult.String())
+			key := codexScopedCacheKey(auth, "claude", codexBaseModelCachePart(req.Model), userIDResult.String())
 			var ok bool
 			if cache, ok = getCodexCache(key); !ok {
 				cache = codexCache{
@@ -870,10 +870,7 @@ func (e *CodexExecutor) cacheHelper(ctx context.Context, auth *cliproxyauth.Auth
 		}
 	} else if from == "openai" {
 		if apiKey := strings.TrimSpace(apiKeyFromContext(ctx)); apiKey != "" {
-			cacheScope := apiKey
-			if codexAuthIsolationKey(auth) != "" {
-				cacheScope = codexScopedCacheKey(auth, "openai", apiKey)
-			}
+			cacheScope := codexScopedCacheKey(auth, "openai", codexBaseModelCachePart(req.Model), apiKey)
 			cache.ID = uuid.NewSHA1(uuid.NameSpaceOID, []byte("cli-proxy-api:codex:prompt-cache:"+cacheScope)).String()
 		}
 	}

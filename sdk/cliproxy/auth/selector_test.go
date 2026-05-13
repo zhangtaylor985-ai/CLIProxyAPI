@@ -552,6 +552,36 @@ func TestSessionAffinitySelector_SameSessionSameAuth(t *testing.T) {
 	}
 }
 
+func TestSessionAffinitySelector_SameSessionDifferentModelSameAuth(t *testing.T) {
+	t.Parallel()
+
+	fallback := &RoundRobinSelector{}
+	selector := NewSessionAffinitySelectorWithConfig(SessionAffinityConfig{
+		Fallback: fallback,
+		TTL:      time.Minute,
+	})
+	defer selector.Stop()
+
+	auths := []*Auth{
+		{ID: "auth-a"},
+		{ID: "auth-b"},
+	}
+	payload := []byte(`{"metadata":{"user_id":"user_xxx_account__session_same-session-different-model"}}`)
+	opts := cliproxyexecutor.Options{OriginalRequest: payload}
+
+	first, err := selector.Pick(context.Background(), "codex-worker02", "gpt-5.4(high)", opts, auths)
+	if err != nil {
+		t.Fatalf("Pick() first error = %v", err)
+	}
+	second, err := selector.Pick(context.Background(), "codex-worker02", "gpt-5.4(medium)", opts, auths)
+	if err != nil {
+		t.Fatalf("Pick() second error = %v", err)
+	}
+	if first.ID != second.ID {
+		t.Fatalf("same session switched auth across model suffixes: first=%q second=%q", first.ID, second.ID)
+	}
+}
+
 func TestSessionAffinitySelector_NoSessionFallback(t *testing.T) {
 	t.Parallel()
 

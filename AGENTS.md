@@ -73,6 +73,7 @@
 - 恢复生产时不要擅自把 `claude-to-gpt-target-family` 从 `gpt-5.4` 切到其它模型族；worker 冷却应由调度/冷却逻辑处理，临时改模型只允许在用户明确批准后执行。
 - `cc2` 真实黑盒口径：`cc2` 等价于 `CLAUDE_CONFIG_DIR=~/.claude_cc claude2 --dangerously-skip-permissions`，其配置指向 `https://cc.claudepool.com/`。2026-05-11 回归命令使用 `~/.claude_cc` 和 `~/.local/bin/claude2 --debug-file`，最小提示 `Reply with exactly WORKER56_OK`，结果返回 `WORKER56_OK`，debug log 证实命中 `/v1/messages` 并收到首个 stream chunk。
 - 2026-05-12 已上线 `empty_stream before first payload` 稳定性修复：单个 worker/模型在首包前空流时先做一次短 jitter 重试；连续空流才进入短暂 provider degraded 冷却，避免一次毛刺就永久下线好 worker，同时避免坏 worker 持续坑用户。第二次补丁覆盖“stream 已建立但第一条 chunk 就是 `upstream stream closed before first payload` 错误”的路径。上线后观察口径：`journalctl -u cliproxyapi.service --since '10 minutes ago' --no-pager | rg 'empty_stream|suppressing raw upstream error|/v1/messages'`。
+- Codex worker、会话绑定、prompt cache 与整 worker 冷却策略详见：`docs/codex-worker-cache-cooldown_CN.md`。
 
 # 文档入口
 
