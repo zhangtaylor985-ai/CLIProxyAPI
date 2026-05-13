@@ -34,6 +34,7 @@
 - 若 `stash apply` 因远端新增同名文件导致 untracked 文件无法恢复，必须逐个比较 stash 内容与当前文件；确认内容一致后才可删除临时 stash，否则保留 stash 并向用户说明冲突文件。
 - 在临时 worktree 推送到 `main` 后，原始目录不会自动更新；回到 `/Users/taylor/code/tools/CLIProxyAPI-ori` 前，先保护该目录未提交现场，再 `git fetch origin main && git pull --ff-only` 或等价安全流程同步。
 - 一个完整任务闭环默认包含：新建/同步 worktree、记录计划或进度、实现、定向测试、必要黑盒、全量回归、fetch/rebase 到最新主线、只 stage 本任务文件、提交、push、回到主目录同步、按需部署、观察、最后清理临时 worktree。
+- 线上发布固定顺序：先在本地/发布 worktree 完成上线前回归测试，再通过 GitHub 主线发布和线上 `git pull --ff-only` 部署，最后观察线上 systemd 日志和真实 smoke 结果；不要跳过“先回归、再上线、再观察”。
 - 临时 worktree 完成任务并确认生产发布与观察无回滚需求后再删除；删除前确认其中没有唯一的 debug 证据、未提交补丁或需保留 artifacts。清理可用 `git worktree remove <path>`，必要时再 `git worktree prune`。
 
 # 部署与 systemd

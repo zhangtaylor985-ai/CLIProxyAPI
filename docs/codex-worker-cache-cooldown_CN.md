@@ -17,7 +17,16 @@
 
 ## 会话绑定策略
 
-主程序启用 session affinity 后，会从请求里提取会话身份，例如：
+主程序必须启用 session affinity，才能让同一会话稳定落到同一个 worker。生产配置应包含：
+
+```yaml
+routing:
+  strategy: "round-robin"
+  session-affinity: true
+  session-affinity-ttl: "1h"
+```
+
+启用后，主程序会从请求里提取会话身份，例如：
 
 - Claude Code 的 `metadata.user_id`
 - 显式 `X-Session-ID`
@@ -33,6 +42,8 @@ provider + session_id
 这里不包含模型名。原因是同一个会话在不同轮次可能会出现 `gpt-5.4(high)`、`gpt-5.4(medium)` 这类模型后缀变化，但仍然应该尽量留在同一个 worker 上，避免无意义切换。
 
 如果已绑定的 worker 进入冷却或不可用，调度器会选择新的可用 worker，并把这个会话重新绑定到新 worker。
+
+如果没有启用 `routing.session-affinity`，请求会继续按普通轮询分散到多个 worker。由于 prompt cache 又按 worker/auth 隔离，同一客户的连续请求就会跨 worker 打散，表现为缓存命中率低、输入 token 成本偏高。
 
 ## Prompt Cache 策略
 
@@ -83,3 +94,9 @@ Codex worker provider 使用整 worker/auth 级冷却，而不是单模型冷却
 
 最终效果是：同一个会话稳定留在同一个可用 worker 上；worker 正常时尽量吃到 cache；worker 失败时及时切走，并明确接受这次 worker 切换带来的 cache 损失。
 
+## 观测口径
+
+- 检查主程序配置：`routing.session-affinity` 必须为 `true`。
+- 检查日志：开启后应能看到 `session-affinity: cache hit`、`cache miss, new binding` 或 `cache hit but auth unavailable, reselected`。
+- 检查单个客户用量：同一会话的成功请求应主要集中在一个 worker；只有 worker 冷却或失败时才切到其他 worker。
+- 检查缓存命中：`cached_tokens / input_tokens` 应随同一会话连续请求逐步上升；若请求分散到多个 worker，命中率通常会偏低。

@@ -219,6 +219,8 @@ routing:
   # Session IDs are extracted from: X-Session-ID header, Idempotency-Key,
   # metadata.user_id, conversation_id, or first few messages hash.
   # Automatic failover is always enabled when bound auth becomes unavailable.
+  # Codex worker deployments should set this to true, otherwise prompt cache
+  # is spread across workers and cache hit rate will be low.
   session-affinity: false # default: false
   # How long session-to-auth bindings are retained. Default: 1h
   session-affinity-ttl: "1h"
