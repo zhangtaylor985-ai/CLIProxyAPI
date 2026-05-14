@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
@@ -99,6 +101,7 @@ func (e *OpenAICompatExecutor) Execute(ctx context.Context, auth *cliproxyauth.A
 	translated := sdktranslator.TranslateRequest(from, to, baseModel, req.Payload, opts.Stream)
 	requestedModel := payloadRequestedModel(opts, req.Model)
 	translated = applyPayloadConfigWithRoot(e.cfg, baseModel, to.String(), "", translated, originalTranslated, requestedModel)
+	translated = e.applyCodexWorkerPromptCacheKey(ctx, auth, from, to, baseModel, originalPayload, translated)
 	if opts.Alt == "responses/compact" {
 		if updated, errDelete := sjson.DeleteBytes(translated, "stream"); errDelete == nil {
 			translated = updated
@@ -205,6 +208,7 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 	translated := sdktranslator.TranslateRequest(from, to, baseModel, req.Payload, true)
 	requestedModel := payloadRequestedModel(opts, req.Model)
 	translated = applyPayloadConfigWithRoot(e.cfg, baseModel, to.String(), "", translated, originalTranslated, requestedModel)
+	translated = e.applyCodexWorkerPromptCacheKey(ctx, auth, from, to, baseModel, originalPayload, translated)
 
 	translated, err = thinking.ApplyThinking(translated, req.Model, from.String(), to.String(), e.Identifier())
 	if err != nil {
@@ -416,6 +420,57 @@ func (e *OpenAICompatExecutor) resolveCredentials(auth *cliproxyauth.Auth) (base
 		apiKey = strings.TrimSpace(auth.Attributes["api_key"])
 	}
 	return
+}
+
+func (e *OpenAICompatExecutor) applyCodexWorkerPromptCacheKey(ctx context.Context, auth *cliproxyauth.Auth, from, to sdktranslator.Format, baseModel string, originalPayload, translated []byte) []byte {
+	if !e.isCodexWorkerProvider(auth) || from.String() != "claude" || to.String() != "openai" {
+		return translated
+	}
+	if gjson.GetBytes(translated, "prompt_cache_key").Exists() {
+		return translated
+	}
+	userID := strings.TrimSpace(gjson.GetBytes(originalPayload, "metadata.user_id").String())
+	if userID == "" {
+		return translated
+	}
+	apiKeyHash := ""
+	if apiKey := strings.TrimSpace(apiKeyFromContext(ctx)); apiKey != "" {
+		sum := sha256.Sum256([]byte(apiKey))
+		apiKeyHash = hex.EncodeToString(sum[:16])
+	}
+	scope := strings.Join([]string{
+		"claude",
+		strings.TrimSpace(baseModel),
+		apiKeyHash,
+		userID,
+	}, "\x00")
+	sum := sha256.Sum256([]byte(scope))
+	cacheKey := "cwpc_" + hex.EncodeToString(sum[:16])
+	translated, _ = sjson.SetBytes(translated, "prompt_cache_key", cacheKey)
+	return translated
+}
+
+func (e *OpenAICompatExecutor) isCodexWorkerProvider(auth *cliproxyauth.Auth) bool {
+	provider := strings.ToLower(strings.TrimSpace(e.provider))
+	if strings.HasPrefix(provider, "codex-worker") {
+		return true
+	}
+	if auth == nil {
+		return false
+	}
+	for _, value := range []string{auth.ID, auth.Label, auth.Provider} {
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(value)), "codex-worker") {
+			return true
+		}
+	}
+	if auth.Attributes != nil {
+		for _, key := range []string{"compat_name", "provider_key", "name"} {
+			if strings.HasPrefix(strings.ToLower(strings.TrimSpace(auth.Attributes[key])), "codex-worker") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (e *OpenAICompatExecutor) resolveCompatConfig(auth *cliproxyauth.Auth) *config.OpenAICompatibility {
