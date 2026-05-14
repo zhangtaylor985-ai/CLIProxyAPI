@@ -98,3 +98,34 @@
 当前本地验证：
 
 - `go test ./sdk/cliproxy/auth -run 'TestManagerMarkResult_CodexWorker|TestManagerExecuteStream_CodexWorker|TestManagerExecuteStream_RetriesEmptyStream|TestSessionAffinitySelector'`：通过。
+
+## 2026-05-14 第二阶段稳定性根因
+
+第一阶段整 worker/auth 冷却策略上线后，生产仍看到少量客户侧 `empty_stream before first payload`。继续对照请求 ID 与 provider 日志后确认：
+
+- 这些请求已经选到可用 worker，例如 `worker03`。
+- worker 侧有时不是用非 2xx HTTP 状态返回失败，而是先建立 `text/event-stream`，再在第一条 SSE `data:` 中返回 JSON 错误，例如 `{"error":{"message":"empty_stream: upstream stream closed before first payload"}}`。
+- 主程序 OpenAI-compatible executor 原先只在 HTTP 非 2xx 或 scanner IO 错误时返回 `StreamChunk.Err`。
+- 当错误藏在 200/SSE 的 `data:` 帧里时，主程序会把它当成普通流内容交给 translator/handler，导致上层 auth manager 无法执行既有的重试、冷却和 worker failover。
+
+长期修复策略：
+
+- 在 OpenAI-compatible streaming executor 中显式识别 SSE 错误帧。
+- 识别到 `data: {"error":...}` 或 `data: {"type":"error","error":...}` 时，转换成带 HTTP 状态语义的 executor error。
+- 该 error 保留原始 `empty_stream` 文案，使上层 `providerErrorToResultError` 能继续归类为首包空流。
+- 正常 `chat.completion.chunk` 和 `[DONE]` 不受影响。
+- 这样 worker 返回方式无论是非 2xx HTTP，还是 200/SSE 错误帧，都会走同一套生产调度策略：请求内 failover、auth-level transient health、连续失败短冷却、额度耗尽长冷却。
+
+新增本地验证：
+
+- `TestParseOpenAICompatStreamErrorFromErrorPayload`：覆盖 `data: {"error":...}`。
+- `TestParseOpenAICompatStreamErrorFromTypedErrorPayload`：覆盖 `data: {"type":"error","error":...}` 和状态码透传。
+- `TestParseOpenAICompatStreamErrorIgnoresNormalChunk`：确认普通 chunk / `[DONE]` 不被误判。
+- `TestOpenAICompatExecuteStreamErrorFrameEmitsChunkError`：用本地 `httptest` 模拟 worker 200/SSE 错误帧，确认 executor 输出 `StreamChunk.Err`，从而可被上层调度器重试和切换 worker。
+
+上线前回归：
+
+- `go test ./internal/runtime/executor ./sdk/cliproxy/auth -run 'TestParseOpenAICompatStreamError|TestOpenAICompatExecuteStreamErrorFrameEmitsChunkError|TestManagerExecuteStream_CodexWorkersFailOverToAvailableWorker|TestManagerExecuteStream_CodexWorker'`：通过。
+- `go test ./sdk/cliproxy/auth ./internal/runtime/executor ./internal/watcher/synthesizer ./internal/config`：通过。
+- `NO_PROXY=127.0.0.1,localhost,::1 no_proxy=127.0.0.1,localhost,::1 go test ./...`：通过。
+- 本地 Claude 客户端黑盒：`~/.local/bin/claude` + `~/.claude_local` + `http://127.0.0.1:53841` 已确认真实命中本地 `/v1/messages`；但本地配置不是生产 worker provider 拓扑，当前返回 503 供应不可用，因此只作为“客户端命中本地”证据，不作为 worker 生产可用性验收。生产 worker 验收以上线后 systemd 服务、生产日志与 worker provider 分布为准。

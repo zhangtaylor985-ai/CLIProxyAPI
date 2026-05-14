@@ -296,6 +296,13 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 				continue
 			}
 
+			if streamErr, ok := parseOpenAICompatStreamError(line); ok {
+				recordAPIResponseError(ctx, e.cfg, streamErr)
+				reporter.publishFailure(ctx)
+				out <- cliproxyexecutor.StreamChunk{Err: streamErr}
+				return
+			}
+
 			// OpenAI-compatible streams are SSE: lines typically prefixed with "data: ".
 			// Pass through translator; it yields one or more chunks for the target schema.
 			chunks := sdktranslator.TranslateStream(ctx, to, from, req.Model, opts.OriginalRequest, translated, bytes.Clone(line), &param)
@@ -312,6 +319,56 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 		reporter.ensurePublished(ctx)
 	}()
 	return &cliproxyexecutor.StreamResult{Headers: httpResp.Header.Clone(), Chunks: out}, nil
+}
+
+func parseOpenAICompatStreamError(line []byte) (error, bool) {
+	payload := bytes.TrimSpace(line)
+	if !bytes.HasPrefix(payload, []byte("data:")) {
+		return nil, false
+	}
+	payload = bytes.TrimSpace(bytes.TrimPrefix(payload, []byte("data:")))
+	if len(payload) == 0 || bytes.Equal(payload, []byte("[DONE]")) {
+		return nil, false
+	}
+
+	root := gjson.ParseBytes(payload)
+	errorNode := root.Get("error")
+	if !errorNode.Exists() {
+		return nil, false
+	}
+
+	rootType := root.Get("type").String()
+	objectType := root.Get("object").String()
+	if rootType != "" && rootType != "error" {
+		return nil, false
+	}
+	if rootType == "" && objectType != "" {
+		return nil, false
+	}
+
+	statusCode := int(firstPositiveGJSONInt(
+		root.Get("status"),
+		root.Get("status_code"),
+		errorNode.Get("status"),
+		errorNode.Get("status_code"),
+	))
+	if statusCode < 100 {
+		statusCode = http.StatusInternalServerError
+	}
+	return newOpenAICompatStatusErr(statusCode, nil, bytes.Clone(payload)), true
+}
+
+func firstPositiveGJSONInt(values ...gjson.Result) int64 {
+	for _, value := range values {
+		if !value.Exists() {
+			continue
+		}
+		n := value.Int()
+		if n > 0 {
+			return n
+		}
+	}
+	return 0
 }
 
 func (e *OpenAICompatExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
