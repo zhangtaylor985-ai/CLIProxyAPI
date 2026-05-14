@@ -115,6 +115,7 @@
 - 该 error 保留原始 `empty_stream` 文案，使上层 `providerErrorToResultError` 能继续归类为首包空流。
 - 正常 `chat.completion.chunk` 和 `[DONE]` 不受影响。
 - 这样 worker 返回方式无论是非 2xx HTTP，还是 200/SSE 错误帧，都会走同一套生产调度策略：请求内 failover、auth-level transient health、连续失败短冷却、额度耗尽长冷却。
+- 生产继续观察后发现，真实 auth id 形如 `openai-compatibility:codex-worker03-...`，旧 `isCodexWorkerAuth` 只匹配以 `codex-worker` 开头的字段，导致生产 worker 未进入整 auth 冷却策略。修复为识别字段中包含 `codex-worker` 的生产 auth id，并补单测覆盖。
 
 新增本地验证：
 
@@ -122,6 +123,7 @@
 - `TestParseOpenAICompatStreamErrorFromTypedErrorPayload`：覆盖 `data: {"type":"error","error":...}` 和状态码透传。
 - `TestParseOpenAICompatStreamErrorIgnoresNormalChunk`：确认普通 chunk / `[DONE]` 不被误判。
 - `TestOpenAICompatExecuteStreamErrorFrameEmitsChunkError`：用本地 `httptest` 模拟 worker 200/SSE 错误帧，确认 executor 输出 `StreamChunk.Err`，从而可被上层调度器重试和切换 worker。
+- `TestIsCodexWorkerAuthMatchesProductionOpenAICompatID`：覆盖生产真实 `openai-compatibility:codex-workerNN-...` auth id，确保整 worker/auth 冷却策略不会漏判。
 
 上线前回归：
 

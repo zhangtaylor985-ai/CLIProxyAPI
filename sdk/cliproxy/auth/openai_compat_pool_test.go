@@ -787,6 +787,53 @@ func TestManagerMarkResult_EmptyStreamDegradesAfterConsecutiveFailures(t *testin
 	}
 }
 
+func TestIsCodexWorkerAuthMatchesProductionOpenAICompatID(t *testing.T) {
+	tests := []struct {
+		name string
+		auth *Auth
+		want bool
+	}{
+		{
+			name: "production auth id",
+			auth: &Auth{
+				ID:       "openai-compatibility:codex-worker03-linxiaoyu:b7e48954f97e",
+				Provider: "openai-compatibility",
+			},
+			want: true,
+		},
+		{
+			name: "provider key attribute",
+			auth: &Auth{
+				ID:       "openai-compatibility:custom:b7e48954f97e",
+				Provider: "openai-compatibility",
+				Attributes: map[string]string{
+					"provider_key": "codex-worker06-qinyi",
+				},
+			},
+			want: true,
+		},
+		{
+			name: "ordinary openai compat",
+			auth: &Auth{
+				ID:       "openai-compatibility:openrouter:1234",
+				Provider: "openai-compatibility",
+				Attributes: map[string]string{
+					"provider_key": "openrouter",
+				},
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isCodexWorkerAuth(tt.auth); got != tt.want {
+				t.Fatalf("isCodexWorkerAuth() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestManagerMarkResult_CodexWorkerCooldownAppliesToWholeAuth(t *testing.T) {
 	provider := "codex-worker02-haoran"
 	authID := provider + "-auth"

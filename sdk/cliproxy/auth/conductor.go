@@ -389,7 +389,7 @@ func isCodexWorkerAuth(auth *Auth) bool {
 	}
 	matches := func(value string) bool {
 		value = strings.ToLower(strings.TrimSpace(value))
-		return strings.HasPrefix(value, "codex-worker")
+		return strings.Contains(value, "codex-worker")
 	}
 	if matches(auth.ID) || matches(auth.Provider) || matches(auth.Label) {
 		return true
