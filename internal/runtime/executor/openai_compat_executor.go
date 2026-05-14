@@ -87,6 +87,10 @@ func (e *OpenAICompatExecutor) Execute(ctx context.Context, auth *cliproxyauth.A
 	}
 
 	from := opts.SourceFormat
+	if e.shouldUseCodexWorkerClaudeDirect(auth, opts) {
+		return e.executeCodexWorkerClaudeDirect(ctx, auth, req, baseURL, apiKey, reporter, false)
+	}
+
 	to := sdktranslator.FromString("openai")
 	endpoint := "/chat/completions"
 	if opts.Alt == "responses/compact" {
@@ -201,6 +205,10 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 	}
 
 	from := opts.SourceFormat
+	if e.shouldUseCodexWorkerClaudeDirect(auth, opts) {
+		return e.executeCodexWorkerClaudeDirectStream(ctx, auth, req, baseURL, apiKey, reporter)
+	}
+
 	to := sdktranslator.FromString("openai")
 	originalPayloadSource := req.Payload
 	if len(opts.OriginalRequest) > 0 {
@@ -327,6 +335,197 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 		reporter.ensurePublished(ctx)
 	}()
 	return &cliproxyexecutor.StreamResult{Headers: httpResp.Header.Clone(), Chunks: out}, nil
+}
+
+func (e *OpenAICompatExecutor) shouldUseCodexWorkerClaudeDirect(auth *cliproxyauth.Auth, opts cliproxyexecutor.Options) bool {
+	if !e.isCodexWorkerProvider(auth) {
+		return false
+	}
+	if opts.SourceFormat.String() != "claude" {
+		return false
+	}
+	if strings.TrimSpace(opts.Alt) != "" {
+		return false
+	}
+	if auth != nil && auth.Attributes != nil {
+		for _, key := range []string{"codex_worker_claude_direct", "worker_claude_direct"} {
+			switch strings.ToLower(strings.TrimSpace(auth.Attributes[key])) {
+			case "0", "false", "no", "off", "disabled":
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func (e *OpenAICompatExecutor) executeCodexWorkerClaudeDirect(
+	ctx context.Context,
+	auth *cliproxyauth.Auth,
+	req cliproxyexecutor.Request,
+	baseURL, apiKey string,
+	reporter *usageReporter,
+	stream bool,
+) (cliproxyexecutor.Response, error) {
+	body := e.codexWorkerClaudeDirectPayload(req.Payload, req.Model, stream)
+	url := strings.TrimSuffix(baseURL, "/") + "/messages"
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return cliproxyexecutor.Response{}, err
+	}
+	e.applyCodexWorkerClaudeDirectHeaders(httpReq, auth, apiKey, stream)
+	e.recordCodexWorkerClaudeDirectRequest(ctx, auth, url, body, httpReq.Header)
+
+	httpClient := newProxyAwareHTTPClient(ctx, e.cfg, auth, 0)
+	httpResp, err := httpClient.Do(httpReq)
+	if err != nil {
+		recordAPIResponseError(ctx, e.cfg, err)
+		return cliproxyexecutor.Response{}, err
+	}
+	defer func() {
+		if errClose := httpResp.Body.Close(); errClose != nil {
+			log.Errorf("codex worker claude direct: close response body error: %v", errClose)
+		}
+	}()
+	recordAPIResponseMetadata(ctx, e.cfg, httpResp.StatusCode, httpResp.Header.Clone())
+	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
+		b, _ := io.ReadAll(httpResp.Body)
+		appendAPIResponseChunk(ctx, e.cfg, b)
+		logWithRequestID(ctx).Debugf("request error, error status: %d, error message: %s", httpResp.StatusCode, summarizeErrorBody(httpResp.Header.Get("Content-Type"), b))
+		return cliproxyexecutor.Response{}, newOpenAICompatStatusErr(httpResp.StatusCode, httpResp.Header, b)
+	}
+	respBody, err := io.ReadAll(httpResp.Body)
+	if err != nil {
+		recordAPIResponseError(ctx, e.cfg, err)
+		return cliproxyexecutor.Response{}, err
+	}
+	appendAPIResponseChunk(ctx, e.cfg, respBody)
+	reporter.publish(ctx, parseClaudeUsage(respBody))
+	reporter.ensurePublished(ctx)
+	return cliproxyexecutor.Response{Payload: respBody, Headers: httpResp.Header.Clone()}, nil
+}
+
+func (e *OpenAICompatExecutor) executeCodexWorkerClaudeDirectStream(
+	ctx context.Context,
+	auth *cliproxyauth.Auth,
+	req cliproxyexecutor.Request,
+	baseURL, apiKey string,
+	reporter *usageReporter,
+) (*cliproxyexecutor.StreamResult, error) {
+	body := e.codexWorkerClaudeDirectPayload(req.Payload, req.Model, true)
+	url := strings.TrimSuffix(baseURL, "/") + "/messages"
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	e.applyCodexWorkerClaudeDirectHeaders(httpReq, auth, apiKey, true)
+	e.recordCodexWorkerClaudeDirectRequest(ctx, auth, url, body, httpReq.Header)
+
+	httpClient := newProxyAwareHTTPClient(ctx, e.cfg, auth, 0)
+	httpResp, err := httpClient.Do(httpReq)
+	if err != nil {
+		recordAPIResponseError(ctx, e.cfg, err)
+		return nil, err
+	}
+	recordAPIResponseMetadata(ctx, e.cfg, httpResp.StatusCode, httpResp.Header.Clone())
+	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
+		b, _ := io.ReadAll(httpResp.Body)
+		appendAPIResponseChunk(ctx, e.cfg, b)
+		logWithRequestID(ctx).Debugf("request error, error status: %d, error message: %s", httpResp.StatusCode, summarizeErrorBody(httpResp.Header.Get("Content-Type"), b))
+		if errClose := httpResp.Body.Close(); errClose != nil {
+			log.Errorf("codex worker claude direct: close response body error: %v", errClose)
+		}
+		return nil, newOpenAICompatStatusErr(httpResp.StatusCode, httpResp.Header, b)
+	}
+
+	out := make(chan cliproxyexecutor.StreamChunk)
+	go func() {
+		defer close(out)
+		defer func() {
+			if errClose := httpResp.Body.Close(); errClose != nil {
+				log.Errorf("codex worker claude direct: close response body error: %v", errClose)
+			}
+		}()
+		scanner := bufio.NewScanner(httpResp.Body)
+		scanner.Buffer(nil, 52_428_800) // 50MB
+		for scanner.Scan() {
+			line := scanner.Bytes()
+			appendAPIResponseChunk(ctx, e.cfg, line)
+			if detail, ok := parseClaudeStreamUsage(line); ok {
+				reporter.publish(ctx, detail)
+			}
+			if streamErr, ok := parseOpenAICompatStreamError(line); ok {
+				recordAPIResponseError(ctx, e.cfg, streamErr)
+				reporter.publishFailure(ctx)
+				out <- cliproxyexecutor.StreamChunk{Err: streamErr}
+				return
+			}
+			payload := make([]byte, len(line)+1)
+			copy(payload, line)
+			payload[len(line)] = '\n'
+			out <- cliproxyexecutor.StreamChunk{Payload: payload}
+		}
+		if errScan := scanner.Err(); errScan != nil {
+			recordAPIResponseError(ctx, e.cfg, errScan)
+			reporter.publishFailure(ctx)
+			out <- cliproxyexecutor.StreamChunk{Err: errScan}
+			return
+		}
+		reporter.ensurePublished(ctx)
+	}()
+	return &cliproxyexecutor.StreamResult{Headers: httpResp.Header.Clone(), Chunks: out}, nil
+}
+
+func (e *OpenAICompatExecutor) codexWorkerClaudeDirectPayload(payload []byte, model string, stream bool) []byte {
+	body := bytes.Clone(payload)
+	if strings.TrimSpace(model) != "" {
+		body, _ = sjson.SetBytes(body, "model", model)
+	}
+	body, _ = sjson.SetBytes(body, "stream", stream)
+	if gjson.GetBytes(body, "prompt_cache_key").Exists() {
+		body, _ = sjson.DeleteBytes(body, "prompt_cache_key")
+	}
+	if gjson.GetBytes(body, "stream_options").Exists() {
+		body, _ = sjson.DeleteBytes(body, "stream_options")
+	}
+	return body
+}
+
+func (e *OpenAICompatExecutor) applyCodexWorkerClaudeDirectHeaders(req *http.Request, auth *cliproxyauth.Auth, apiKey string, stream bool) {
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "cli-proxy-codex-worker-claude-direct")
+	req.Header.Set("Anthropic-Version", "2023-06-01")
+	if apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+	if stream {
+		req.Header.Set("Accept", "text/event-stream")
+		req.Header.Set("Cache-Control", "no-cache")
+	}
+	var attrs map[string]string
+	if auth != nil {
+		attrs = auth.Attributes
+	}
+	util.ApplyCustomHeadersFromAttrs(req, attrs)
+}
+
+func (e *OpenAICompatExecutor) recordCodexWorkerClaudeDirectRequest(ctx context.Context, auth *cliproxyauth.Auth, url string, body []byte, headers http.Header) {
+	var authID, authLabel, authType, authValue string
+	if auth != nil {
+		authID = auth.ID
+		authLabel = auth.Label
+		authType, authValue = auth.AccountInfo()
+	}
+	recordAPIRequest(ctx, e.cfg, upstreamRequestLog{
+		URL:       url,
+		Method:    http.MethodPost,
+		Headers:   headers.Clone(),
+		Body:      body,
+		Provider:  e.Identifier(),
+		AuthID:    authID,
+		AuthLabel: authLabel,
+		AuthType:  authType,
+		AuthValue: authValue,
+	})
 }
 
 func parseOpenAICompatStreamError(line []byte) (error, bool) {
