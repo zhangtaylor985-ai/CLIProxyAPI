@@ -80,7 +80,7 @@ func TestExtractRequestBodySupportsStringOverride(t *testing.T) {
 	}
 }
 
-func TestResponseWriterRecorderIgnoresAPIKeyPolicySessionTrajectoryFlag(t *testing.T) {
+func TestResponseWriterRecorderDisabledByAPIKeyPolicy(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	httpRecorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(httpRecorder)
@@ -90,18 +90,19 @@ func TestResponseWriterRecorderIgnoresAPIKeyPolicySessionTrajectoryFlag(t *testi
 		nil,
 		responseWriterRecorderStub{},
 		&RequestInfo{},
+		c,
 	)
 	if !wrapper.isRecorderEnabled() {
 		t.Fatal("recorder should be enabled before api key policy is attached")
 	}
 
 	c.Set(apiKeyPolicyContextKey, &config.APIKeyPolicy{SessionTrajectoryDisabled: true})
-	if !wrapper.isRecorderEnabled() {
-		t.Fatal("recorder should remain enabled because response writer only follows the recorder-level switch")
+	if wrapper.isRecorderEnabled() {
+		t.Fatal("recorder should be disabled when api key policy disables session trajectory")
 	}
 }
 
-func TestResponseWriterFinalizeRecordsWhenAPIKeyPolicyDisablesSessionTrajectory(t *testing.T) {
+func TestResponseWriterFinalizeSkipsRecordWhenAPIKeyPolicyDisablesSessionTrajectory(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	disabledRecorder := &countingResponseWriterRecorder{}
@@ -114,12 +115,13 @@ func TestResponseWriterFinalizeRecordsWhenAPIKeyPolicyDisablesSessionTrajectory(
 		nil,
 		disabledRecorder,
 		&RequestInfo{Method: "POST", URL: "/v1/messages", RequestID: "req-disabled", Timestamp: time.Now()},
+		disabledCtx,
 	)
 	if err := disabledWrapper.Finalize(disabledCtx); err != nil {
 		t.Fatalf("Finalize(disabled) error = %v", err)
 	}
-	if got := disabledRecorder.count.Load(); got != 1 {
-		t.Fatalf("disabled policy recorder calls = %d, want 1", got)
+	if got := disabledRecorder.count.Load(); got != 0 {
+		t.Fatalf("disabled recorder calls = %d, want 0", got)
 	}
 
 	enabledRecorder := &countingResponseWriterRecorder{}
@@ -132,6 +134,7 @@ func TestResponseWriterFinalizeRecordsWhenAPIKeyPolicyDisablesSessionTrajectory(
 		nil,
 		enabledRecorder,
 		&RequestInfo{Method: "POST", URL: "/v1/messages", RequestID: "req-enabled", Timestamp: time.Now()},
+		enabledCtx,
 	)
 	if err := enabledWrapper.Finalize(enabledCtx); err != nil {
 		t.Fatalf("Finalize(enabled) error = %v", err)
@@ -157,6 +160,7 @@ func TestResponseWriterFinalizePassesAPIResponseErrorsForCommittedStream(t *test
 		nil,
 		recorder,
 		&RequestInfo{Method: "POST", URL: "/v1/messages", RequestID: "req-stream-error", Timestamp: time.Now()},
+		c,
 	)
 	c.Status(http.StatusOK)
 

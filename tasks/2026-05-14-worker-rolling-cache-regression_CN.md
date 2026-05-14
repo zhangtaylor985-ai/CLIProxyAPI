@@ -229,7 +229,8 @@
 
 - `/v0/management/auth-files` 响应增加 `quota` 和 `model_states`。
 - OpenAI-compatible config/auth index 响应增加 `runtime`，包含 `status`、`status_message`、`disabled`、`unavailable`、`next_retry_after`、`quota`、`model_states`。
-- 该能力用于观察 worker auth 的额度、冷却和模型状态；敏感 API key、proxy URL 仍不应通过该字段暴露。
+- 该能力用于观察 worker auth 的额度、冷却和模型状态；敏感 API key、proxy URL 与 raw `last_error` 仍不应通过该字段暴露。
+- 已确认不改变 API key 级 `session_trajectory_disabled` 语义；单个客户 key 仍可关闭 session trajectory 记录，避免隐私边界和 PG 存储成本意外扩大。
 
 ## 2026-05-14 滚动条件修正
 

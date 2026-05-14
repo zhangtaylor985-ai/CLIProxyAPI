@@ -535,9 +535,6 @@ func authModelStateEntries(states map[string]*coreauth.ModelState) gin.H {
 		if !state.NextRetryAfter.IsZero() {
 			entry["next_retry_after"] = state.NextRetryAfter
 		}
-		if state.LastError != nil {
-			entry["last_error"] = state.LastError
-		}
 		if quota := authQuotaEntry(state.Quota); len(quota) > 0 {
 			entry["quota"] = quota
 		}

@@ -40,6 +40,7 @@ type ResponseWriterWrapper struct {
 	logger              logging.RequestLogger      // logger is the instance of the request logger service.
 	recorder            sessiontrajectory.Recorder // recorder persists structured session trajectories.
 	requestInfo         *RequestInfo               // requestInfo holds the details of the original request.
+	ginContext          *gin.Context               // ginContext exposes per-request policy decisions after auth middleware runs.
 	statusCode          int                        // statusCode stores the HTTP status code of the response.
 	headers             map[string][]string        // headers stores the response headers.
 	logOnErrorOnly      bool                       // logOnErrorOnly enables logging only when an error response is detected.
@@ -53,16 +54,18 @@ type ResponseWriterWrapper struct {
 //   - w: The original gin.ResponseWriter to wrap.
 //   - logger: The logging service to use for recording requests.
 //   - requestInfo: The pre-captured information about the incoming request.
+//   - ginContext: The active Gin context, used for per-API-key capture policy.
 //
 // Returns:
 //   - A pointer to a new ResponseWriterWrapper.
-func NewResponseWriterWrapper(w gin.ResponseWriter, logger logging.RequestLogger, recorder sessiontrajectory.Recorder, requestInfo *RequestInfo) *ResponseWriterWrapper {
+func NewResponseWriterWrapper(w gin.ResponseWriter, logger logging.RequestLogger, recorder sessiontrajectory.Recorder, requestInfo *RequestInfo, ginContext *gin.Context) *ResponseWriterWrapper {
 	return &ResponseWriterWrapper{
 		ResponseWriter: w,
 		body:           &bytes.Buffer{},
 		logger:         logger,
 		recorder:       recorder,
 		requestInfo:    requestInfo,
+		ginContext:     ginContext,
 		headers:        make(map[string][]string),
 	}
 }
@@ -130,9 +133,22 @@ func (w *ResponseWriterWrapper) isRecorderEnabled() bool {
 		return false
 	}
 	if checker, ok := w.recorder.(interface{ IsEnabled() bool }); ok {
-		return checker.IsEnabled()
+		if !checker.IsEnabled() {
+			return false
+		}
 	}
-	return true
+	if w.ginContext == nil {
+		return true
+	}
+	value, exists := w.ginContext.Get(apiKeyPolicyContextKey)
+	if !exists || value == nil {
+		return true
+	}
+	policyEntry, ok := value.(interface{ SessionTrajectoryEnabled() bool })
+	if !ok || policyEntry == nil {
+		return true
+	}
+	return policyEntry.SessionTrajectoryEnabled()
 }
 
 // WriteString wraps the underlying ResponseWriter's WriteString method to capture response data.

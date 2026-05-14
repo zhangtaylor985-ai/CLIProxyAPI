@@ -49,13 +49,13 @@ type openAICompatibilityWithAuthIndex struct {
 }
 
 type openAICompatibilityRuntimeStatus struct {
-	Status         coreauth.Status                 `json:"status,omitempty"`
-	StatusMessage  string                          `json:"status_message,omitempty"`
-	Disabled       bool                            `json:"disabled,omitempty"`
-	Unavailable    bool                            `json:"unavailable,omitempty"`
-	NextRetryAfter string                          `json:"next_retry_after,omitempty"`
-	Quota          coreauth.QuotaState             `json:"quota,omitempty"`
-	ModelStates    map[string]*coreauth.ModelState `json:"model_states,omitempty"`
+	Status         coreauth.Status     `json:"status,omitempty"`
+	StatusMessage  string              `json:"status_message,omitempty"`
+	Disabled       bool                `json:"disabled,omitempty"`
+	Unavailable    bool                `json:"unavailable,omitempty"`
+	NextRetryAfter string              `json:"next_retry_after,omitempty"`
+	Quota          coreauth.QuotaState `json:"quota,omitempty"`
+	ModelStates    map[string]any      `json:"model_states,omitempty"`
 }
 
 func (h *Handler) liveAuthIndexByID() map[string]string {
@@ -124,7 +124,7 @@ func openAICompatibilityRuntimeFromAuth(auth *coreauth.Auth) *openAICompatibilit
 		Disabled:      auth.Disabled,
 		Unavailable:   auth.Unavailable,
 		Quota:         auth.Quota,
-		ModelStates:   auth.ModelStates,
+		ModelStates:   authModelStateEntries(auth.ModelStates),
 	}
 	if !auth.NextRetryAfter.IsZero() {
 		runtime.NextRetryAfter = auth.NextRetryAfter.Format("2006-01-02T15:04:05Z07:00")
