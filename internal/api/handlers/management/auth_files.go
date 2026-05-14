@@ -411,6 +411,12 @@ func (h *Handler) buildAuthFileEntry(auth *coreauth.Auth) gin.H {
 	if !auth.NextRetryAfter.IsZero() {
 		entry["next_retry_after"] = auth.NextRetryAfter
 	}
+	if quota := authQuotaEntry(auth.Quota); len(quota) > 0 {
+		entry["quota"] = quota
+	}
+	if modelStates := authModelStateEntries(auth.ModelStates); len(modelStates) > 0 {
+		entry["model_states"] = modelStates
+	}
 	if path != "" {
 		entry["path"] = path
 		entry["source"] = "file"
@@ -490,6 +496,60 @@ func authMaskedAPIKey(auth *coreauth.Auth) string {
 		}
 	}
 	return ""
+}
+
+func authQuotaEntry(quota coreauth.QuotaState) gin.H {
+	out := gin.H{}
+	if quota.Exceeded {
+		out["exceeded"] = true
+	}
+	if reason := strings.TrimSpace(quota.Reason); reason != "" {
+		out["reason"] = reason
+	}
+	if !quota.NextRecoverAt.IsZero() {
+		out["next_recover_at"] = quota.NextRecoverAt
+	}
+	if quota.BackoffLevel != 0 {
+		out["backoff_level"] = quota.BackoffLevel
+	}
+	return out
+}
+
+func authModelStateEntries(states map[string]*coreauth.ModelState) gin.H {
+	if len(states) == 0 {
+		return nil
+	}
+	out := gin.H{}
+	for model, state := range states {
+		model = strings.TrimSpace(model)
+		if model == "" || state == nil {
+			continue
+		}
+		entry := gin.H{
+			"status":      state.Status,
+			"unavailable": state.Unavailable,
+		}
+		if msg := strings.TrimSpace(state.StatusMessage); msg != "" {
+			entry["status_message"] = msg
+		}
+		if !state.NextRetryAfter.IsZero() {
+			entry["next_retry_after"] = state.NextRetryAfter
+		}
+		if state.LastError != nil {
+			entry["last_error"] = state.LastError
+		}
+		if quota := authQuotaEntry(state.Quota); len(quota) > 0 {
+			entry["quota"] = quota
+		}
+		if !state.UpdatedAt.IsZero() {
+			entry["updated_at"] = state.UpdatedAt
+		}
+		out[model] = entry
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func authBaseURL(auth *coreauth.Auth) string {

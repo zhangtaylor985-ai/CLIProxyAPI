@@ -6,6 +6,7 @@ import (
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/watcher/synthesizer"
+	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 )
 
 type geminiKeyWithAuthIndex struct {
@@ -30,7 +31,8 @@ type vertexCompatKeyWithAuthIndex struct {
 
 type openAICompatibilityAPIKeyWithAuthIndex struct {
 	config.OpenAICompatibilityAPIKey
-	AuthIndex string `json:"auth-index,omitempty"`
+	AuthIndex string                            `json:"auth-index,omitempty"`
+	Runtime   *openAICompatibilityRuntimeStatus `json:"runtime,omitempty"`
 }
 
 type openAICompatibilityWithAuthIndex struct {
@@ -43,6 +45,17 @@ type openAICompatibilityWithAuthIndex struct {
 	Headers        map[string]string                        `json:"headers,omitempty"`
 	ExcludedModels []string                                 `json:"excluded-models,omitempty"`
 	AuthIndex      string                                   `json:"auth-index,omitempty"`
+	Runtime        *openAICompatibilityRuntimeStatus        `json:"runtime,omitempty"`
+}
+
+type openAICompatibilityRuntimeStatus struct {
+	Status         coreauth.Status                 `json:"status,omitempty"`
+	StatusMessage  string                          `json:"status_message,omitempty"`
+	Disabled       bool                            `json:"disabled,omitempty"`
+	Unavailable    bool                            `json:"unavailable,omitempty"`
+	NextRetryAfter string                          `json:"next_retry_after,omitempty"`
+	Quota          coreauth.QuotaState             `json:"quota,omitempty"`
+	ModelStates    map[string]*coreauth.ModelState `json:"model_states,omitempty"`
 }
 
 func (h *Handler) liveAuthIndexByID() map[string]string {
@@ -75,6 +88,48 @@ func (h *Handler) liveAuthIndexByID() map[string]string {
 		out[id] = idx
 	}
 	return out
+}
+
+func (h *Handler) liveAuthByID() map[string]*coreauth.Auth {
+	out := map[string]*coreauth.Auth{}
+	if h == nil {
+		return out
+	}
+	h.mu.Lock()
+	manager := h.authManager
+	h.mu.Unlock()
+	if manager == nil {
+		return out
+	}
+	for _, auth := range manager.List() {
+		if auth == nil {
+			continue
+		}
+		id := strings.TrimSpace(auth.ID)
+		if id == "" {
+			continue
+		}
+		out[id] = auth
+	}
+	return out
+}
+
+func openAICompatibilityRuntimeFromAuth(auth *coreauth.Auth) *openAICompatibilityRuntimeStatus {
+	if auth == nil {
+		return nil
+	}
+	runtime := &openAICompatibilityRuntimeStatus{
+		Status:        auth.Status,
+		StatusMessage: strings.TrimSpace(auth.StatusMessage),
+		Disabled:      auth.Disabled,
+		Unavailable:   auth.Unavailable,
+		Quota:         auth.Quota,
+		ModelStates:   auth.ModelStates,
+	}
+	if !auth.NextRetryAfter.IsZero() {
+		runtime.NextRetryAfter = auth.NextRetryAfter.Format("2006-01-02T15:04:05Z07:00")
+	}
+	return runtime
 }
 
 func (h *Handler) geminiKeysWithAuthIndex() []geminiKeyWithAuthIndex {
@@ -195,6 +250,7 @@ func (h *Handler) openAICompatibilityWithAuthIndex() []openAICompatibilityWithAu
 		return nil
 	}
 	liveIndexByID := h.liveAuthIndexByID()
+	liveAuthByID := h.liveAuthByID()
 
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -226,6 +282,7 @@ func (h *Handler) openAICompatibilityWithAuthIndex() []openAICompatibilityWithAu
 		if len(entry.APIKeyEntries) == 0 {
 			id, _ := idGen.Next(idKind, entry.BaseURL)
 			response.AuthIndex = liveIndexByID[id]
+			response.Runtime = openAICompatibilityRuntimeFromAuth(liveAuthByID[id])
 		} else {
 			response.APIKeyEntries = make([]openAICompatibilityAPIKeyWithAuthIndex, len(entry.APIKeyEntries))
 			for j := range entry.APIKeyEntries {
@@ -234,6 +291,7 @@ func (h *Handler) openAICompatibilityWithAuthIndex() []openAICompatibilityWithAu
 				response.APIKeyEntries[j] = openAICompatibilityAPIKeyWithAuthIndex{
 					OpenAICompatibilityAPIKey: apiKeyEntry,
 					AuthIndex:                 liveIndexByID[id],
+					Runtime:                   openAICompatibilityRuntimeFromAuth(liveAuthByID[id]),
 				}
 			}
 		}

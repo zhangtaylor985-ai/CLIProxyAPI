@@ -52,7 +52,7 @@ func RequestLoggingMiddleware(logger logging.RequestLogger, recorder sessiontraj
 		}
 
 		// Create response writer wrapper
-		wrapper := NewResponseWriterWrapper(c.Writer, logger, recorder, requestInfo, c)
+		wrapper := NewResponseWriterWrapper(c.Writer, logger, recorder, requestInfo)
 		if logger != nil && !loggerEnabled {
 			wrapper.logOnErrorOnly = true
 		}

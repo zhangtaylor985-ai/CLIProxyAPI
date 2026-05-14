@@ -187,6 +187,63 @@ rg -n "/v1/messages\\?beta=true| 408 | 500 " logs/main.log -S | tail -n 40
 
 这一步通过后，才能继续 TTY。
 
+#### WebSearch 质量回归
+
+WebSearch 相关修复必须同时验证“过程可见性”和“最终结果质量”。
+
+不要把这些现象单独当作通过：
+
+- 只看到 `Searching the web`
+- 只看到 `Searched: ...`
+- 只确认没有 `Failed to parse JSON`
+- 只确认 SSE 有增量输出
+
+WebSearch 回归至少记录：
+
+- `stream-json --include-partial-messages` 的完整 JSONL
+- 搜索开始、搜索完成、第一段正文、最终 result 的相对时间
+- 最终回答是否包含“检索异常 / 抓取异常 / 没成功取到可靠结果 / 不能核验”等失败或降级文案
+- 搜索次数是否异常放大
+- 是否额外触发无关工具，例如 `Bash` 通知工具
+
+推荐先跑两类样本：
+
+```bash
+CLAUDE_CONFIG_DIR=$HOME/.claude_local \
+NO_PROXY=127.0.0.1,localhost,::1 no_proxy=127.0.0.1,localhost,::1 \
+HTTP_PROXY= HTTPS_PROXY= http_proxy= https_proxy= \
+~/.local/bin/claude2 \
+  --debug-file /tmp/claude-websearch-weather.log \
+  --dangerously-skip-permissions \
+  --model claude-opus-4-6 \
+  --effort high \
+  -p --output-format stream-json --verbose --include-partial-messages \
+  '北京的天气'
+
+CLAUDE_CONFIG_DIR=$HOME/.claude_local \
+NO_PROXY=127.0.0.1,localhost,::1 no_proxy=127.0.0.1,localhost,::1 \
+HTTP_PROXY= HTTPS_PROXY= http_proxy= https_proxy= \
+~/.local/bin/claude2 \
+  --debug-file /tmp/claude-websearch-news.log \
+  --dangerously-skip-permissions \
+  --model claude-opus-4-6 \
+  --effort high \
+  -p --output-format stream-json --verbose --include-partial-messages \
+  '搜索今日新闻'
+```
+
+同一服务上对照 Codex 时使用：
+
+```bash
+CODEX_HOME=$HOME/.codex_local \
+NO_PROXY=127.0.0.1,localhost,::1 no_proxy=127.0.0.1,localhost,::1 \
+HTTP_PROXY= HTTPS_PROXY= http_proxy= https_proxy= \
+codex --search exec --json --ephemeral --skip-git-repo-check -C /tmp \
+  '搜索今日新闻'
+```
+
+如果命中 `用户额度不足`、`auth_unavailable`、供应账号 403/500，这是供应或业务额度阻断；不要把它记为 WebSearch 协议通过或失败。先记录阻断原因，换可用测试 key 后重跑质量样本。
+
 #### GPT-5.5 专项 API Key
 
 当需要验证“某个 API Key 的 Claude 模型是否真实路由到 GPT-5.5”时，使用本地 `.env` 中的 `GPT55_REGRESSION_API_KEY`，不要把明文 key 写进 AGENTS、skill、任务文档或提交记录。

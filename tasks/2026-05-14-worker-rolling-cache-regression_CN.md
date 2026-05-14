@@ -221,6 +221,16 @@
 - 上线后曾在 `10:38 UTC` 附近观察到 4 次 `gpt-5.4(high)` 首包前 `empty_stream`，集中在重启后早期窗口；之后短窗口内未继续刷同类 `empty_stream`。另有一次 `unknown provider for model` 非流式 503，不属于 worker 缓存链路。
 - 当前仍需继续观察客户长会话：如果某个会话发生 worker failover，新的 worker 会重新建立缓存层级，短期 cache 下降属于预期；如果同一 worker/auth 内长时间仍只停在 `18432`，再继续按 session-affinity scope 与 usage 事件排查。
 
+## 2026-05-14 Worker Runtime 状态字段
+
+用户确认需要恢复此前旧现场中的管理状态补丁，目标是让主程序/管理侧能看到 worker 对应 auth/provider 的实时状态。
+
+本次恢复范围：
+
+- `/v0/management/auth-files` 响应增加 `quota` 和 `model_states`。
+- OpenAI-compatible config/auth index 响应增加 `runtime`，包含 `status`、`status_message`、`disabled`、`unavailable`、`next_retry_after`、`quota`、`model_states`。
+- 该能力用于观察 worker auth 的额度、冷却和模型状态；敏感 API key、proxy URL 仍不应通过该字段暴露。
+
 ## 2026-05-14 滚动条件修正
 
 继续按 K 客户 API key 前缀排查生产 `usage_events` 后发现：
