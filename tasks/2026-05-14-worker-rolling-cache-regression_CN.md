@@ -145,3 +145,5 @@
 - 旧 bootstrap 判断把任意非空 payload 都当作“流已开始”，导致协议壳之后的错误无法再 failover。
 - 修复方向：bootstrap 阶段只把真正内容/工具增量算作 first activity；`message_start`、普通 `content_block_start`、role-only OpenAI chunk、`[DONE]` 不算 first activity。这样首个真实内容前的错误仍保留在可重试窗口内。
 - 新增 `TestManagerExecuteStream_RetriesAfterProtocolOnlyChunkError`，覆盖“先协议壳、再 empty_stream、然后重试成功”的路径。
+- `944cef4e fix: delay stream bootstrap until content` 已发布到主程序 VPS，`cliproxyapi.service` 重新编译并重启成功。
+- 上线后 150 秒观察窗口自 `2026-05-14 03:40:24 UTC` 起，统计结果：`suppress=0`、`empty=0`、`model_cooldown=0`、`reselect=3`、`suspended=3`、`hit=47`、`miss=21`。当前观察符合预期。
