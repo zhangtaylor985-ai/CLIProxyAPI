@@ -147,3 +147,41 @@
 - 新增 `TestManagerExecuteStream_RetriesAfterProtocolOnlyChunkError`，覆盖“先协议壳、再 empty_stream、然后重试成功”的路径。
 - `944cef4e fix: delay stream bootstrap until content` 已发布到主程序 VPS，`cliproxyapi.service` 重新编译并重启成功。
 - 上线后 150 秒观察窗口自 `2026-05-14 03:40:24 UTC` 起，统计结果：`suppress=0`、`empty=0`、`model_cooldown=0`、`reselect=3`、`suspended=3`、`hit=47`、`miss=21`。当前观察符合预期。
+
+## 2026-05-14 Worker 缓存命中二次修复与生产观察
+
+用户提供新的 JSONL 后确认，客户侧 `cache_read_input_tokens` 曾长期停在 `18432`。复查发现：
+
+- 主程序已上线会话粘性，但旧 worker 镜像只能在请求体存在 `metadata.user_id` 时按会话生成滚动缓存 scope。
+- Claude -> OpenAI-compatible worker 链路不会把 Claude `metadata.user_id` 原样透传给 worker。
+- 结果是 worker 退化成按 worker API key 级别共享 cache namespace，容易只命中 Claude Code 公共前缀，无法稳定滚动到客户会话自己的更长前缀。
+
+已完成修复：
+
+- 主程序提交 `3419889d fix: forward codex worker prompt cache identity` 已部署到生产。
+  - 仅对 `codex-worker*` 的 Claude -> OpenAI-compatible 请求注入 opaque `prompt_cache_key`。
+  - key 由 Claude 会话身份、base model、入站 API key hash 派生，不暴露明文客户身份。
+- worker 提交 `09528a02 fix: honor forwarded prompt cache keys in codex workers` 已构建并全量替换 worker VPS 容器镜像 `cliproxy-api-worker:09528a02`。
+  - worker 优先使用转发的 `prompt_cache_key` 作为滚动缓存身份。
+  - OpenAI chat 和 WebSocket 入口均覆盖测试。
+- 本地回归：
+  - 主程序 `go test ./internal/runtime/executor ./sdk/cliproxy/auth` 通过。
+  - worker `go test ./internal/runtime/executor` 通过。
+
+生产调整：
+
+- `cliproxy-worker01` 到 `cliproxy-worker08` 均已运行镜像 `cliproxy-api-worker:09528a02`。
+- 主程序配置已摘除不健康或额度耗尽 worker：
+  - 摘除：`worker01/02/05/07`。
+  - 保留：`worker03/04/06/08`。
+- 主程序配置备份：
+  - `config.yaml.bak.disable-worker01.20260514T090654Z`
+  - `config.yaml.bak.disable-quota-workers.20260514T091606Z`
+
+观察结论：
+
+- 旧 JSONL 的 `18432` 固定值发生在 worker 仍跑旧镜像阶段，不能代表新链路。
+- 新链路上线后，PG `usage_events` 已出现多条明显大于 `18432` 的 `cached_tokens`，包括约 `37k`、`100k`、`139k`、`466k`、`481k`，说明滚动缓存已经开始生效。
+- 从仅保留 `worker03/04/06/08` 后的干净窗口看，Codex worker 的 DB 记录无失败，缓存继续有命中。
+- 观察到的一条 `context canceled` 500 属于客户端取消请求，不是 `empty_stream`，也不是 worker 缓存问题。
+- 仍需后续用客户新 session JSONL 复核：同一 session 在数轮后 `cache_read_input_tokens` 应不再长期固定在 `18432`。
