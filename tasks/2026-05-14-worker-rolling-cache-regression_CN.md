@@ -131,3 +131,10 @@
 - `go test ./sdk/cliproxy/auth ./internal/runtime/executor ./internal/watcher/synthesizer ./internal/config`：通过。
 - `NO_PROXY=127.0.0.1,localhost,::1 no_proxy=127.0.0.1,localhost,::1 go test ./...`：通过。
 - 本地 Claude 客户端黑盒：`~/.local/bin/claude` + `~/.claude_local` + `http://127.0.0.1:53841` 已确认真实命中本地 `/v1/messages`；但本地配置不是生产 worker provider 拓扑，当前返回 503 供应不可用，因此只作为“客户端命中本地”证据，不作为 worker 生产可用性验收。生产 worker 验收以上线后 systemd 服务、生产日志与 worker provider 分布为准。
+
+生产发布记录：
+
+- `d3ac1b77 fix: classify openai compat stream errors` 已发布后观察到仍有客户侧 `empty_stream` 外溢，继续定位发现生产真实 auth id 未命中 Codex worker 检测。
+- `c1744f6f fix: detect codex worker auth ids` 已发布到主程序 VPS，`cliproxyapi.service` 重新编译并重启成功，健康探测通过。
+- 上线后观察窗口自 `2026-05-14 03:30:00 UTC` 起，统计结果：`suppress=0`、`empty=0`、`model_cooldown=0`、`reselect=4`、`suspended=4`、`resumed=1`、`hit=90`、`miss=21`。
+- 日志确认 `openai-compatibility:codex-worker03-...` 在 transient 后被 suspended，后续 `session-affinity` 对不可用 auth 执行 reselect 到其他 worker；符合预期。
