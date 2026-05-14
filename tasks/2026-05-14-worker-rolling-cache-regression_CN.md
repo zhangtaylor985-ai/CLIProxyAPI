@@ -173,15 +173,19 @@
 - `cliproxy-worker01` 到 `cliproxy-worker08` 均已运行镜像 `cliproxy-api-worker:09528a02`。
 - 主程序配置已摘除不健康或额度耗尽 worker：
   - 摘除：`worker01/02/05/07`。
-  - 保留：`worker03/04/06/08`。
+  - 第一轮保留：`worker03/04/06/08`。
+  - 二次观察发现 `worker08` 连续出现上游 `context canceled` / HTTP2 `INTERNAL_ERROR` 类 500，已在 `2026-05-14 09:30 UTC` 继续从主程序路由池摘除。
+  - 当前保留：`worker03/04/06`。
 - 主程序配置备份：
   - `config.yaml.bak.disable-worker01.20260514T090654Z`
   - `config.yaml.bak.disable-quota-workers.20260514T091606Z`
+  - `config.yaml.bak.disable-worker08.20260514T092956Z`
 
 观察结论：
 
 - 旧 JSONL 的 `18432` 固定值发生在 worker 仍跑旧镜像阶段，不能代表新链路。
 - 新链路上线后，PG `usage_events` 已出现多条明显大于 `18432` 的 `cached_tokens`，包括约 `37k`、`100k`、`139k`、`466k`、`481k`，说明滚动缓存已经开始生效。
-- 从仅保留 `worker03/04/06/08` 后的干净窗口看，Codex worker 的 DB 记录无失败，缓存继续有命中。
-- 观察到的一条 `context canceled` 500 属于客户端取消请求，不是 `empty_stream`，也不是 worker 缓存问题。
+- 从仅保留 `worker03/04/06/08` 后的窗口看，缓存继续有命中，但 `worker08` 有连续 500，不适合继续承载生产主流量。
+- 摘除 `worker08` 后 90 秒观察窗口内，主程序服务 `active`，无 `empty_stream`、`auth_unavailable`、`model_cooldown`、`usage_limit`、HTTP2 `INTERNAL_ERROR` 外溢；`worker03/04/06` 的 DB 失败数均为 0，缓存比例约 33% 到 44%，最大单次命中约 `538k` cached tokens。
+- 重启切流瞬间 worker 容器曾记录几条 500；按 `17:30:35 +08:00` 之后过滤，`worker03/04/06` 未继续出现错误。
 - 仍需后续用客户新 session JSONL 复核：同一 session 在数轮后 `cache_read_input_tokens` 应不再长期固定在 `18432`。
