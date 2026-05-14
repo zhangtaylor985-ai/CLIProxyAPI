@@ -189,3 +189,62 @@
 - 摘除 `worker08` 后 90 秒观察窗口内，主程序服务 `active`，无 `empty_stream`、`auth_unavailable`、`model_cooldown`、`usage_limit`、HTTP2 `INTERNAL_ERROR` 外溢；`worker03/04/06` 的 DB 失败数均为 0，缓存比例约 33% 到 44%，最大单次命中约 `538k` cached tokens。
 - 重启切流瞬间 worker 容器曾记录几条 500；按 `17:30:35 +08:00` 之后过滤，`worker03/04/06` 未继续出现错误。
 - 仍需后续用客户新 session JSONL 复核：同一 session 在数轮后 `cache_read_input_tokens` 应不再长期固定在 `18432`。
+
+## 2026-05-14 主程序滚动缓存修复
+
+用户继续提供新的 JSONL 后，确认样本本身发生在主程序滚动缓存修复上线前；该样本中同一 session 固定在同一 worker/auth，但 `cache_read_input_tokens` 在短窗口内停在 `18432`。
+
+根因修正：
+
+- 上一版主程序只负责给 worker 转发一个稳定 `prompt_cache_key`。
+- worker 已修复为“收到主程序转发 key 时不再二次 rolling”，避免主程序和 worker 两边同时升级 cache key。
+- 因此 rolling generation 必须回到主程序侧完成，否则同一会话会长期复用同一个稳定 key，只能命中早期前缀。
+
+已上线修复：
+
+- 主程序提交 `ef1c8fe7 fix: roll codex worker prompt cache keys` 已发布到生产。
+- 对 Codex worker OpenAI-compatible 请求，主程序按 `auth isolation key + base model + 入站 API key hash + 会话身份` 计算 rolling cache scope。
+- 主程序观察 worker 返回的 usage；当 `input_tokens + cached_tokens` 相比上一滚动点增长超过约 `16k`，且已经看到过 `cached_tokens > 0` 后，升级下一代 `prompt_cache_key`。
+- worker 继续只消费主程序转发的 key，不再对 forwarded key 二次 rolling。
+
+本地回归：
+
+- `go test ./internal/runtime/executor -run 'TestOpenAICompatExecutorCodexWorker|TestCodexExecutorCacheHelper|TestApplyCodexPromptCacheHeaders'`：通过。
+- `go test ./internal/runtime/executor ./sdk/cliproxy/auth`：通过。
+- `go test ./...`：通过。
+
+生产发布与观察：
+
+- 生产主程序已 fast-forward 到 `ef1c8fe7`，重新编译 `bin/cliproxyapi` 并重启 `cliproxyapi.service`，`/healthz` 探测通过。
+- 上线后短窗口内，PG `usage_events` 已出现多条高于 `18432` 的 Codex worker 缓存命中，例如 `27136`、`94720`、`96768`、`143872`、`192000` 等，说明 rolling key 已经不再固定在旧的 `18432` 层。
+- `worker01-08` 容器均在运行，反向隧道与防火墙 unit 均为 `active`。
+- 上线后曾在 `10:38 UTC` 附近观察到 4 次 `gpt-5.4(high)` 首包前 `empty_stream`，集中在重启后早期窗口；之后短窗口内未继续刷同类 `empty_stream`。另有一次 `unknown provider for model` 非流式 503，不属于 worker 缓存链路。
+- 当前仍需继续观察客户长会话：如果某个会话发生 worker failover，新的 worker 会重新建立缓存层级，短期 cache 下降属于预期；如果同一 worker/auth 内长时间仍只停在 `18432`，再继续按 session-affinity scope 与 usage 事件排查。
+
+## 2026-05-14 滚动条件修正
+
+继续按 K 客户 API key 前缀排查生产 `usage_events` 后发现：
+
+- 全局已有多个 Codex worker 请求命中高于 `18432` 的缓存，说明主程序代码已生效。
+- 但 K 客户部分请求出现 `18432 -> 0 -> 18432 -> 0` 的节奏。
+- 这说明旧 rolling 条件过于激进：只要 `input_tokens + cached_tokens` 总 prompt 增长超过 16k 就换下一代 key，即使真实 `cached_tokens` 仍停在 `18432`。
+- 对这类会话，频繁换 key 反而会制造冷启动，使新 key 还没暖好就被再次升级。
+
+修正策略：
+
+- rolling 不再按总 prompt 增长触发。
+- 第一次看到 `cached_tokens > 0` 时只记录 baseline，不立即升级。
+- 只有当真实 `cached_tokens` 相比上一滚动点增长超过约 `16k` token 时，才升级下一代 key。
+- 如果 `cached_tokens` 一直停在 `18432`，继续复用当前 key，避免反复掉到 0。
+
+本地修复范围：
+
+- 主程序：`internal/runtime/executor/cache_helpers.go`、相关 executor cache tests。
+- worker：`internal/runtime/executor/helps/cache_helpers.go`、相关 Codex HTTP / WebSocket cache tests。
+
+当前本地回归：
+
+- 主程序 `go test ./internal/runtime/executor -run 'TestOpenAICompatExecutorCodexWorker|TestCodexExecutorCacheHelper|TestApplyCodexPromptCacheHeaders|TestCodexWebsocketPromptCacheHeaders'`：通过。
+- 主程序 `go test ./internal/runtime/executor ./sdk/cliproxy/auth`：通过。
+- worker `go test ./internal/runtime/executor -run 'TestCodexExecutorCacheHelper|TestApplyCodexPromptCacheHeaders'`：通过。
+- worker `go test ./internal/runtime/executor ./sdk/cliproxy/auth`：通过。

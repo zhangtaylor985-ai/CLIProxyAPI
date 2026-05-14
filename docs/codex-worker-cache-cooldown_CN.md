@@ -81,8 +81,9 @@ auth isolation key + base model + 会话/用户身份
 - 同一个缓存层仍然按 `auth isolation key + base model + 会话/用户身份` 隔离。
 - 初始请求使用第 0 代 cache key。
 - 只有当上游已经返回过 `cached_tokens > 0`，说明当前 cache key 已经真正命中过，才允许滚动升级。
-- 当 `input_tokens + cached_tokens` 相比上一次滚动点增长超过约 `16k` token 时，生成下一代 cache key。
+- 当真实命中的 `cached_tokens` 相比上一次滚动点增长超过约 `16k` token 时，生成下一代 cache key。
 - 低于阈值时继续复用当前 cache key，避免频繁换 key 造成缓存还没暖好就失效。
+- 如果总输入在增长，但 `cached_tokens` 仍停在同一个值，例如一直是 `18432`，不会反复升级 cache key；否则会出现 `18432 -> 0 -> 18432 -> 0` 的冷启动抖动。
 - 如果 worker 失败并切换，新 worker 会重新从自己的缓存层开始，旧 worker 的缓存不跨 auth 复用。
 
 这套策略的目标是让长会话逐步把更长的稳定前缀放进缓存，而不是永远只省最早一小段 token。它不会让每一轮立刻都满命中；升级新 cache key 后需要后续请求把新一代缓存暖起来。

@@ -190,9 +190,8 @@ func TestCodexExecutorCacheHelper_ClaudeRollingPromptCacheAdvancesAfterCachedGro
 	if err != nil {
 		t.Fatalf("cacheHelper third: %v", err)
 	}
-	key1 := promptCacheKeyFromRequest(t, thirdReq)
-	if key1 == "" || key1 == key0 {
-		t.Fatalf("expected rolling cache key to advance after cached growth, key0=%q key1=%q", key0, key1)
+	if keyAfterFirstCached := promptCacheKeyFromRequest(t, thirdReq); keyAfterFirstCached != key0 {
+		t.Fatalf("cache key changed after first cached baseline: got %q want %q", keyAfterFirstCached, key0)
 	}
 
 	observeCodexRollingCacheUsage(scope, 20000, 18432)
@@ -200,18 +199,18 @@ func TestCodexExecutorCacheHelper_ClaudeRollingPromptCacheAdvancesAfterCachedGro
 	if err != nil {
 		t.Fatalf("cacheHelper fourth: %v", err)
 	}
-	if keyBelowStep := promptCacheKeyFromRequest(t, fourthReq); keyBelowStep != key1 {
-		t.Fatalf("cache key changed below rolling step: got %q want %q", keyBelowStep, key1)
+	if keyStuckCached := promptCacheKeyFromRequest(t, fourthReq); keyStuckCached != key0 {
+		t.Fatalf("cache key changed while cached prefix was stuck: got %q want %q", keyStuckCached, key0)
 	}
 
-	observeCodexRollingCacheUsage(scope, 33000, 18432)
+	observeCodexRollingCacheUsage(scope, 20000, 38912)
 	fifthReq, err := executor.cacheHelper(context.Background(), auth, sdktranslator.FromString("claude"), url, req, rawJSON)
 	if err != nil {
 		t.Fatalf("cacheHelper fifth: %v", err)
 	}
-	key2 := promptCacheKeyFromRequest(t, fifthReq)
-	if key2 == "" || key2 == key1 || key2 == key0 {
-		t.Fatalf("expected second rolling cache advance, key0=%q key1=%q key2=%q", key0, key1, key2)
+	key1 := promptCacheKeyFromRequest(t, fifthReq)
+	if key1 == "" || key1 == key0 {
+		t.Fatalf("expected rolling cache advance after cached prefix grew, key0=%q key1=%q", key0, key1)
 	}
 }
 
@@ -236,6 +235,12 @@ func TestCodexWebsocketPromptCacheHeaders_UseRollingClaudeCacheState(t *testing.
 	}
 
 	observeCodexRollingCacheUsage(scope, 24000, 18432)
+	bodyBaseline, _ := applyCodexPromptCacheHeaders(auth, sdktranslator.FromString("claude"), req, rawJSON)
+	if keyBaseline := gjson.GetBytes(bodyBaseline, "prompt_cache_key").String(); keyBaseline != key0 {
+		t.Fatalf("websocket cache key changed after first cached baseline: got %q want %q", keyBaseline, key0)
+	}
+
+	observeCodexRollingCacheUsage(scope, 24000, 38912)
 	body1, headers1 := applyCodexPromptCacheHeaders(auth, sdktranslator.FromString("claude"), req, rawJSON)
 	key1 := gjson.GetBytes(body1, "prompt_cache_key").String()
 	if key1 == "" || key1 == key0 {

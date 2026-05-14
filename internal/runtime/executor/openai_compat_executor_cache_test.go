@@ -72,7 +72,8 @@ func TestOpenAICompatExecutorCodexWorkerRollsSessionPromptCacheKeyAfterCachedGro
 		`{"prompt_tokens":12917,"completion_tokens":1,"total_tokens":31350,"prompt_tokens_details":{"cached_tokens":18432}}`,
 		`{"prompt_tokens":16001,"completion_tokens":1,"total_tokens":34434,"prompt_tokens_details":{"cached_tokens":18432}}`,
 		`{"prompt_tokens":20022,"completion_tokens":1,"total_tokens":38455,"prompt_tokens_details":{"cached_tokens":18432}}`,
-		`{"prompt_tokens":20883,"completion_tokens":1,"total_tokens":39316,"prompt_tokens_details":{"cached_tokens":18432}}`,
+		`{"prompt_tokens":20883,"completion_tokens":1,"total_tokens":59796,"prompt_tokens_details":{"cached_tokens":38912}}`,
+		`{"prompt_tokens":21000,"completion_tokens":1,"total_tokens":59913,"prompt_tokens_details":{"cached_tokens":38912}}`,
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
@@ -116,14 +117,13 @@ func TestOpenAICompatExecutorCodexWorkerRollsSessionPromptCacheKeyAfterCachedGro
 			t.Fatalf("request #%d missing prompt_cache_key: %s", i+1, string(bodies[i]))
 		}
 	}
-	if keys[0] != keys[1] {
-		t.Fatalf("first cached observation should not affect the in-flight request key: %q != %q", keys[0], keys[1])
+	for i := 1; i <= 4; i++ {
+		if keys[i] != keys[0] {
+			t.Fatalf("cache key rolled before cached prefix grew enough: keys=%q", keys)
+		}
 	}
-	if keys[2] == keys[1] {
-		t.Fatalf("expected third request to use rolled cache key after cached prefix growth, still %q", keys[2])
-	}
-	if keys[3] != keys[2] || keys[4] != keys[2] {
-		t.Fatalf("cache key rolled too frequently after small growth: keys=%q", keys)
+	if keys[5] == keys[0] {
+		t.Fatalf("expected request after cached prefix growth to use rolled cache key, keys=%q", keys)
 	}
 }
 
