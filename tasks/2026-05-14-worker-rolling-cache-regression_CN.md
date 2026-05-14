@@ -248,3 +248,16 @@
 - 主程序 `go test ./internal/runtime/executor ./sdk/cliproxy/auth`：通过。
 - worker `go test ./internal/runtime/executor -run 'TestCodexExecutorCacheHelper|TestApplyCodexPromptCacheHeaders'`：通过。
 - worker `go test ./internal/runtime/executor ./sdk/cliproxy/auth`：通过。
+
+全量回归与发布：
+
+- 主程序 `NO_PROXY=127.0.0.1,localhost,::1 no_proxy=127.0.0.1,localhost,::1 go test ./...`：通过。
+- worker `NO_PROXY=127.0.0.1,localhost,::1 no_proxy=127.0.0.1,localhost,::1 go test ./...`：通过。
+- 主程序提交 `4d7b437d fix: roll codex cache after cached prefix grows` 已发布到生产，`cliproxyapi.service` 重新编译并重启成功，`/healthz` 通过。
+- worker 提交 `240d0fe1 fix: roll codex cache after cached prefix grows` 已发布到 worker VPS，8 个 `cliproxy-worker01-08` 容器均重建为镜像 `cliproxy-api-worker:240d0fe`，`/v1/models` 均返回 200。
+
+上线后观察：
+
+- worker 全量重启窗口内出现多条 `/v1/messages` 503，主要为 `gpt-5.4(high)` 首包前 `empty_stream`；这是容器切换期间叠加上游空流的异常窗口，需与缓存 rolling 修复分开看。
+- `11:00 UTC` 后短窗口内未继续看到同类连续 503；有一条长耗时 500，需要继续观察，但不指向 rolling cache 条件本身。
+- K 客户在本次修复完成后暂未产生新的成功 usage 样本；因此还不能用新样本证明 `18432 -> 0 -> 18432 -> 0` 已消失。当前修复的预期是：若 cached tokens 仍卡在 `18432`，主程序和 worker 都会继续复用当前 key，不再因为总输入增长而反复换 key。
