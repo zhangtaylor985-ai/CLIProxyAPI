@@ -537,6 +537,40 @@ func applyProviderHealthEmptyStreamFailure(auth *Auth, state *ModelState, now ti
 	return true
 }
 
+func applyWholeAuthEmptyStreamFailure(auth *Auth, resultErr *Error, now time.Time) bool {
+	if auth == nil {
+		return false
+	}
+	auth.Status = StatusError
+	auth.StatusMessage = "transient upstream error"
+	auth.UpdatedAt = now
+	if resultErr != nil {
+		auth.LastError = cloneError(resultErr)
+	}
+
+	health := &auth.Health
+	health.EmptyStreams++
+	health.ConsecutiveEmptyStreams++
+	health.LastEmptyStreamAt = now
+	if health.ConsecutiveEmptyStreams < emptyStreamConsecutiveThreshold {
+		auth.Unavailable = false
+		auth.NextRetryAfter = time.Time{}
+		return false
+	}
+
+	cooldown, nextLevel := nextEmptyStreamHealthCooldown(health.BackoffLevel)
+	if cooldown <= 0 || quotaCooldownDisabledForAuth(auth) {
+		auth.Unavailable = false
+		auth.NextRetryAfter = time.Time{}
+		return false
+	}
+	health.Score = 0
+	health.BackoffLevel = nextLevel
+	auth.Unavailable = true
+	auth.NextRetryAfter = now.Add(cooldown)
+	return true
+}
+
 func applyProviderHealthSuccess(auth *Auth, state *ModelState, result Result, now time.Time) bool {
 	if !providerHealthPolicyApplies(auth) || state == nil {
 		return false
@@ -2486,14 +2520,10 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 
 		if result.Success {
 			if wholeAuthCooldown {
-				if auth.Unavailable && auth.NextRetryAfter.After(now) {
-					auth.UpdatedAt = now
-				} else {
-					clearAuthStateOnSuccess(auth, now)
-					auth.ModelStates = nil
-					shouldResumeModel = resultModelKey != ""
-					clearModelQuota = resultModelKey != ""
-				}
+				clearAuthStateOnSuccess(auth, now)
+				auth.ModelStates = nil
+				shouldResumeModel = resultModelKey != ""
+				clearModelQuota = resultModelKey != ""
 			} else if resultModelKey != "" {
 				state := ensureModelState(auth, resultModelKey)
 				wasDegraded := wasProviderDegraded(state)
@@ -2535,9 +2565,13 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 			}
 		} else {
 			if wholeAuthCooldown {
-				applyAuthFailureState(auth, result.Error, result.RetryAfter, now)
+				if isEmptyStreamResultError(result.Error) {
+					applyWholeAuthEmptyStreamFailure(auth, result.Error, now)
+				} else {
+					applyAuthFailureState(auth, result.Error, result.RetryAfter, now)
+				}
 				auth.ModelStates = nil
-				shouldSuspendModel = resultModelKey != ""
+				shouldSuspendModel = resultModelKey != "" && auth.Unavailable && auth.NextRetryAfter.After(now)
 				suspendReason = authSuspendReasonFromStatus(auth.StatusMessage)
 				if auth.Quota.Exceeded {
 					setModelQuota = resultModelKey != ""
@@ -2803,6 +2837,7 @@ func clearAuthStateOnSuccess(auth *Auth, now time.Time) {
 	auth.Quota.BackoffLevel = 0
 	auth.LastError = nil
 	auth.NextRetryAfter = time.Time{}
+	auth.Health.ConsecutiveEmptyStreams = 0
 	auth.UpdatedAt = now
 }
 

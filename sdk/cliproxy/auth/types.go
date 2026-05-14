@@ -74,6 +74,9 @@ type Auth struct {
 	Metadata map[string]any `json:"metadata,omitempty"`
 	// Quota captures recent quota information for load balancers.
 	Quota QuotaState `json:"quota"`
+	// Health tracks whole-credential transient health for auths that must be
+	// cooled as one unit instead of per model, such as Codex worker providers.
+	Health ProviderHealthState `json:"health,omitempty"`
 	// LastError stores the last failure encountered while executing or refreshing.
 	LastError *Error `json:"last_error,omitempty"`
 	// CreatedAt is the creation timestamp in UTC.

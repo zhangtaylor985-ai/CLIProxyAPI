@@ -34,7 +34,6 @@
 - 若 `stash apply` 因远端新增同名文件导致 untracked 文件无法恢复，必须逐个比较 stash 内容与当前文件；确认内容一致后才可删除临时 stash，否则保留 stash 并向用户说明冲突文件。
 - 在临时 worktree 推送到 `main` 后，原始目录不会自动更新；回到 `/Users/taylor/code/tools/CLIProxyAPI-ori` 前，先保护该目录未提交现场，再 `git fetch origin main && git pull --ff-only` 或等价安全流程同步。
 - 一个完整任务闭环默认包含：新建/同步 worktree、记录计划或进度、实现、定向测试、必要黑盒、全量回归、fetch/rebase 到最新主线、只 stage 本任务文件、提交、push、回到主目录同步、按需部署、观察、最后清理临时 worktree。
-- 线上发布固定顺序：先在本地/发布 worktree 完成上线前回归测试，再通过 GitHub 主线发布和线上 `git pull --ff-only` 部署，最后观察线上 systemd 日志和真实 smoke 结果；不要跳过“先回归、再上线、再观察”。
 - 临时 worktree 完成任务并确认生产发布与观察无回滚需求后再删除；删除前确认其中没有唯一的 debug 证据、未提交补丁或需保留 artifacts。清理可用 `git worktree remove <path>`，必要时再 `git worktree prune`。
 
 # 部署与 systemd
@@ -61,7 +60,9 @@
 - SSH 入口：主程序服务器 `ssh root@204.168.245.138`；worker 服务器 `ssh root@178.105.98.15`。
 - 主程序错误日志入口：优先 `journalctl -u cliproxyapi --since '1 hour ago' --no-pager`；落盘错误样本在 `/root/cliapp/CLIProxyAPI/logs/error-v1-messages-*.log`；Codex raw SSE 诊断在 `/root/cliapp/CLIProxyAPI/logs/codex-raw-sse/`。
 - worker 排查入口：`docker ps --filter name=cliproxy-worker`、`docker logs cliproxy-workerNN --tail 200`、`systemctl status cliproxy-workers-reverse-tunnel.service --no-pager -l`、`systemctl status cliproxy-workers-firewall.service --no-pager -l`。
-- worker VPS 使用官方镜像 `eceasy/cli-proxy-api:latest` 运行 7 个 Docker 容器：`cliproxy-worker01` 到 `cliproxy-worker07`；每个容器只挂载 1 个 Codex auth file、1 份独立 `config.yaml`、1 个独立住宅代理。
+- worker VPS 当前使用官方镜像 `eceasy/cli-proxy-api:latest` 运行 7 个 Docker 容器：`cliproxy-worker01` 到 `cliproxy-worker07`；每个容器只挂载 1 个 Codex auth file、1 份独立 `config.yaml`、1 个独立住宅代理。
+- 2026-05-14 worker 侧滚动 prompt cache 最新候选提交为 `/Users/taylor/sdk/CLIProxyAPI-pure-worker-rolling-cache` 的 `ed0d6d74 codex: add worker rolling prompt cache`，包含上一轮 auth/WebSocket 隔离提交 `7166f3b7`。本地 `go test ./...`、Codex executor 定向测试、真实本地 worker HTTP/stream 黑盒均通过；worker VPS 已构建候选镜像 `cliproxy-api-worker:ed0d6d74`，构建上下文在 `/root/cliproxy-workers/custom-image-ed0d6d74/`，并保留 `source.patch`。生产 canary `worker04/worker06` 真实请求返回 `CANARY_OK`，但正式全量切换后线上 `empty_stream before first payload` 观察窗口未达干净上线标准，已回滚到官方镜像 `eceasy/cli-proxy-api:latest`；旧候选镜像 `3159b6b2` 也保留在 worker VPS 但不承载生产流量。
+- 当前缓存策略：主程序负责 session-affinity，把同一会话尽量固定到同一个 worker；真正发 Codex 请求的 worker 根据 `metadata.user_id + base model + auth isolation key` 生成 prompt cache scope。OpenAI-compatible 主链路、Claude 直连链路和 Codex WebSocket 链路都会在看到上游 usage 后观察 `input_tokens + cache_read_input_tokens`，当已缓存前缀增长超过约 16k tokens 时滚动升级下一代 `prompt_cache_key`。worker 失败切换时接受缓存损失，由新 worker 重新建立自己的缓存层级。
 - worker 目录统一在 `/root/cliproxy-workers/`；注册表为 `/root/cliproxy-workers/worker_registry.tsv`，包含敏感 API key，不能外传或写入仓库。
 - worker 容器本机端口为 `18317-18323`；主程序不直接通过公网访问这些端口，而是通过 worker VPS 主动建立的 SSH 反向隧道访问主程序本机 `127.0.0.1:18317-18323`。
 - worker VPS 的反向隧道 systemd unit：`cliproxy-workers-reverse-tunnel.service`；端口访问限制 unit：`cliproxy-workers-firewall.service`。
@@ -74,7 +75,8 @@
 - 恢复生产时不要擅自把 `claude-to-gpt-target-family` 从 `gpt-5.4` 切到其它模型族；worker 冷却应由调度/冷却逻辑处理，临时改模型只允许在用户明确批准后执行。
 - `cc2` 真实黑盒口径：`cc2` 等价于 `CLAUDE_CONFIG_DIR=~/.claude_cc claude2 --dangerously-skip-permissions`，其配置指向 `https://cc.claudepool.com/`。2026-05-11 回归命令使用 `~/.claude_cc` 和 `~/.local/bin/claude2 --debug-file`，最小提示 `Reply with exactly WORKER56_OK`，结果返回 `WORKER56_OK`，debug log 证实命中 `/v1/messages` 并收到首个 stream chunk。
 - 2026-05-12 已上线 `empty_stream before first payload` 稳定性修复：单个 worker/模型在首包前空流时先做一次短 jitter 重试；连续空流才进入短暂 provider degraded 冷却，避免一次毛刺就永久下线好 worker，同时避免坏 worker 持续坑用户。第二次补丁覆盖“stream 已建立但第一条 chunk 就是 `upstream stream closed before first payload` 错误”的路径。上线后观察口径：`journalctl -u cliproxyapi.service --since '10 minutes ago' --no-pager | rg 'empty_stream|suppressing raw upstream error|/v1/messages'`。
-- Codex worker、会话绑定、prompt cache 与整 worker 冷却策略详见：`docs/codex-worker-cache-cooldown_CN.md`。
+- 2026-05-14 worker 稳定性策略更新：生产确认 `worker02/05/07` 为 `usage_limit_reached` 额度耗尽，`worker03/04/06` 仍可直连流式启动。主程序必须区分额度耗尽和首包空流：额度耗尽按整 worker/auth 长冷却；`empty_stream before first payload` 按 auth-level transient health 计数，第一次只记录并允许同 worker 短重试，连续失败达到阈值才整 worker 短冷却；成功请求清空连续空流计数。会话粘性只在绑定 worker 仍可用时复用，绑定 worker 不可用时必须 reselect 到可用 worker。
+- worker 滚动 prompt cache 自定义镜像仍属于第二阶段优化。稳定性基线未干净前，不要全量上线 worker 自定义镜像；先保证主程序能稳定绕开额度耗尽/连续空流 worker，再做缓存命中优化。
 
 # 文档入口
 

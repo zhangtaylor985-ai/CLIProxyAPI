@@ -847,19 +847,13 @@ func TestManagerMarkResult_CodexWorkerCooldownAppliesToWholeAuth(t *testing.T) {
 	}
 }
 
-func TestManagerMarkResult_CodexWorkerInFlightSuccessDoesNotClearActiveCooldown(t *testing.T) {
-	provider := "codex-worker05-taylor"
+func TestManagerMarkResult_CodexWorkerEmptyStreamRequiresConsecutiveFailures(t *testing.T) {
+	provider := "codex-worker04-sunwei"
 	authID := provider + "-auth"
 	model := "gpt-5.4"
 
 	m := NewManager(nil, nil, nil)
 	m.RegisterExecutor(&authScopedOpenAICompatPoolExecutor{id: provider})
-
-	reg := registry.GetGlobalRegistry()
-	reg.RegisterClient(authID, provider, []*registry.ModelInfo{{ID: model}})
-	t.Cleanup(func() {
-		reg.UnregisterClient(authID)
-	})
 
 	auth := &Auth{
 		ID:       authID,
@@ -875,33 +869,212 @@ func TestManagerMarkResult_CodexWorkerInFlightSuccessDoesNotClearActiveCooldown(
 		t.Fatalf("register auth: %v", err)
 	}
 
-	retryAfter := time.Minute
 	m.MarkResult(context.Background(), Result{
-		AuthID:     authID,
-		Provider:   provider,
-		Model:      model,
-		Success:    false,
-		RetryAfter: &retryAfter,
-		Error:      &Error{HTTPStatus: http.StatusServiceUnavailable, Message: "upstream stream closed before first payload"},
+		AuthID:   authID,
+		Provider: provider,
+		Model:    model,
+		Success:  false,
+		Error:    emptyStreamError(),
 	})
-	cooled, ok := m.GetByID(authID)
-	if !ok || cooled == nil || !cooled.Unavailable || !cooled.NextRetryAfter.After(time.Now()) {
-		t.Fatalf("cooled auth = %+v, want active cooldown", cooled)
+	afterFirst, ok := m.GetByID(authID)
+	if !ok || afterFirst == nil {
+		t.Fatalf("expected auth after first empty stream")
 	}
-	cooldownUntil := cooled.NextRetryAfter
+	if afterFirst.Unavailable || afterFirst.NextRetryAfter.After(time.Now()) {
+		t.Fatalf("first empty stream auth state = %+v, want still selectable", afterFirst)
+	}
+	if afterFirst.Health.ConsecutiveEmptyStreams != 1 {
+		t.Fatalf("first empty stream streak = %d, want 1", afterFirst.Health.ConsecutiveEmptyStreams)
+	}
+	if len(afterFirst.ModelStates) != 0 {
+		t.Fatalf("codex worker should not keep model-scoped states, got %+v", afterFirst.ModelStates)
+	}
 
 	m.MarkResult(context.Background(), Result{
 		AuthID:   authID,
 		Provider: provider,
 		Model:    model,
-		Success:  true,
+		Success:  false,
+		Error:    emptyStreamError(),
 	})
-	afterSuccess, ok := m.GetByID(authID)
-	if !ok || afterSuccess == nil {
-		t.Fatalf("expected auth after in-flight success")
+	afterSecond, ok := m.GetByID(authID)
+	if !ok || afterSecond == nil {
+		t.Fatalf("expected auth after second empty stream")
 	}
-	if !afterSuccess.Unavailable || !afterSuccess.NextRetryAfter.Equal(cooldownUntil) {
-		t.Fatalf("in-flight success cleared cooldown: %+v want until %v", afterSuccess, cooldownUntil)
+	if !afterSecond.Unavailable || !afterSecond.NextRetryAfter.After(time.Now()) {
+		t.Fatalf("second empty stream auth state = %+v, want whole worker cooldown", afterSecond)
+	}
+	if afterSecond.Health.ConsecutiveEmptyStreams != 2 {
+		t.Fatalf("second empty stream streak = %d, want 2", afterSecond.Health.ConsecutiveEmptyStreams)
+	}
+}
+
+func TestManagerExecuteStream_CodexWorkerEmptyStreamRetrySuccessKeepsWorkerAvailable(t *testing.T) {
+	previousDelay := emptyStreamBootstrapRetryDelay
+	emptyStreamBootstrapRetryDelay = func(int) time.Duration { return 0 }
+	t.Cleanup(func() { emptyStreamBootstrapRetryDelay = previousDelay })
+
+	provider := "codex-worker06-qinyi"
+	model := "gpt-5.4"
+	authID := provider + "-auth"
+	executor := &authSequenceStreamExecutor{
+		id: provider,
+		streams: map[string][][]cliproxyexecutor.StreamChunk{
+			authID + "|" + model: {
+				{},
+				{{Payload: []byte("ok")}},
+			},
+		},
+	}
+	cfg := &internalconfig.Config{
+		OpenAICompatibility: []internalconfig.OpenAICompatibility{{
+			Name: provider,
+			Models: []internalconfig.OpenAICompatibilityModel{
+				{Name: model, Alias: model},
+			},
+		}},
+	}
+	m := NewManager(nil, nil, nil)
+	m.SetConfig(cfg)
+	m.RegisterExecutor(executor)
+	auth := &Auth{
+		ID:       authID,
+		Provider: provider,
+		Status:   StatusActive,
+		Attributes: map[string]string{
+			"api_key":      "worker-key",
+			"compat_name":  provider,
+			"provider_key": provider,
+		},
+	}
+	if _, err := m.Register(context.Background(), auth); err != nil {
+		t.Fatalf("register auth: %v", err)
+	}
+	reg := registry.GetGlobalRegistry()
+	reg.RegisterClient(authID, provider, []*registry.ModelInfo{{ID: model}})
+	t.Cleanup(func() { reg.UnregisterClient(authID) })
+
+	streamResult, err := m.ExecuteStream(context.Background(), []string{provider}, cliproxyexecutor.Request{Model: model}, cliproxyexecutor.Options{})
+	if err != nil {
+		t.Fatalf("ExecuteStream error: %v", err)
+	}
+	if payload := readOpenAICompatStreamPayload(t, streamResult); payload != "ok" {
+		t.Fatalf("payload = %q, want ok", payload)
+	}
+	updated, ok := m.GetByID(authID)
+	if !ok || updated == nil {
+		t.Fatalf("expected auth after execution")
+	}
+	if updated.Unavailable || updated.Health.ConsecutiveEmptyStreams != 0 {
+		t.Fatalf("auth after retry success = %+v, want available with reset empty-stream streak", updated)
+	}
+}
+
+func TestManagerExecuteStream_CodexWorkersFailOverToAvailableWorker(t *testing.T) {
+	previousDelay := emptyStreamBootstrapRetryDelay
+	emptyStreamBootstrapRetryDelay = func(int) time.Duration { return 0 }
+	t.Cleanup(func() { emptyStreamBootstrapRetryDelay = previousDelay })
+
+	model := "gpt-5.4"
+	quotaProvider := "codex-worker02-haoran"
+	emptyProvider := "codex-worker03-linxiaoyu"
+	goodProvider := "codex-worker04-sunwei"
+	quotaAuthID := quotaProvider + "-auth"
+	emptyAuthID := emptyProvider + "-auth"
+	goodAuthID := goodProvider + "-auth"
+
+	quotaRetryAfter := 24 * time.Hour
+	quotaErr := retryAfterTestError{
+		statusCode: http.StatusTooManyRequests,
+		message:    `{"error":{"type":"usage_limit_reached","resets_in_seconds":86400}}`,
+		retryAfter: quotaRetryAfter,
+	}
+	quotaExecutor := &authSequenceStreamExecutor{
+		id: quotaProvider,
+		streams: map[string][][]cliproxyexecutor.StreamChunk{
+			quotaAuthID + "|" + model: {
+				{{Err: quotaErr}},
+			},
+		},
+	}
+	emptyExecutor := &authSequenceStreamExecutor{
+		id: emptyProvider,
+		streams: map[string][][]cliproxyexecutor.StreamChunk{
+			emptyAuthID + "|" + model: {
+				{{Err: errors.New("upstream stream closed before first payload")}},
+				{{Err: errors.New("upstream stream closed before first payload")}},
+			},
+		},
+	}
+	goodExecutor := &authSequenceStreamExecutor{
+		id: goodProvider,
+		streams: map[string][][]cliproxyexecutor.StreamChunk{
+			goodAuthID + "|" + model: {
+				{{Payload: []byte("ok")}},
+			},
+		},
+	}
+
+	cfg := &internalconfig.Config{
+		OpenAICompatibility: []internalconfig.OpenAICompatibility{
+			{Name: quotaProvider, Models: []internalconfig.OpenAICompatibilityModel{{Name: model, Alias: model}}},
+			{Name: emptyProvider, Models: []internalconfig.OpenAICompatibilityModel{{Name: model, Alias: model}}},
+			{Name: goodProvider, Models: []internalconfig.OpenAICompatibilityModel{{Name: model, Alias: model}}},
+		},
+	}
+	m := NewManager(nil, nil, nil)
+	m.SetConfig(cfg)
+	m.RegisterExecutor(quotaExecutor)
+	m.RegisterExecutor(emptyExecutor)
+	m.RegisterExecutor(goodExecutor)
+
+	reg := registry.GetGlobalRegistry()
+	for _, item := range []struct {
+		id       string
+		provider string
+	}{
+		{quotaAuthID, quotaProvider},
+		{emptyAuthID, emptyProvider},
+		{goodAuthID, goodProvider},
+	} {
+		auth := &Auth{
+			ID:       item.id,
+			Provider: item.provider,
+			Status:   StatusActive,
+			Attributes: map[string]string{
+				"api_key":      item.id + "-key",
+				"compat_name":  item.provider,
+				"provider_key": item.provider,
+			},
+		}
+		if _, err := m.Register(context.Background(), auth); err != nil {
+			t.Fatalf("register auth %s: %v", item.id, err)
+		}
+		reg.RegisterClient(item.id, item.provider, []*registry.ModelInfo{{ID: model}})
+		t.Cleanup(func(id string) func() {
+			return func() { reg.UnregisterClient(id) }
+		}(item.id))
+	}
+
+	streamResult, err := m.ExecuteStream(context.Background(), []string{quotaProvider, emptyProvider, goodProvider}, cliproxyexecutor.Request{Model: model}, cliproxyexecutor.Options{})
+	if err != nil {
+		t.Fatalf("ExecuteStream error: %v", err)
+	}
+	if payload := readOpenAICompatStreamPayload(t, streamResult); payload != "ok" {
+		t.Fatalf("payload = %q, want ok", payload)
+	}
+
+	quotaAuth, _ := m.GetByID(quotaAuthID)
+	if quotaAuth == nil || !quotaAuth.Unavailable || !quotaAuth.Quota.Exceeded || quotaAuth.NextRetryAfter.Sub(time.Now()) < 23*time.Hour {
+		t.Fatalf("quota auth = %+v, want long quota cooldown", quotaAuth)
+	}
+	emptyAuth, _ := m.GetByID(emptyAuthID)
+	if emptyAuth == nil || !emptyAuth.Unavailable || emptyAuth.Health.ConsecutiveEmptyStreams != 2 {
+		t.Fatalf("empty-stream auth = %+v, want short whole-worker cooldown", emptyAuth)
+	}
+	goodAuth, _ := m.GetByID(goodAuthID)
+	if goodAuth == nil || goodAuth.Unavailable {
+		t.Fatalf("good auth = %+v, want available", goodAuth)
 	}
 }
 
