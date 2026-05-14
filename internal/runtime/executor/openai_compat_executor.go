@@ -18,6 +18,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/executor"
+	"github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/usage"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v6/sdk/translator"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
@@ -175,7 +176,9 @@ func (e *OpenAICompatExecutor) Execute(ctx context.Context, auth *cliproxyauth.A
 		return resp, err
 	}
 	appendAPIResponseChunk(ctx, e.cfg, body)
-	reporter.publish(ctx, parseOpenAIUsage(body))
+	detail := parseOpenAIUsage(body)
+	reporter.publish(ctx, detail)
+	e.observeCodexWorkerPromptCacheUsage(ctx, auth, from, to, baseModel, originalPayload, detail)
 	// Ensure we at least record the request even if upstream doesn't return usage
 	reporter.ensurePublished(ctx)
 	// Translate response back to source format when needed
@@ -291,6 +294,7 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 			appendAPIResponseChunk(ctx, e.cfg, line)
 			if detail, ok := parseOpenAIStreamUsage(line); ok {
 				reporter.publish(ctx, detail)
+				e.observeCodexWorkerPromptCacheUsage(ctx, auth, from, to, baseModel, originalPayload, detail)
 			}
 			if len(line) == 0 {
 				continue
@@ -429,25 +433,41 @@ func (e *OpenAICompatExecutor) applyCodexWorkerPromptCacheKey(ctx context.Contex
 	if gjson.GetBytes(translated, "prompt_cache_key").Exists() {
 		return translated
 	}
+	scope := e.codexWorkerPromptCacheScope(ctx, auth, baseModel, originalPayload)
+	if scope == "" {
+		return translated
+	}
+	cache := getOrCreateCodexRollingCache(scope)
+	if strings.TrimSpace(cache.ID) == "" {
+		return translated
+	}
+	translated, _ = sjson.SetBytes(translated, "prompt_cache_key", cache.ID)
+	return translated
+}
+
+func (e *OpenAICompatExecutor) observeCodexWorkerPromptCacheUsage(ctx context.Context, auth *cliproxyauth.Auth, from, to sdktranslator.Format, baseModel string, originalPayload []byte, detail usage.Detail) {
+	if !e.isCodexWorkerProvider(auth) || from.String() != "claude" || to.String() != "openai" {
+		return
+	}
+	observeCodexRollingCacheUsage(e.codexWorkerPromptCacheScope(ctx, auth, baseModel, originalPayload), detail.InputTokens, detail.CachedTokens)
+}
+
+func (e *OpenAICompatExecutor) codexWorkerPromptCacheScope(ctx context.Context, auth *cliproxyauth.Auth, baseModel string, originalPayload []byte) string {
 	userID := strings.TrimSpace(gjson.GetBytes(originalPayload, "metadata.user_id").String())
 	if userID == "" {
-		return translated
+		return ""
 	}
 	apiKeyHash := ""
 	if apiKey := strings.TrimSpace(apiKeyFromContext(ctx)); apiKey != "" {
 		sum := sha256.Sum256([]byte(apiKey))
 		apiKeyHash = hex.EncodeToString(sum[:16])
 	}
-	scope := strings.Join([]string{
-		"claude",
+	return codexScopedCacheKey(auth,
+		"codex-worker-claude",
 		strings.TrimSpace(baseModel),
 		apiKeyHash,
 		userID,
-	}, "\x00")
-	sum := sha256.Sum256([]byte(scope))
-	cacheKey := "cwpc_" + hex.EncodeToString(sum[:16])
-	translated, _ = sjson.SetBytes(translated, "prompt_cache_key", cacheKey)
-	return translated
+	)
 }
 
 func (e *OpenAICompatExecutor) isCodexWorkerProvider(auth *cliproxyauth.Auth) bool {
