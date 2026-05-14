@@ -25,6 +25,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/executor"
 	log "github.com/sirupsen/logrus"
+	"github.com/tidwall/gjson"
 )
 
 // ProviderExecutor defines the contract required by Manager to execute provider calls.
@@ -927,10 +928,88 @@ func readStreamBootstrap(ctx context.Context, ch <-chan cliproxyexecutor.StreamC
 			return nil, false, 0, chunk.Err
 		}
 		buffered = append(buffered, chunk)
-		if len(chunk.Payload) > 0 {
+		if streamChunkHasBootstrapActivity(chunk.Payload) {
 			return buffered, false, normalizeDuration(time.Since(startedAt)), nil
 		}
 	}
+}
+
+func streamChunkHasBootstrapActivity(payload []byte) bool {
+	payload = bytes.TrimSpace(payload)
+	if len(payload) == 0 {
+		return false
+	}
+
+	jsonPayloads := streamChunkJSONPayloads(payload)
+	if len(jsonPayloads) == 0 {
+		return true
+	}
+	sawProtocolOnly := false
+	for _, item := range jsonPayloads {
+		item = bytes.TrimSpace(item)
+		if len(item) == 0 || bytes.Equal(item, []byte("[DONE]")) {
+			sawProtocolOnly = true
+			continue
+		}
+		root := gjson.ParseBytes(item)
+		if !root.Exists() {
+			return true
+		}
+		if streamJSONHasBootstrapActivity(root) {
+			return true
+		}
+		sawProtocolOnly = true
+	}
+	return !sawProtocolOnly
+}
+
+func streamChunkJSONPayloads(payload []byte) [][]byte {
+	lines := bytes.Split(payload, []byte{'\n'})
+	items := make([][]byte, 0, len(lines))
+	for _, line := range lines {
+		line = bytes.TrimSpace(line)
+		if len(line) == 0 {
+			continue
+		}
+		if bytes.HasPrefix(line, []byte("data:")) {
+			items = append(items, bytes.TrimSpace(bytes.TrimPrefix(line, []byte("data:"))))
+		}
+	}
+	if len(items) > 0 {
+		return items
+	}
+	if bytes.HasPrefix(payload, []byte("{")) || bytes.HasPrefix(payload, []byte("[")) {
+		return [][]byte{payload}
+	}
+	return nil
+}
+
+func streamJSONHasBootstrapActivity(root gjson.Result) bool {
+	eventType := strings.TrimSpace(root.Get("type").String())
+	switch eventType {
+	case "message_start", "content_block_start", "message_delta", "message_stop":
+		if eventType == "content_block_start" && root.Get("content_block.type").String() == "tool_use" {
+			return true
+		}
+		return false
+	case "content_block_delta":
+		return true
+	}
+
+	if delta := root.Get("choices.0.delta"); delta.Exists() {
+		if strings.TrimSpace(delta.Get("content").String()) != "" {
+			return true
+		}
+		if strings.TrimSpace(delta.Get("reasoning_content").String()) != "" {
+			return true
+		}
+		if delta.Get("tool_calls").Exists() || delta.Get("images").Exists() {
+			return true
+		}
+		return false
+	}
+
+	return true
 }
 
 func (m *Manager) wrapStreamResult(ctx context.Context, auth *Auth, provider, resultModel string, headers http.Header, buffered []cliproxyexecutor.StreamChunk, remaining <-chan cliproxyexecutor.StreamChunk, startedAt time.Time, firstActivityLatency time.Duration, done func()) *cliproxyexecutor.StreamResult {

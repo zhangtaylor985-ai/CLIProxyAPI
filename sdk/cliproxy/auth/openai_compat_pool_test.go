@@ -660,6 +660,70 @@ func TestManagerExecuteStream_RetriesEmptyStreamChunkErrorSameWorkerOnce(t *test
 	}
 }
 
+func TestManagerExecuteStream_RetriesAfterProtocolOnlyChunkError(t *testing.T) {
+	previousDelay := emptyStreamBootstrapRetryDelay
+	emptyStreamBootstrapRetryDelay = func(int) time.Duration { return 0 }
+	t.Cleanup(func() { emptyStreamBootstrapRetryDelay = previousDelay })
+
+	model := "gpt-5.4"
+	authID := "worker04"
+	protocolChunk := []byte("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"role\":\"assistant\",\"content\":[]}}\n\n")
+	executor := &authSequenceStreamExecutor{
+		id: "pool",
+		streams: map[string][][]cliproxyexecutor.StreamChunk{
+			authID + "|" + model: {
+				{{Payload: protocolChunk}, {Err: errors.New("upstream stream closed before first payload")}},
+				{{Payload: []byte("ok")}},
+			},
+		},
+	}
+	cfg := &internalconfig.Config{
+		OpenAICompatibility: []internalconfig.OpenAICompatibility{{
+			Name: "pool",
+			Models: []internalconfig.OpenAICompatibilityModel{
+				{Name: model, Alias: model},
+			},
+		}},
+	}
+	m := NewManager(nil, nil, nil)
+	m.SetConfig(cfg)
+	m.RegisterExecutor(executor)
+	auth := &Auth{
+		ID:       authID,
+		Provider: "pool",
+		Status:   StatusActive,
+		Attributes: map[string]string{
+			"api_key":      "worker04-key",
+			"compat_name":  "pool",
+			"provider_key": "pool",
+		},
+	}
+	if _, err := m.Register(context.Background(), auth); err != nil {
+		t.Fatalf("register auth: %v", err)
+	}
+	reg := registry.GetGlobalRegistry()
+	reg.RegisterClient(authID, "pool", []*registry.ModelInfo{{ID: model}})
+	t.Cleanup(func() { reg.UnregisterClient(authID) })
+
+	streamResult, err := m.ExecuteStream(context.Background(), []string{"pool"}, cliproxyexecutor.Request{Model: model}, cliproxyexecutor.Options{})
+	if err != nil {
+		t.Fatalf("ExecuteStream error: %v", err)
+	}
+	if payload := readOpenAICompatStreamPayload(t, streamResult); payload != "ok" {
+		t.Fatalf("payload = %q, want ok", payload)
+	}
+	got := executor.Calls()
+	want := []string{authID + "|" + model, authID + "|" + model}
+	if len(got) != len(want) {
+		t.Fatalf("calls = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("call %d = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
 func TestManagerExecuteStream_OpenAICompatAliasPoolFallsBackBeforeFirstByte(t *testing.T) {
 	alias := "claude-opus-4.66"
 	executor := &openAICompatPoolExecutor{

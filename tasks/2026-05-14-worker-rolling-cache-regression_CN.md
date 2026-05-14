@@ -138,3 +138,10 @@
 - `c1744f6f fix: detect codex worker auth ids` 已发布到主程序 VPS，`cliproxyapi.service` 重新编译并重启成功，健康探测通过。
 - 上线后观察窗口自 `2026-05-14 03:30:00 UTC` 起，统计结果：`suppress=0`、`empty=0`、`model_cooldown=0`、`reselect=4`、`suspended=4`、`resumed=1`、`hit=90`、`miss=21`。
 - 日志确认 `openai-compatibility:codex-worker03-...` 在 transient 后被 suspended，后续 `session-affinity` 对不可用 auth 执行 reselect 到其他 worker；符合预期。
+
+继续观察后的第三个根因：
+
+- 后续仍出现少量客户侧外溢，定位为 worker 已先返回 Claude/OpenAI 协议壳事件，例如 `message_start` / role-only chunk，但还没有真实内容 token；随后才返回 `empty_stream`。
+- 旧 bootstrap 判断把任意非空 payload 都当作“流已开始”，导致协议壳之后的错误无法再 failover。
+- 修复方向：bootstrap 阶段只把真正内容/工具增量算作 first activity；`message_start`、普通 `content_block_start`、role-only OpenAI chunk、`[DONE]` 不算 first activity。这样首个真实内容前的错误仍保留在可重试窗口内。
+- 新增 `TestManagerExecuteStream_RetriesAfterProtocolOnlyChunkError`，覆盖“先协议壳、再 empty_stream、然后重试成功”的路径。
