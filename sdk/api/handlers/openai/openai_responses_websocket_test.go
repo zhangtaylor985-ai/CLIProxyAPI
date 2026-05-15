@@ -739,6 +739,87 @@ func TestForwardResponsesWebsocketPreservesCompletedEvent(t *testing.T) {
 	}
 }
 
+func TestForwardResponsesWebsocketRecordsToolCalls(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	sessionKey := fmt.Sprintf("record-tool-call-%d", time.Now().UnixNano())
+	defaultWebsocketToolCallCache.deleteSession(sessionKey)
+	defer defaultWebsocketToolCallCache.deleteSession(sessionKey)
+
+	serverErrCh := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := responsesWebsocketUpgrader.Upgrade(w, r, nil)
+		if err != nil {
+			serverErrCh <- err
+			return
+		}
+		defer func() {
+			errClose := conn.Close()
+			if errClose != nil {
+				serverErrCh <- errClose
+			}
+		}()
+
+		ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+		ctx.Request = r
+
+		data := make(chan []byte, 1)
+		errCh := make(chan *interfaces.ErrorMessage)
+		data <- []byte(`{"type":"response.completed","response":{"id":"resp-1","output":[{"type":"function_call","id":"fc-1","call_id":"call-record","name":"shell_command","arguments":"{}"}]}}`)
+		close(data)
+		close(errCh)
+
+		var bodyLog strings.Builder
+		if _, err := (*OpenAIResponsesAPIHandler)(nil).forwardResponsesWebsocket(
+			ctx,
+			conn,
+			func(...interface{}) {},
+			data,
+			errCh,
+			&bodyLog,
+			"session-1",
+		); err != nil {
+			serverErrCh <- err
+			return
+		}
+		serverErrCh <- nil
+	}))
+	defer server.Close()
+
+	headers := http.Header{}
+	headers.Set("X-Client-Request-Id", sessionKey)
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, headers)
+	if err != nil {
+		t.Fatalf("dial websocket: %v", err)
+	}
+	defer func() {
+		errClose := conn.Close()
+		if errClose != nil {
+			t.Fatalf("close websocket: %v", errClose)
+		}
+	}()
+
+	_, payload, errReadMessage := conn.ReadMessage()
+	if errReadMessage != nil {
+		t.Fatalf("read websocket message: %v", errReadMessage)
+	}
+	if gjson.GetBytes(payload, "type").String() != wsEventTypeCompleted {
+		t.Fatalf("payload type = %s, want %s", gjson.GetBytes(payload, "type").String(), wsEventTypeCompleted)
+	}
+	if errServer := <-serverErrCh; errServer != nil {
+		t.Fatalf("server error: %v", errServer)
+	}
+
+	cached, ok := defaultWebsocketToolCallCache.get(sessionKey, "call-record")
+	if !ok {
+		t.Fatalf("tool call was not recorded for session %s", sessionKey)
+	}
+	if got := gjson.GetBytes(cached, "id").String(); got != "fc-1" {
+		t.Fatalf("cached tool call id = %s, want fc-1", got)
+	}
+}
+
 func TestWebsocketUpstreamSupportsIncrementalInputForModel(t *testing.T) {
 	manager := coreauth.NewManager(nil, nil, nil)
 	auth := &coreauth.Auth{
@@ -759,6 +840,90 @@ func TestWebsocketUpstreamSupportsIncrementalInputForModel(t *testing.T) {
 	h := NewOpenAIResponsesAPIHandler(base)
 	if !h.websocketUpstreamSupportsIncrementalInputForModel("test-model") {
 		t.Fatalf("expected websocket-capable upstream for test-model")
+	}
+}
+
+func TestResponsesWebsocketRepairsCachedToolOutputBeforeForwarding(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	sessionKey := fmt.Sprintf("repair-tool-output-%d", time.Now().UnixNano())
+	defaultWebsocketToolOutputCache.deleteSession(sessionKey)
+	defaultWebsocketToolCallCache.deleteSession(sessionKey)
+	defer defaultWebsocketToolOutputCache.deleteSession(sessionKey)
+	defer defaultWebsocketToolCallCache.deleteSession(sessionKey)
+
+	executor := &websocketCaptureExecutor{}
+	manager := coreauth.NewManager(nil, nil, nil)
+	manager.RegisterExecutor(executor)
+	auth := &coreauth.Auth{ID: "auth-sse", Provider: executor.Identifier(), Status: coreauth.StatusActive}
+	if _, err := manager.Register(context.Background(), auth); err != nil {
+		t.Fatalf("Register auth: %v", err)
+	}
+	registry.GetGlobalRegistry().RegisterClient(auth.ID, auth.Provider, []*registry.ModelInfo{{ID: "test-model"}})
+	t.Cleanup(func() {
+		registry.GetGlobalRegistry().UnregisterClient(auth.ID)
+	})
+
+	base := handlers.NewBaseAPIHandlers(&sdkconfig.SDKConfig{}, manager)
+	h := NewOpenAIResponsesAPIHandler(base)
+	router := gin.New()
+	router.GET("/v1/responses/ws", h.ResponsesWebsocket)
+
+	server := httptest.NewServer(router)
+	defer server.Close()
+
+	headers := http.Header{}
+	headers.Set("X-Client-Request-Id", sessionKey)
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/v1/responses/ws"
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, headers)
+	if err != nil {
+		t.Fatalf("dial websocket: %v", err)
+	}
+	defer func() {
+		errClose := conn.Close()
+		if errClose != nil {
+			t.Fatalf("close websocket: %v", errClose)
+		}
+	}()
+
+	warmRequest := `{"type":"response.create","model":"test-model","input":[{"type":"message","id":"msg-1"},{"type":"function_call","id":"fc-1","call_id":"call-1","name":"shell_command","arguments":"{}"},{"type":"function_call_output","id":"fco-1","call_id":"call-1","output":"ok"}]}`
+	if errWrite := conn.WriteMessage(websocket.TextMessage, []byte(warmRequest)); errWrite != nil {
+		t.Fatalf("write warm websocket message: %v", errWrite)
+	}
+	_, payload, errReadMessage := conn.ReadMessage()
+	if errReadMessage != nil {
+		t.Fatalf("read warm websocket message: %v", errReadMessage)
+	}
+	if got := gjson.GetBytes(payload, "type").String(); got != wsEventTypeCompleted {
+		t.Fatalf("warm payload type = %s, want %s", got, wsEventTypeCompleted)
+	}
+
+	replacementRequest := `{"type":"response.create","input":[{"type":"function_call","id":"fc-compact","call_id":"call-1","name":"shell_command","arguments":"{}"},{"type":"message","id":"msg-2"}]}`
+	if errWrite := conn.WriteMessage(websocket.TextMessage, []byte(replacementRequest)); errWrite != nil {
+		t.Fatalf("write replacement websocket message: %v", errWrite)
+	}
+	_, payload, errReadMessage = conn.ReadMessage()
+	if errReadMessage != nil {
+		t.Fatalf("read replacement websocket message: %v", errReadMessage)
+	}
+	if got := gjson.GetBytes(payload, "type").String(); got != wsEventTypeCompleted {
+		t.Fatalf("replacement payload type = %s, want %s", got, wsEventTypeCompleted)
+	}
+
+	if len(executor.payloads) != 2 {
+		t.Fatalf("captured upstream payloads = %d, want 2", len(executor.payloads))
+	}
+	input := gjson.GetBytes(executor.payloads[1], "input").Array()
+	if len(input) != 3 {
+		t.Fatalf("repaired input len = %d, want 3: %s", len(input), executor.payloads[1])
+	}
+	if input[0].Get("type").String() != "function_call" ||
+		input[1].Get("type").String() != "function_call_output" ||
+		input[2].Get("id").String() != "msg-2" {
+		t.Fatalf("unexpected repaired input order: %s", executor.payloads[1])
+	}
+	if got := input[1].Get("id").String(); got != "fco-1" {
+		t.Fatalf("repaired output id = %s, want fco-1", got)
 	}
 }
 

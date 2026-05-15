@@ -55,14 +55,18 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 		return
 	}
 	passthroughSessionID := uuid.NewString()
+	downstreamSessionKey := ""
 	clientRemoteAddr := ""
 	if c != nil && c.Request != nil {
 		clientRemoteAddr = strings.TrimSpace(c.Request.RemoteAddr)
+		downstreamSessionKey = websocketDownstreamSessionKey(c.Request)
 	}
+	retainResponsesWebsocketToolCaches(downstreamSessionKey)
 	log.Infof("responses websocket: client connected id=%s remote=%s", passthroughSessionID, clientRemoteAddr)
 	var wsTerminateErr error
 	var wsBodyLog strings.Builder
 	defer func() {
+		releaseResponsesWebsocketToolCaches(downstreamSessionKey)
 		if wsTerminateErr != nil {
 			// log.Infof("responses websocket: session closing id=%s reason=%v", passthroughSessionID, wsTerminateErr)
 		} else {
@@ -167,6 +171,8 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 			}
 			continue
 		}
+		requestJSON = repairResponsesWebsocketToolCalls(downstreamSessionKey, requestJSON)
+		updatedLastRequest = bytes.Clone(requestJSON)
 		lastRequest = updatedLastRequest
 
 		modelName := gjson.GetBytes(requestJSON, "model").String()
@@ -709,6 +715,10 @@ func (h *OpenAIResponsesAPIHandler) forwardResponsesWebsocket(
 ) ([]byte, error) {
 	completed := false
 	completedOutput := []byte("[]")
+	downstreamSessionKey := ""
+	if c != nil && c.Request != nil {
+		downstreamSessionKey = websocketDownstreamSessionKey(c.Request)
+	}
 
 	for {
 		select {
@@ -786,6 +796,7 @@ func (h *OpenAIResponsesAPIHandler) forwardResponsesWebsocket(
 
 			payloads := websocketJSONPayloadsFromChunk(chunk)
 			for i := range payloads {
+				recordResponsesWebsocketToolCallsFromPayload(downstreamSessionKey, payloads[i])
 				eventType := gjson.GetBytes(payloads[i], "type").String()
 				if eventType == wsEventTypeCompleted {
 					completed = true

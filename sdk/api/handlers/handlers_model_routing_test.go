@@ -158,6 +158,9 @@ func newModelRoutingTestHandler(t *testing.T, provider string, models []string, 
 		modelInfos = append(modelInfos, &registry.ModelInfo{ID: model})
 	}
 	registry.GetGlobalRegistry().RegisterClient(auth.ID, auth.Provider, modelInfos)
+	t.Cleanup(func() {
+		registry.GetGlobalRegistry().UnregisterClient(auth.ID)
+	})
 
 	enabled := true
 	policy := &internalconfig.APIKeyPolicy{
