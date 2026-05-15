@@ -116,9 +116,8 @@ type APIKeyPolicy struct {
 	// Matching is case-insensitive. Supports '*' wildcard.
 	ExcludedModels []string `yaml:"excluded-models,omitempty" json:"excluded-models,omitempty"`
 
-	// ModelRouting optionally rewrites an incoming request model to a configured target model.
-	// This supports deterministic time-window split routing for coherence (e.g. 50% of 1h windows
-	// routed to Codex while still presenting the original requested model to the client).
+	// ModelRouting optionally rewrites Claude compatibility requests to a configured target model.
+	// Direct OpenAI/Codex requests must keep the model requested by the client.
 	ModelRouting APIKeyModelRoutingPolicy `yaml:"model-routing,omitempty" json:"model-routing,omitempty"`
 
 	// AllowClaudeOpus46 controls whether requests may use claude-opus-4-6.

@@ -520,6 +520,13 @@ func apiKeyPolicyFromContext(ctx context.Context) *internalconfig.APIKeyPolicy {
 	return policy
 }
 
+func shouldApplyAPIKeyModelRouting(handlerType string) bool {
+	// API-key model routing is a Claude compatibility control for selecting
+	// GPT/Codex targets behind Claude clients. Direct OpenAI/Codex clients must
+	// execute the model they requested.
+	return strings.EqualFold(strings.TrimSpace(handlerType), "claude")
+}
+
 func clientAPIKeyFromContext(ctx context.Context) string {
 	if ctx == nil {
 		return ""
@@ -1705,7 +1712,7 @@ func (h *BaseAPIHandler) ExecuteWithAuthManager(ctx context.Context, handlerType
 		}
 	}
 	probeRoutingBypass := probeTargetAuthID != ""
-	if policy := apiKeyPolicyFromContext(ctx); policy != nil && !probeRoutingBypass {
+	if policy := apiKeyPolicyFromContext(ctx); policy != nil && !probeRoutingBypass && shouldApplyAPIKeyModelRouting(handlerType) {
 		target, decision := policy.RoutedModelFor(clientAPIKeyFromContext(ctx), requestedModel, time.Now())
 		if decision != nil && strings.TrimSpace(target) != "" && target != requestedModel {
 			routedModel = target
@@ -1908,7 +1915,7 @@ func (h *BaseAPIHandler) ExecuteCountWithAuthManager(ctx context.Context, handle
 		}
 	}
 	probeRoutingBypass := probeTargetAuthID != ""
-	if policy := apiKeyPolicyFromContext(ctx); policy != nil && !probeRoutingBypass {
+	if policy := apiKeyPolicyFromContext(ctx); policy != nil && !probeRoutingBypass && shouldApplyAPIKeyModelRouting(handlerType) {
 		target, decision := policy.RoutedModelFor(clientAPIKeyFromContext(ctx), requestedModel, time.Now())
 		if decision != nil && strings.TrimSpace(target) != "" && target != requestedModel {
 			routedModel = target
@@ -2098,7 +2105,7 @@ func (h *BaseAPIHandler) ExecuteStreamWithAuthManager(ctx context.Context, handl
 		}
 	}
 	probeRoutingBypass := probeTargetAuthID != ""
-	if policy := apiKeyPolicyFromContext(ctx); policy != nil && !probeRoutingBypass {
+	if policy := apiKeyPolicyFromContext(ctx); policy != nil && !probeRoutingBypass && shouldApplyAPIKeyModelRouting(handlerType) {
 		target, decision := policy.RoutedModelFor(clientAPIKeyFromContext(ctx), requestedModel, time.Now())
 		if decision != nil && strings.TrimSpace(target) != "" && target != requestedModel {
 			routedModel = target

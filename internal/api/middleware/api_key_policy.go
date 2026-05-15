@@ -214,7 +214,7 @@ func APIKeyPolicyMiddleware(getConfig func() *config.Config, limiter policy.Dail
 			}
 		}
 		budgetModel := effectiveModel
-		if policyEntry != nil {
+		if policyEntry != nil && policy.IsClaudeModel(effectiveModel) {
 			if routed, decision := policyEntry.RoutedModelFor(apiKey, effectiveModel, requestNow); decision != nil && strings.TrimSpace(routed) != "" {
 				budgetModel = routed
 			}
