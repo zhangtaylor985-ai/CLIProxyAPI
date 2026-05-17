@@ -87,3 +87,60 @@ func TestConvertOpenAIChatCompletionsResponseToOpenAIResponses_MultipleToolCalls
 		t.Fatalf("expected distinct completed arguments, got %q", outputItems["call_list"].Get("arguments").String())
 	}
 }
+
+func TestConvertOpenAIResponsesRequestToOpenAIChatCompletionsPreservesBuiltinImageTool(t *testing.T) {
+	request := []byte(`{"model":"gpt-5.4-mini","stream":true,"tool_choice":"required","tools":[{"type":"image_generation","model":"gpt-image-2","size":"1024x1024"}],"input":"draw"}`)
+
+	out := ConvertOpenAIResponsesRequestToOpenAIChatCompletions("gpt-5.4-mini", request, true)
+
+	if got := gjson.GetBytes(out, "tools.0.type").String(); got != "image_generation" {
+		t.Fatalf("tools.0.type = %q, want image_generation: %s", got, string(out))
+	}
+	if got := gjson.GetBytes(out, "tools.0.model").String(); got != "gpt-image-2" {
+		t.Fatalf("tools.0.model = %q, want gpt-image-2: %s", got, string(out))
+	}
+	if got := gjson.GetBytes(out, "tool_choice").String(); got != "required" {
+		t.Fatalf("tool_choice = %q, want required: %s", got, string(out))
+	}
+}
+
+func TestConvertOpenAIChatCompletionsResponseToOpenAIResponses_ImageDeltaCompletesOutput(t *testing.T) {
+	in := []string{
+		`data: {"id":"resp_img","object":"chat.completion.chunk","created":1773896263,"model":"model","choices":[{"index":0,"delta":{"role":"assistant","images":[{"index":0,"type":"image_url","image_url":{"url":"data:image/png;base64,aGVsbG8="}}]},"finish_reason":null}]}`,
+		`data: {"id":"resp_img","object":"chat.completion.chunk","created":1773896263,"model":"model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"completion_tokens":2,"total_tokens":5,"prompt_tokens":3}}`,
+		`data: [DONE]`,
+	}
+	request := []byte(`{"model":"gpt-5.4-mini","tools":[{"type":"image_generation","model":"gpt-image-2"}],"tool_choice":"required"}`)
+
+	var param any
+	var out [][]byte
+	for _, line := range in {
+		out = append(out, ConvertOpenAIChatCompletionsResponseToOpenAIResponses(context.Background(), "model", request, request, []byte(line), &param)...)
+	}
+
+	var partialImage string
+	var completedImage string
+	for _, chunk := range out {
+		ev, data := parseOpenAIResponsesSSEEvent(t, chunk)
+		switch ev {
+		case "response.image_generation_call.partial_image":
+			partialImage = data.Get("partial_image_b64").String()
+		case "response.completed":
+			for _, item := range data.Get("response.output").Array() {
+				if item.Get("type").String() == "image_generation_call" {
+					completedImage = item.Get("result").String()
+				}
+			}
+			if got := data.Get("response.usage.total_tokens").Int(); got != 5 {
+				t.Fatalf("response.usage.total_tokens = %d, want 5", got)
+			}
+		}
+	}
+
+	if partialImage != "aGVsbG8=" {
+		t.Fatalf("partial image = %q, want aGVsbG8=", partialImage)
+	}
+	if completedImage != "aGVsbG8=" {
+		t.Fatalf("completed image = %q, want aGVsbG8=", completedImage)
+	}
+}

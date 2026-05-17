@@ -61,6 +61,9 @@ func TestImagesModelValidationAllowsGPTImage2WithOptionalPrefix(t *testing.T) {
 func TestBuildImagesResponsesRequestPreservesModelPrefix(t *testing.T) {
 	req := buildImagesResponsesRequest("draw a square", nil, []byte(`{"type":"image_generation","model":"codex/gpt-image-2"}`))
 
+	if got := gjson.GetBytes(req, "tool_choice").String(); got != "required" {
+		t.Fatalf("tool_choice = %q, want required", got)
+	}
 	if got := gjson.GetBytes(req, "model").String(); got != "codex/gpt-5.4-mini" {
 		t.Fatalf("main model = %q, want codex/gpt-5.4-mini", got)
 	}
