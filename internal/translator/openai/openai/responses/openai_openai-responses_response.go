@@ -38,17 +38,19 @@ type oaiToResponsesState struct {
 	ReasoningIndex    int
 	// aggregation buffers for response.output
 	// Per-output message text buffers by index
-	MsgTextBuf    map[int]*strings.Builder
-	ReasoningBuf  strings.Builder
-	Reasonings    []oaiToResponsesStateReasoning
-	FuncArgsBuf   map[string]*strings.Builder
-	FuncNames     map[string]string
-	FuncCallIDs   map[string]string
-	FuncOutputIx  map[string]int
-	MsgOutputIx   map[int]int
-	ImageOutputIx map[int]int
-	Images        map[int]oaiToResponsesStateImage
-	NextOutputIx  int
+	MsgTextBuf     map[int]*strings.Builder
+	ReasoningBuf   strings.Builder
+	Reasonings     []oaiToResponsesStateReasoning
+	FuncArgsBuf    map[string]*strings.Builder
+	FuncNames      map[string]string
+	FuncCallIDs    map[string]string
+	FuncOutputIx   map[string]int
+	MsgOutputIx    map[int]int
+	ImageOutputIx  map[int]int
+	Images         map[int]oaiToResponsesStateImage
+	NextOutputIx   int
+	ImageItemAdded map[int]bool
+	ImageItemDone  map[int]bool
 	// message item state per output index
 	MsgItemAdded    map[int]bool // whether response.output_item.added emitted for message
 	MsgContentAdded map[int]bool // whether response.content_part.added emitted for message
@@ -264,6 +266,8 @@ func ConvertOpenAIChatCompletionsResponseToOpenAIResponses(ctx context.Context, 
 			MsgOutputIx:     make(map[int]int),
 			ImageOutputIx:   make(map[int]int),
 			Images:          make(map[int]oaiToResponsesStateImage),
+			ImageItemAdded:  make(map[int]bool),
+			ImageItemDone:   make(map[int]bool),
 			MsgTextBuf:      make(map[int]*strings.Builder),
 			MsgItemAdded:    make(map[int]bool),
 			MsgContentAdded: make(map[int]bool),
@@ -283,10 +287,48 @@ func ConvertOpenAIChatCompletionsResponseToOpenAIResponses(ctx context.Context, 
 	if len(rawJSON) == 0 {
 		return [][]byte{}
 	}
+	nextSeq := func() int { st.Seq++; return st.Seq }
+	var out [][]byte
+	emitImageItemDone := func(imageIndex int, img oaiToResponsesStateImage) {
+		if strings.TrimSpace(img.Result) == "" || st.ImageItemDone[imageIndex] {
+			return
+		}
+		itemDone := []byte(`{"type":"response.output_item.done","sequence_number":0,"output_index":0,"item":{"id":"","type":"image_generation_call","status":"completed","result":"","output_format":""}}`)
+		itemDone, _ = sjson.SetBytes(itemDone, "sequence_number", nextSeq())
+		itemDone, _ = sjson.SetBytes(itemDone, "output_index", img.OutputIndex)
+		itemDone, _ = sjson.SetBytes(itemDone, "item.id", img.ID)
+		itemDone, _ = sjson.SetBytes(itemDone, "item.result", img.Result)
+		if strings.TrimSpace(img.OutputFormat) != "" {
+			itemDone, _ = sjson.SetBytes(itemDone, "item.output_format", img.OutputFormat)
+		} else {
+			itemDone, _ = sjson.DeleteBytes(itemDone, "item.output_format")
+		}
+		out = append(out, emitRespEvent("response.output_item.done", itemDone))
+		st.ImageItemDone[imageIndex] = true
+	}
+	finalizeImages := func() {
+		if len(st.Images) == 0 {
+			return
+		}
+		imageIndexes := make([]int, 0, len(st.Images))
+		for imageIndex := range st.Images {
+			imageIndexes = append(imageIndexes, imageIndex)
+		}
+		sort.Slice(imageIndexes, func(i, j int) bool {
+			left := st.Images[imageIndexes[i]].OutputIndex
+			right := st.Images[imageIndexes[j]].OutputIndex
+			return left < right || (left == right && imageIndexes[i] < imageIndexes[j])
+		})
+		for _, imageIndex := range imageIndexes {
+			emitImageItemDone(imageIndex, st.Images[imageIndex])
+		}
+	}
 	if bytes.Equal(rawJSON, []byte("[DONE]")) {
 		if st.CompletionPending && !st.CompletedEmitted {
+			finalizeImages()
 			st.CompletedEmitted = true
-			return [][]byte{buildResponsesCompletedEvent(st, requestRawJSON, func() int { st.Seq++; return st.Seq })}
+			out = append(out, buildResponsesCompletedEvent(st, requestRawJSON, nextSeq))
+			return out
 		}
 		return [][]byte{}
 	}
@@ -329,14 +371,12 @@ func ConvertOpenAIChatCompletionsResponseToOpenAIResponses(ctx context.Context, 
 		}
 	}
 
-	nextSeq := func() int { st.Seq++; return st.Seq }
 	allocOutputIndex := func() int {
 		ix := st.NextOutputIx
 		st.NextOutputIx++
 		return ix
 	}
 	toolStateKey := func(outputIndex, toolIndex int) string { return fmt.Sprintf("%d:%d", outputIndex, toolIndex) }
-	var out [][]byte
 
 	if !st.Started {
 		st.ResponseID = root.Get("id").String()
@@ -353,6 +393,8 @@ func ConvertOpenAIChatCompletionsResponseToOpenAIResponses(ctx context.Context, 
 		st.MsgOutputIx = make(map[int]int)
 		st.ImageOutputIx = make(map[int]int)
 		st.Images = make(map[int]oaiToResponsesStateImage)
+		st.ImageItemAdded = make(map[int]bool)
+		st.ImageItemDone = make(map[int]bool)
 		st.NextOutputIx = 0
 		st.MsgItemAdded = make(map[int]bool)
 		st.MsgContentAdded = make(map[int]bool)
@@ -477,6 +519,15 @@ func ConvertOpenAIChatCompletionsResponseToOpenAIResponses(ctx context.Context, 
 							Result:       b64,
 							OutputFormat: outputFormat,
 							OutputIndex:  outputIndex,
+						}
+
+						if !st.ImageItemAdded[imageIndex] {
+							item := []byte(`{"type":"response.output_item.added","sequence_number":0,"output_index":0,"item":{"id":"","type":"image_generation_call","status":"in_progress"}}`)
+							item, _ = sjson.SetBytes(item, "sequence_number", nextSeq())
+							item, _ = sjson.SetBytes(item, "output_index", outputIndex)
+							item, _ = sjson.SetBytes(item, "item.id", imageID)
+							out = append(out, emitRespEvent("response.output_item.added", item))
+							st.ImageItemAdded[imageIndex] = true
 						}
 
 						partial := []byte(`{"type":"response.image_generation_call.partial_image","sequence_number":0,"item_id":"","output_index":0,"partial_image_index":0,"partial_image_b64":"","output_format":""}`)
@@ -667,6 +718,8 @@ func ConvertOpenAIChatCompletionsResponseToOpenAIResponses(ctx context.Context, 
 					stopReasoning(st.ReasoningBuf.String())
 					st.ReasoningBuf.Reset()
 				}
+
+				finalizeImages()
 
 				// Emit function call done events for any active function calls
 				if len(st.FuncCallIDs) > 0 {

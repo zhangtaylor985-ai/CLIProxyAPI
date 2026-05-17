@@ -119,12 +119,30 @@ func TestConvertOpenAIChatCompletionsResponseToOpenAIResponses_ImageDeltaComplet
 	}
 
 	var partialImage string
+	var addedImageID string
+	var doneImage string
 	var completedImage string
+	var eventOrder []string
 	for _, chunk := range out {
 		ev, data := parseOpenAIResponsesSSEEvent(t, chunk)
+		eventOrder = append(eventOrder, ev)
 		switch ev {
+		case "response.output_item.added":
+			if data.Get("item.type").String() == "image_generation_call" {
+				addedImageID = data.Get("item.id").String()
+				if got := data.Get("item.status").String(); got != "in_progress" {
+					t.Fatalf("image item added status = %q, want in_progress", got)
+				}
+			}
 		case "response.image_generation_call.partial_image":
 			partialImage = data.Get("partial_image_b64").String()
+		case "response.output_item.done":
+			if data.Get("item.type").String() == "image_generation_call" {
+				doneImage = data.Get("item.result").String()
+				if got := data.Get("item.status").String(); got != "completed" {
+					t.Fatalf("image item done status = %q, want completed", got)
+				}
+			}
 		case "response.completed":
 			for _, item := range data.Get("response.output").Array() {
 				if item.Get("type").String() == "image_generation_call" {
@@ -137,10 +155,34 @@ func TestConvertOpenAIChatCompletionsResponseToOpenAIResponses_ImageDeltaComplet
 		}
 	}
 
+	if addedImageID == "" {
+		t.Fatalf("missing image response.output_item.added event; events=%v", eventOrder)
+	}
 	if partialImage != "aGVsbG8=" {
 		t.Fatalf("partial image = %q, want aGVsbG8=", partialImage)
+	}
+	if doneImage != "aGVsbG8=" {
+		t.Fatalf("done image = %q, want aGVsbG8=", doneImage)
 	}
 	if completedImage != "aGVsbG8=" {
 		t.Fatalf("completed image = %q, want aGVsbG8=", completedImage)
 	}
+	assertEventBefore := func(left, right string) {
+		t.Helper()
+		leftPos, rightPos := -1, -1
+		for i, ev := range eventOrder {
+			if ev == left && leftPos == -1 {
+				leftPos = i
+			}
+			if ev == right && rightPos == -1 {
+				rightPos = i
+			}
+		}
+		if leftPos == -1 || rightPos == -1 || leftPos >= rightPos {
+			t.Fatalf("expected %s before %s; events=%v", left, right, eventOrder)
+		}
+	}
+	assertEventBefore("response.output_item.added", "response.image_generation_call.partial_image")
+	assertEventBefore("response.image_generation_call.partial_image", "response.output_item.done")
+	assertEventBefore("response.output_item.done", "response.completed")
 }
