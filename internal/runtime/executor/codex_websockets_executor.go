@@ -82,6 +82,25 @@ type codexWebsocketRead struct {
 	err     error
 }
 
+func patchCodexWebsocketCompletionOutput(payload []byte, outputItemsByIndex map[int64][]byte, outputItemsFallback *[][]byte) []byte {
+	payload = normalizeCodexWebsocketCompletion(payload)
+	switch strings.TrimSpace(gjson.GetBytes(payload, "type").String()) {
+	case "response.output_item.done":
+		if outputItemsFallback == nil {
+			var fallback [][]byte
+			outputItemsFallback = &fallback
+		}
+		collectCodexOutputItemDone(payload, outputItemsByIndex, outputItemsFallback)
+	case "response.completed", "response.done":
+		var fallback [][]byte
+		if outputItemsFallback != nil {
+			fallback = *outputItemsFallback
+		}
+		payload = patchCodexCompletedOutput(payload, outputItemsByIndex, fallback)
+	}
+	return payload
+}
+
 func (s *codexWebsocketSession) setActive(ch chan codexWebsocketRead) {
 	if s == nil {
 		return
@@ -301,6 +320,8 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 		}
 	}
 
+	outputItemsByIndex := make(map[int64][]byte)
+	var outputItemsFallback [][]byte
 	for {
 		if ctx != nil && ctx.Err() != nil {
 			return resp, ctx.Err()
@@ -336,7 +357,7 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 			return resp, wsErr
 		}
 
-		payload = normalizeCodexWebsocketCompletion(payload)
+		payload = patchCodexWebsocketCompletionOutput(payload, outputItemsByIndex, &outputItemsFallback)
 		eventType := gjson.GetBytes(payload, "type").String()
 		if eventType == "response.completed" {
 			if detail, ok := parseCodexUsage(payload); ok {
@@ -530,6 +551,8 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 		}
 
 		var param any
+		outputItemsByIndex := make(map[int64][]byte)
+		var outputItemsFallback [][]byte
 		for {
 			if ctx != nil && ctx.Err() != nil {
 				terminateReason = "context_done"
@@ -586,7 +609,7 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 				return
 			}
 
-			payload = normalizeCodexWebsocketCompletion(payload)
+			payload = patchCodexWebsocketCompletionOutput(payload, outputItemsByIndex, &outputItemsFallback)
 			eventType := gjson.GetBytes(payload, "type").String()
 			if eventType == "response.completed" || eventType == "response.done" {
 				if detail, ok := parseCodexUsage(payload); ok {

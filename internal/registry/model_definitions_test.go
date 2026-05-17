@@ -61,6 +61,23 @@ func TestCodexBuiltinsIncludeGPTImage2(t *testing.T) {
 	}
 }
 
+func TestCodexDefinitionsIncludeGPT54MiniForImageHandler(t *testing.T) {
+	for name, models := range map[string][]*ModelInfo{
+		"free": GetCodexFreeModels(),
+		"plus": GetCodexPlusModels(),
+		"pro":  GetCodexProModels(),
+		"team": GetCodexTeamModels(),
+	} {
+		model := findModelInfo(models, "gpt-5.4-mini")
+		if model == nil {
+			t.Fatalf("expected gpt-5.4-mini in codex-%s models", name)
+		}
+		if model.ContextLength != 400000 {
+			t.Fatalf("codex-%s gpt-5.4-mini context_length = %d, want 400000", name, model.ContextLength)
+		}
+	}
+}
+
 func findModelInfo(models []*ModelInfo, id string) *ModelInfo {
 	for _, model := range models {
 		if model != nil && model.ID == id {

@@ -94,12 +94,17 @@ var DefaultPrices = map[string]PriceMicroUSDPer1M{
 		Cached:     250_000,    // $0.25 / 1M
 	},
 	policy.NormaliseModelKey("gpt-5.4-mini"): {
-		Prompt:     2_500_000,  // Treat local Codex mini as gpt-5.4 until an explicit price override is configured.
+		Prompt:     2_500_000, // Treat local Codex mini as gpt-5.4 until an explicit price override is configured.
+		Completion: 15_000_000,
+		Cached:     250_000,
+	},
+	policy.NormaliseModelKey("gpt-image-2"): {
+		Prompt:     2_500_000, // Image endpoint preflight uses the requested tool model; keep budget checks conservative.
 		Completion: 15_000_000,
 		Cached:     250_000,
 	},
 	policy.NormaliseModelKey("codex-auto-review"): {
-		Prompt:     2_500_000,  // Local alias backed by Codex workers; keep budget checks conservative.
+		Prompt:     2_500_000, // Local alias backed by Codex workers; keep budget checks conservative.
 		Completion: 15_000_000,
 		Cached:     250_000,
 	},

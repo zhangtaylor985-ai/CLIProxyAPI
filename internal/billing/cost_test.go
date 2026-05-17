@@ -67,7 +67,7 @@ func TestLongContextPremiumInputThresholdTokens_UsesInputThreshold(t *testing.T)
 }
 
 func TestResolveDefaultPrice_CoversCodexAliasesUsedByWorkers(t *testing.T) {
-	for _, model := range []string{"codex-auto-review", "gpt-5.4-mini"} {
+	for _, model := range []string{"codex-auto-review", "gpt-5.4-mini", "gpt-image-2"} {
 		price, ok := ResolveDefaultPrice(model)
 		if !ok {
 			t.Fatalf("expected default price for %s", model)

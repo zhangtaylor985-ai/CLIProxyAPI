@@ -32,6 +32,27 @@ func TestBuildCodexWebsocketRequestBodyPreservesPreviousResponseID(t *testing.T)
 	}
 }
 
+func TestPatchCodexWebsocketCompletionOutputUsesOutputItemDone(t *testing.T) {
+	outputItemsByIndex := make(map[int64][]byte)
+	var outputItemsFallback [][]byte
+
+	done := []byte(`{"type":"response.output_item.done","output_index":0,"item":{"id":"ig_1","type":"image_generation_call","output_format":"png","result":"aGVsbG8="}}`)
+	gotDone := patchCodexWebsocketCompletionOutput(done, outputItemsByIndex, &outputItemsFallback)
+	if got := gjson.GetBytes(gotDone, "type").String(); got != "response.output_item.done" {
+		t.Fatalf("done type = %q, want response.output_item.done", got)
+	}
+
+	completed := []byte(`{"type":"response.completed","response":{"id":"resp_1","output":[]}}`)
+	patched := patchCodexWebsocketCompletionOutput(completed, outputItemsByIndex, &outputItemsFallback)
+
+	if got := gjson.GetBytes(patched, "response.output.0.type").String(); got != "image_generation_call" {
+		t.Fatalf("patched output type = %q, want image_generation_call; payload=%s", got, string(patched))
+	}
+	if got := gjson.GetBytes(patched, "response.output.0.result").String(); got != "aGVsbG8=" {
+		t.Fatalf("patched output result = %q, want image payload; payload=%s", got, string(patched))
+	}
+}
+
 func TestApplyCodexWebsocketHeadersDefaultsToCurrentResponsesBeta(t *testing.T) {
 	headers := applyCodexWebsocketHeaders(context.Background(), http.Header{}, nil, "", nil)
 
