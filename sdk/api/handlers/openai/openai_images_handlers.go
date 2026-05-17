@@ -715,6 +715,8 @@ func extractImagesFromResponsesCompleted(payload []byte) (results []imageCallRes
 
 	if usage := gjson.GetBytes(payload, "response.tool_usage.image_gen"); usage.Exists() && usage.IsObject() {
 		usageRaw = []byte(usage.Raw)
+	} else if usage := gjson.GetBytes(payload, "response.usage"); usage.Exists() && usage.IsObject() {
+		usageRaw = []byte(usage.Raw)
 	}
 
 	return results, createdAt, usageRaw, firstMeta, nil

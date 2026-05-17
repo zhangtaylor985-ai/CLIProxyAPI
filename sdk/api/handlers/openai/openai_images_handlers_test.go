@@ -100,6 +100,20 @@ func TestCollectImagesFromResponsesStreamBuildsImagesResponse(t *testing.T) {
 	}
 }
 
+func TestCollectImagesFromResponsesStreamUsesResponseUsageFallback(t *testing.T) {
+	data := make(chan []byte, 1)
+	data <- []byte(`data: {"type":"response.completed","response":{"created_at":1775555723,"output":[{"type":"image_generation_call","output_format":"png","result":"aGVsbG8="}],"usage":{"input_tokens":4,"output_tokens":5,"total_tokens":9}}}` + "\n\n")
+	close(data)
+
+	out, errMsg := collectImagesFromResponsesStream(context.Background(), data, nil, "b64_json")
+	if errMsg != nil {
+		t.Fatalf("collectImagesFromResponsesStream error = %v", errMsg.Error)
+	}
+	if got := gjson.GetBytes(out, "usage.total_tokens").Int(); got != 9 {
+		t.Fatalf("usage.total_tokens = %d, want 9; body=%s", got, string(out))
+	}
+}
+
 func TestImagesGenerationsRejectsUnsupportedModel(t *testing.T) {
 	handler := &OpenAIAPIHandler{}
 	body := strings.NewReader(`{"model":"gpt-5.4-mini","prompt":"draw a square"}`)
