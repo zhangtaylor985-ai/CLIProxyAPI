@@ -834,13 +834,15 @@ func applyCodexWebsocketHeaders(ctx context.Context, headers http.Header, auth *
 		ginHeaders = ginCtx.Request.Header
 	}
 
-	cfgUserAgent, cfgVersion, cfgBetaFeatures := codexHeaderDefaults(cfg, auth)
+	isAPIKey := codexAuthUsesAPIKey(auth)
+	cfgUserAgent, _, cfgBetaFeatures := codexHeaderDefaults(cfg, auth)
 	ensureHeaderWithPriority(headers, ginHeaders, "x-codex-beta-features", cfgBetaFeatures, "")
 	misc.EnsureHeader(headers, ginHeaders, "x-codex-turn-state", "")
 	misc.EnsureHeader(headers, ginHeaders, "x-codex-turn-metadata", "")
+	misc.EnsureHeader(headers, ginHeaders, "x-client-request-id", "")
 	misc.EnsureHeader(headers, ginHeaders, "x-responsesapi-include-timing-metrics", "")
 
-	ensureHeaderWithConfigPrecedence(headers, ginHeaders, "Version", cfgVersion, codexClientVersion)
+	misc.EnsureHeader(headers, ginHeaders, "Version", "")
 	betaHeader := strings.TrimSpace(headers.Get("OpenAI-Beta"))
 	if betaHeader == "" && ginHeaders != nil {
 		betaHeader = strings.TrimSpace(ginHeaders.Get("OpenAI-Beta"))
@@ -849,21 +851,26 @@ func applyCodexWebsocketHeaders(ctx context.Context, headers http.Header, auth *
 		betaHeader = codexResponsesWebsocketBetaHeaderValue
 	}
 	headers.Set("OpenAI-Beta", betaHeader)
-	misc.EnsureHeader(headers, ginHeaders, "Session_id", uuid.NewString())
-	ensureHeaderWithConfigPrecedence(headers, ginHeaders, "User-Agent", cfgUserAgent, codexUserAgent)
+	if isAPIKey {
+		ensureHeaderWithPriority(headers, ginHeaders, "User-Agent", "", "")
+	} else {
+		ensureHeaderWithConfigPrecedence(headers, ginHeaders, "User-Agent", cfgUserAgent, codexUserAgent)
+	}
+	if strings.Contains(headers.Get("User-Agent"), "Mac OS") {
+		ensureHeaderCasePreserved(headers, ginHeaders, "session_id", "", uuid.NewString())
+	}
+	ensureHeaderCasePreserved(headers, ginHeaders, "session_id", "", "")
 
-	isAPIKey := false
-	if auth != nil && auth.Attributes != nil {
-		if v := strings.TrimSpace(auth.Attributes["api_key"]); v != "" {
-			isAPIKey = true
-		}
+	if originator := strings.TrimSpace(ginHeaders.Get("Originator")); originator != "" {
+		headers.Set("Originator", originator)
+	} else if !isAPIKey {
+		headers.Set("Originator", codexOriginator)
 	}
 	if !isAPIKey {
-		headers.Set("Originator", codexOriginator)
 		if auth != nil && auth.Metadata != nil {
 			if accountID, ok := auth.Metadata["account_id"].(string); ok {
 				if trimmed := strings.TrimSpace(accountID); trimmed != "" {
-					headers.Set("Chatgpt-Account-Id", trimmed)
+					setHeaderCasePreserved(headers, "ChatGPT-Account-ID", trimmed)
 				}
 			}
 		}
@@ -878,16 +885,85 @@ func applyCodexWebsocketHeaders(ctx context.Context, headers http.Header, auth *
 	return headers
 }
 
+func codexAuthUsesAPIKey(auth *cliproxyauth.Auth) bool {
+	if auth == nil || auth.Attributes == nil {
+		return false
+	}
+	return strings.TrimSpace(auth.Attributes["api_key"]) != ""
+}
+
 func codexHeaderDefaults(cfg *config.Config, auth *cliproxyauth.Auth) (string, string, string) {
 	if cfg == nil || auth == nil {
 		return "", "", ""
 	}
-	if auth.Attributes != nil {
-		if v := strings.TrimSpace(auth.Attributes["api_key"]); v != "" {
-			return "", "", ""
-		}
+	if codexAuthUsesAPIKey(auth) {
+		return "", "", ""
 	}
 	return strings.TrimSpace(cfg.CodexHeaderDefaults.UserAgent), strings.TrimSpace(cfg.CodexHeaderDefaults.Version), strings.TrimSpace(cfg.CodexHeaderDefaults.BetaFeatures)
+}
+
+func ensureHeaderCasePreserved(target http.Header, source http.Header, key, configValue, fallbackValue string) {
+	if target == nil {
+		return
+	}
+	if strings.TrimSpace(headerValueCaseInsensitive(target, key)) != "" {
+		return
+	}
+	if source != nil {
+		if val := strings.TrimSpace(headerValueCaseInsensitive(source, key)); val != "" {
+			setHeaderCasePreserved(target, key, val)
+			return
+		}
+	}
+	if val := strings.TrimSpace(configValue); val != "" {
+		setHeaderCasePreserved(target, key, val)
+		return
+	}
+	if val := strings.TrimSpace(fallbackValue); val != "" {
+		setHeaderCasePreserved(target, key, val)
+	}
+}
+
+func setHeaderCasePreserved(headers http.Header, key string, value string) {
+	if headers == nil {
+		return
+	}
+	key = strings.TrimSpace(key)
+	value = strings.TrimSpace(value)
+	if key == "" || value == "" {
+		return
+	}
+	deleteHeaderCaseInsensitive(headers, key)
+	headers[key] = []string{value}
+}
+
+func headerValueCaseInsensitive(headers http.Header, key string) string {
+	key = strings.TrimSpace(key)
+	if headers == nil || key == "" {
+		return ""
+	}
+	if val := strings.TrimSpace(headers.Get(key)); val != "" {
+		return val
+	}
+	for existingKey, values := range headers {
+		if !strings.EqualFold(existingKey, key) {
+			continue
+		}
+		for _, value := range values {
+			if trimmed := strings.TrimSpace(value); trimmed != "" {
+				return trimmed
+			}
+		}
+	}
+	return ""
+}
+
+func deleteHeaderCaseInsensitive(headers http.Header, key string) {
+	for existingKey := range headers {
+		if strings.EqualFold(existingKey, key) {
+			delete(headers, existingKey)
+		}
+	}
 }
 
 func ensureHeaderWithPriority(target http.Header, source http.Header, key, configValue, fallbackValue string) {
