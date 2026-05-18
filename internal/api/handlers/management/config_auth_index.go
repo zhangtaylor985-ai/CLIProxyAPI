@@ -268,6 +268,11 @@ func (h *Handler) openAICompatibilityWithAuthIndex() []openAICompatibilityWithAu
 			providerName = "openai-compatibility"
 		}
 		idKind := fmt.Sprintf("openai-compatibility:%s", providerName)
+		idBase := strings.TrimSpace(entry.BaseURL)
+		if synthesizer.IsCodexWorkerCompatName(providerName) {
+			idKind = fmt.Sprintf("codex-worker:%s", providerName)
+			idBase = synthesizer.CodexWorkerNativeBaseURL(idBase)
+		}
 
 		response := openAICompatibilityWithAuthIndex{
 			Name:           entry.Name,
@@ -280,14 +285,14 @@ func (h *Handler) openAICompatibilityWithAuthIndex() []openAICompatibilityWithAu
 			AuthIndex:      "",
 		}
 		if len(entry.APIKeyEntries) == 0 {
-			id, _ := idGen.Next(idKind, entry.BaseURL)
+			id, _ := idGen.Next(idKind, idBase)
 			response.AuthIndex = liveIndexByID[id]
 			response.Runtime = openAICompatibilityRuntimeFromAuth(liveAuthByID[id])
 		} else {
 			response.APIKeyEntries = make([]openAICompatibilityAPIKeyWithAuthIndex, len(entry.APIKeyEntries))
 			for j := range entry.APIKeyEntries {
 				apiKeyEntry := entry.APIKeyEntries[j]
-				id, _ := idGen.Next(idKind, apiKeyEntry.APIKey, entry.BaseURL, apiKeyEntry.ProxyURL)
+				id, _ := idGen.Next(idKind, apiKeyEntry.APIKey, idBase, apiKeyEntry.ProxyURL)
 				response.APIKeyEntries[j] = openAICompatibilityAPIKeyWithAuthIndex{
 					OpenAICompatibilityAPIKey: apiKeyEntry,
 					AuthIndex:                 liveIndexByID[id],

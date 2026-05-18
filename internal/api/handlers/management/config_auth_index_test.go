@@ -248,3 +248,51 @@ func TestConfigAuthIndexOmitsIndexesNotInManager(t *testing.T) {
 		t.Fatalf("openai-compat auth-index = %q, want empty", compat[0].APIKeyEntries[0].AuthIndex)
 	}
 }
+
+func TestConfigAuthIndexResolvesNativeCodexWorkerCompatEntry(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{
+		OpenAICompatibility: []config.OpenAICompatibility{
+			{
+				Name:    "codex-worker03-linxiaoyu",
+				BaseURL: "http://127.0.0.1:18319/v1",
+				APIKeyEntries: []config.OpenAICompatibilityAPIKey{
+					{APIKey: "worker-key", ProxyURL: "direct"},
+				},
+			},
+		},
+	}
+
+	auths := synthesizeConfigAuths(t, cfg)
+	workerAuth := findAuth(t, auths, func(auth *coreauth.Auth) bool {
+		if auth == nil {
+			return false
+		}
+		return auth.Provider == "codex" &&
+			auth.Label == "codex-worker03-linxiaoyu" &&
+			auth.Attributes["base_url"] == "http://127.0.0.1:18319/backend-api/codex" &&
+			auth.Attributes["api_key"] == "worker-key" &&
+			auth.Attributes["compat_name"] == ""
+	})
+	if workerAuth == nil {
+		t.Fatal("expected synthesized native codex worker auth")
+	}
+
+	manager := coreauth.NewManager(nil, nil, nil)
+	if _, errRegister := manager.Register(context.Background(), workerAuth); errRegister != nil {
+		t.Fatalf("register worker auth: %v", errRegister)
+	}
+
+	h := &Handler{cfg: cfg, authManager: manager}
+	compat := h.openAICompatibilityWithAuthIndex()
+	if len(compat) != 1 {
+		t.Fatalf("openai-compat providers = %d, want 1", len(compat))
+	}
+	if len(compat[0].APIKeyEntries) != 1 {
+		t.Fatalf("api-key-entries = %d, want 1", len(compat[0].APIKeyEntries))
+	}
+	if got, want := compat[0].APIKeyEntries[0].AuthIndex, workerAuth.EnsureIndex(); got != want {
+		t.Fatalf("native codex worker auth-index = %q, want %q", got, want)
+	}
+}

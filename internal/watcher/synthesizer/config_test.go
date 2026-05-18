@@ -1,6 +1,7 @@
 package synthesizer
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -401,6 +402,116 @@ func TestConfigSynthesizer_OpenAICompatExcludedModels(t *testing.T) {
 	}
 	if got := auths[0].Attributes["excluded_models"]; got != "*" {
 		t.Fatalf("excluded_models = %q, want *", got)
+	}
+}
+
+func TestConfigSynthesizer_CodexWorkerCompatBecomesNativeCodex(t *testing.T) {
+	synth := NewConfigSynthesizer()
+	canaryEnabled := true
+	ctx := &SynthesisContext{
+		Config: &config.Config{
+			OpenAICompatibility: []config.OpenAICompatibility{
+				{
+					Name:                  "codex-worker03-linxiaoyu",
+					BaseURL:               "http://127.0.0.1:18319/v1",
+					Priority:              60,
+					Prefix:                "codex",
+					Headers:               map[string]string{"X-Test": "yes"},
+					ExcludedModels:        []string{"gpt-5.2"},
+					ProbeMode:             "codex_responses",
+					ProbePath:             "/backend-api/codex/responses",
+					CanaryEnabled:         &canaryEnabled,
+					CanaryPrompt:          "ping",
+					CanaryIntervalSeconds: 30,
+					Models: []config.OpenAICompatibilityModel{
+						{Name: "gpt-5.5", Alias: "gpt-5.5"},
+					},
+					APIKeyEntries: []config.OpenAICompatibilityAPIKey{
+						{APIKey: "worker-key", ProxyURL: "direct"},
+					},
+				},
+			},
+		},
+		Now:         time.Unix(0, 0),
+		IDGenerator: NewStableIDGenerator(),
+	}
+
+	auths, err := synth.Synthesize(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(auths) != 1 {
+		t.Fatalf("expected 1 auth, got %d", len(auths))
+	}
+	auth := auths[0]
+	if auth.Provider != "codex" {
+		t.Fatalf("provider = %q, want codex", auth.Provider)
+	}
+	if auth.Label != "codex-worker03-linxiaoyu" {
+		t.Fatalf("label = %q", auth.Label)
+	}
+	if !strings.HasPrefix(auth.ID, "codex-worker:codex-worker03-linxiaoyu:") {
+		t.Fatalf("id = %q, want native codex worker id", auth.ID)
+	}
+	if auth.Prefix != "codex" {
+		t.Fatalf("prefix = %q, want codex", auth.Prefix)
+	}
+	if auth.ProxyURL != "direct" {
+		t.Fatalf("proxy = %q, want direct", auth.ProxyURL)
+	}
+	if got := auth.Attributes["base_url"]; got != "http://127.0.0.1:18319/backend-api/codex" {
+		t.Fatalf("base_url = %q", got)
+	}
+	if got := auth.Attributes["worker_openai_base_url"]; got != "http://127.0.0.1:18319/v1" {
+		t.Fatalf("worker_openai_base_url = %q", got)
+	}
+	for key, want := range map[string]string{
+		"api_key":                 "worker-key",
+		"codex_worker":            "true",
+		"uses_native_codex_route": "true",
+		"websockets":              "true",
+		"worker_name":             "codex-worker03-linxiaoyu",
+		"worker_provider_config":  "codex-worker03-linxiaoyu",
+		"priority":                "60",
+		"header:X-Test":           "yes",
+		"probe_mode":              "codex_responses",
+		"probe_path":              "/backend-api/codex/responses",
+		"canary_enabled":          "true",
+		"canary_prompt":           "ping",
+		"canary_interval_seconds": "30",
+		"excluded_models":         "gpt-5.2",
+		"auth_kind":               "apikey",
+	} {
+		if got := auth.Attributes[key]; got != want {
+			t.Fatalf("attr %s = %q, want %q", key, got, want)
+		}
+	}
+	if auth.Attributes["compat_name"] != "" || auth.Attributes["provider_key"] != "" {
+		t.Fatalf("native codex worker must not keep openai-compat attrs: %+v", auth.Attributes)
+	}
+	if _, ok := auth.Attributes["models_hash"]; !ok {
+		t.Fatal("expected models_hash")
+	}
+}
+
+func TestCodexWorkerNativeBaseURL(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "openai v1", in: "http://127.0.0.1:18319/v1", want: "http://127.0.0.1:18319/backend-api/codex"},
+		{name: "openai v1 trailing", in: "http://127.0.0.1:18319/v1/", want: "http://127.0.0.1:18319/backend-api/codex"},
+		{name: "native preserved", in: "http://127.0.0.1:18319/backend-api/codex", want: "http://127.0.0.1:18319/backend-api/codex"},
+		{name: "root", in: "http://127.0.0.1:18319", want: "http://127.0.0.1:18319/backend-api/codex"},
+		{name: "blank", in: "  ", want: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := CodexWorkerNativeBaseURL(tt.in); got != tt.want {
+				t.Fatalf("CodexWorkerNativeBaseURL(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
 	}
 }
 

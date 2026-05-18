@@ -898,6 +898,37 @@ func TestIsCodexWorkerAuthMatchesProductionOpenAICompatID(t *testing.T) {
 	}
 }
 
+func TestWholeAuthCooldownDoesNotApplyToNativeCodexWorker(t *testing.T) {
+	native := &Auth{
+		ID:       "codex-worker:codex-worker03-linxiaoyu:abc123",
+		Provider: "codex",
+		Label:    "codex-worker03-linxiaoyu",
+		Attributes: map[string]string{
+			"api_key":      "worker-key",
+			"codex_worker": "true",
+		},
+	}
+	if !isCodexWorkerAuth(native) {
+		t.Fatal("expected native worker to be identifiable for diagnostics")
+	}
+	if wholeAuthCooldownApplies(native) {
+		t.Fatal("native codex worker should use standard model-scoped cooldown")
+	}
+
+	legacy := &Auth{
+		ID:       "openai-compatibility:codex-worker03-linxiaoyu:abc123",
+		Provider: "openai-compatibility",
+		Attributes: map[string]string{
+			"api_key":      "worker-key",
+			"compat_name":  "codex-worker03-linxiaoyu",
+			"provider_key": "codex-worker03-linxiaoyu",
+		},
+	}
+	if !wholeAuthCooldownApplies(legacy) {
+		t.Fatal("legacy openai-compat worker should keep whole-auth cooldown")
+	}
+}
+
 func TestManagerMarkResult_CodexWorkerCooldownAppliesToWholeAuth(t *testing.T) {
 	provider := "codex-worker02-haoran"
 	authID := provider + "-auth"

@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/watcher/diff"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 )
@@ -219,6 +220,11 @@ func (s *ConfigSynthesizer) synthesizeOpenAICompat(ctx *SynthesisContext) []*cor
 		}
 		base := strings.TrimSpace(compat.BaseURL)
 
+		if IsCodexWorkerCompatName(providerName) {
+			out = append(out, s.synthesizeNativeCodexWorkerCompat(ctx, compat, providerName, prefix, base)...)
+			continue
+		}
+
 		// Handle new APIKeyEntries format (preferred)
 		createdEntries := 0
 		for j := range compat.APIKeyEntries {
@@ -292,6 +298,116 @@ func (s *ConfigSynthesizer) synthesizeOpenAICompat(ctx *SynthesisContext) []*cor
 		}
 	}
 	return out
+}
+
+// IsCodexWorkerCompatName reports whether an openai-compat config entry actually
+// represents an internal native Codex worker.
+func IsCodexWorkerCompatName(name string) bool {
+	name = strings.ToLower(strings.TrimSpace(name))
+	return strings.HasPrefix(name, "codex-worker")
+}
+
+// CodexWorkerNativeBaseURL converts a worker's OpenAI-compatible base URL into
+// the worker's native Codex endpoint.
+func CodexWorkerNativeBaseURL(base string) string {
+	base = strings.TrimRight(strings.TrimSpace(base), "/")
+	if base == "" {
+		return ""
+	}
+	lower := strings.ToLower(base)
+	if strings.HasSuffix(lower, "/backend-api/codex") {
+		return base
+	}
+	if strings.HasSuffix(lower, "/v1") {
+		base = strings.TrimRight(base[:len(base)-len("/v1")], "/")
+	}
+	return base + "/backend-api/codex"
+}
+
+func (s *ConfigSynthesizer) synthesizeNativeCodexWorkerCompat(ctx *SynthesisContext, compat *config.OpenAICompatibility, providerName, prefix, base string) []*coreauth.Auth {
+	if ctx == nil || ctx.Config == nil || compat == nil {
+		return nil
+	}
+	cfg := ctx.Config
+	now := ctx.Now
+	idGen := ctx.IDGenerator
+	nativeBase := CodexWorkerNativeBaseURL(base)
+	workerName := strings.TrimSpace(compat.Name)
+	if workerName == "" {
+		workerName = providerName
+	}
+
+	capacity := len(compat.APIKeyEntries)
+	if capacity == 0 {
+		capacity = 1
+	}
+	out := make([]*coreauth.Auth, 0, capacity)
+	createdEntries := 0
+	for j := range compat.APIKeyEntries {
+		entry := &compat.APIKeyEntries[j]
+		key := strings.TrimSpace(entry.APIKey)
+		proxyURL := strings.TrimSpace(entry.ProxyURL)
+		idKind := fmt.Sprintf("codex-worker:%s", providerName)
+		id, token := idGen.Next(idKind, key, nativeBase, proxyURL)
+		attrs := nativeCodexWorkerAttrs(compat, providerName, workerName, nativeBase, base, token, key)
+		a := &coreauth.Auth{
+			ID:         id,
+			Provider:   "codex",
+			Label:      workerName,
+			Prefix:     prefix,
+			Status:     coreauth.StatusActive,
+			ProxyURL:   proxyURL,
+			Attributes: attrs,
+			CreatedAt:  now,
+			UpdatedAt:  now,
+		}
+		ApplyAuthExcludedModelsMeta(a, cfg, compat.ExcludedModels, "apikey")
+		out = append(out, a)
+		createdEntries++
+	}
+	if createdEntries == 0 {
+		idKind := fmt.Sprintf("codex-worker:%s", providerName)
+		id, token := idGen.Next(idKind, nativeBase)
+		attrs := nativeCodexWorkerAttrs(compat, providerName, workerName, nativeBase, base, token, "")
+		a := &coreauth.Auth{
+			ID:         id,
+			Provider:   "codex",
+			Label:      workerName,
+			Prefix:     prefix,
+			Status:     coreauth.StatusActive,
+			Attributes: attrs,
+			CreatedAt:  now,
+			UpdatedAt:  now,
+		}
+		ApplyAuthExcludedModelsMeta(a, cfg, compat.ExcludedModels, "apikey")
+		out = append(out, a)
+	}
+	return out
+}
+
+func nativeCodexWorkerAttrs(compat *config.OpenAICompatibility, providerName, workerName, nativeBase, originalBase, token, apiKey string) map[string]string {
+	attrs := map[string]string{
+		"source":                  fmt.Sprintf("config:codex-worker:%s[%s]", providerName, token),
+		"base_url":                nativeBase,
+		"codex_worker":            "true",
+		"worker_name":             workerName,
+		"worker_openai_base_url":  originalBase,
+		"worker_provider_config":  providerName,
+		"websockets":              "true",
+		"uses_native_codex_route": "true",
+	}
+	if compat.Priority != 0 {
+		attrs["priority"] = strconv.Itoa(compat.Priority)
+	}
+	addHealthCheckConfigAttrs(attrs, compat.ProbeMode, compat.ProbePath, compat.CanaryEnabled, compat.CanaryPrompt, compat.CanaryIntervalSeconds)
+	if apiKey != "" {
+		attrs["api_key"] = apiKey
+	}
+	if hash := diff.ComputeOpenAICompatModelsHash(compat.Models); hash != "" {
+		attrs["models_hash"] = hash
+	}
+	addConfigHeadersToAttrs(compat.Headers, attrs)
+	return attrs
 }
 
 // synthesizeVertexCompat creates Auth entries for Vertex-compatible providers.

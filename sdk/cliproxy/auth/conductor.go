@@ -402,7 +402,14 @@ func isCodexWorkerAuth(auth *Auth) bool {
 }
 
 func wholeAuthCooldownApplies(auth *Auth) bool {
-	return isCodexWorkerAuth(auth)
+	if !isCodexWorkerAuth(auth) {
+		return false
+	}
+	// Native Codex workers should use the standard model-scoped provider health
+	// logic. The whole-auth behavior is retained only for the legacy
+	// OpenAI-compatible worker path, where one upstream account is represented as
+	// a provider-like pool member.
+	return !strings.EqualFold(strings.TrimSpace(auth.Provider), "codex")
 }
 
 func providerHealthPolicyApplies(auth *Auth) bool {
