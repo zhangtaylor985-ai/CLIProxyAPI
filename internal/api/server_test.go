@@ -139,6 +139,37 @@ func TestHealthzRouteDoesNotRequireAPIKey(t *testing.T) {
 	}
 }
 
+func TestRootHeadRouteDoesNotRequireAPIKey(t *testing.T) {
+	server := newTestServer(t)
+
+	req := httptest.NewRequest(http.MethodHead, "/", nil)
+	rr := httptest.NewRecorder()
+	server.engine.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusNoContent {
+		t.Fatalf("unexpected status code: got %d want %d; body=%s", rr.Code, http.StatusNoContent, rr.Body.String())
+	}
+	if rr.Body.Len() != 0 {
+		t.Fatalf("expected empty root HEAD response body, got %q", rr.Body.String())
+	}
+}
+
+func TestCodexEventLoggingBatchRouteDoesNotRequireAPIKey(t *testing.T) {
+	server := newTestServer(t)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/event_logging/batch", strings.NewReader(`{"events":[]}`))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	server.engine.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusNoContent {
+		t.Fatalf("unexpected status code: got %d want %d; body=%s", rr.Code, http.StatusNoContent, rr.Body.String())
+	}
+	if rr.Body.Len() != 0 {
+		t.Fatalf("expected empty telemetry response body, got %q", rr.Body.String())
+	}
+}
+
 func TestAuthMiddleware_AttachesRequestIDToAuthErrors(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

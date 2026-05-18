@@ -541,8 +541,10 @@ func applyAPIKeyConfigOverlay(ctx context.Context, store apikeyconfig.Store, cfg
 // setupRoutes configures the API routes for the server.
 // It defines the endpoints and associates them with their respective handlers.
 func (s *Server) setupRoutes() {
+	s.engine.HEAD("/", s.handleRootHead)
 	s.engine.GET("/healthz", s.handleHealthz)
 	s.engine.HEAD("/healthz", s.handleHealthz)
+	s.engine.POST("/api/event_logging/batch", s.handleCodexEventLoggingBatch)
 	s.engine.GET("/management.html", s.serveManagementControlPanel)
 	openaiHandlers := openai.NewOpenAIAPIHandler(s.handlers)
 	geminiHandlers := gemini.NewGeminiAPIHandler(s.handlers)
@@ -676,6 +678,14 @@ func (s *Server) setupRoutes() {
 	})
 
 	// Management routes are registered lazily by registerManagementRoutes when a secret is configured.
+}
+
+func (s *Server) handleRootHead(c *gin.Context) {
+	c.Status(http.StatusNoContent)
+}
+
+func (s *Server) handleCodexEventLoggingBatch(c *gin.Context) {
+	c.Status(http.StatusNoContent)
 }
 
 func (s *Server) handleHealthz(c *gin.Context) {
