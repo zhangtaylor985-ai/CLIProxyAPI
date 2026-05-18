@@ -1106,6 +1106,13 @@ func (s *Server) unifiedModelsHandler(openaiHandler *openai.OpenAIAPIHandler, cl
 		userAgent := c.GetHeader("User-Agent")
 		apiKey := strings.TrimSpace(c.GetString("apiKey"))
 
+		if _, ok := c.Request.URL.Query()["client_version"]; ok {
+			models := openaiHandler.Models()
+			models = s.filterModelsForAPIKey(models, apiKey)
+			c.JSON(http.StatusOK, openai.CodexClientModelsResponse(models))
+			return
+		}
+
 		// Route to Claude handler if User-Agent starts with "claude-cli"
 		if strings.HasPrefix(userAgent, "claude-cli") {
 			models := claudeHandler.Models()
