@@ -120,6 +120,58 @@ func TestAPIKeyPolicyMiddleware_StripsClaudeOpus1MSignalsWhenGloballyDisabled(t 
 	}
 }
 
+func TestAPIKeyPolicyMiddleware_StripsClaudeOpus1MSignalsForPerKeyDisable(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	disabled := false
+	cfg := &config.Config{
+		SDKConfig: config.SDKConfig{DisableClaudeOpus1M: false},
+		APIKeyPolicies: []config.APIKeyPolicy{
+			{APIKey: "k", EnableClaudeOpus1M: &disabled},
+		},
+	}
+
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set("apiKey", "k")
+		c.Next()
+	})
+	r.Use(APIKeyPolicyMiddleware(func() *config.Config { return cfg }, nil, nil, nil))
+	r.POST("/v1/messages", func(c *gin.Context) {
+		body, _ := io.ReadAll(c.Request.Body)
+		c.JSON(200, gin.H{
+			"beta_header": c.Request.Header.Get("Anthropic-Beta"),
+			"claude_1m":   c.Request.Header.Get("X-CPA-CLAUDE-1M"),
+			"body_betas":  gjson.GetBytes(body, "betas").Value(),
+			"body_model":  gjson.GetBytes(body, "model").String(),
+		})
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewBufferString(`{"model":"claude-opus-4-7[1m]","betas":["context-1m-2025-08-07","other-beta"]}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CPA-CLAUDE-1M", "1")
+	req.Header.Set("Anthropic-Beta", "foo, context-1m-2025-08-07, bar")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	if got := gjson.GetBytes(w.Body.Bytes(), "claude_1m").String(); got != "" {
+		t.Fatalf("claude_1m=%q", got)
+	}
+	if got := gjson.GetBytes(w.Body.Bytes(), "beta_header").String(); got != "foo,bar" {
+		t.Fatalf("beta_header=%q", got)
+	}
+	if got := gjson.GetBytes(w.Body.Bytes(), "body_betas.0").String(); got != "other-beta" {
+		t.Fatalf("body_betas.0=%q", got)
+	}
+	if got := gjson.GetBytes(w.Body.Bytes(), "body_betas.#").Int(); got != 1 {
+		t.Fatalf("body_betas count=%d", got)
+	}
+	if got := gjson.GetBytes(w.Body.Bytes(), "body_model").String(); got != "claude-opus-4-7" {
+		t.Fatalf("body_model=%q", got)
+	}
+}
+
 func TestAPIKeyPolicyMiddleware_PreservesClaudeOpus1MSignalsForPerKeyOverride(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	cfg := &config.Config{

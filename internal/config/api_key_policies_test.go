@@ -238,6 +238,32 @@ func TestConfig_AllowsClaudeOpus1M_DefaultsEnabledWhenGlobalDisabled(t *testing.
 	}
 }
 
+func TestConfig_AllowsClaudeOpus1M_PerKeyFalseOverridesGlobalEnabled(t *testing.T) {
+	enabled := true
+	disabled := false
+	cfg := &Config{
+		SDKConfig: SDKConfig{DisableClaudeOpus1M: false},
+		APIKeyPolicies: []APIKeyPolicy{
+			{APIKey: "enabled", EnableClaudeOpus1M: &enabled},
+			{APIKey: "disabled", EnableClaudeOpus1M: &disabled},
+			{APIKey: "inherit"},
+		},
+	}
+
+	if !cfg.AllowsClaudeOpus1M("enabled") {
+		t.Fatal("expected explicit true to allow 1M context signals")
+	}
+	if cfg.AllowsClaudeOpus1M("disabled") {
+		t.Fatal("expected explicit false to strip 1M context signals")
+	}
+	if !cfg.AllowsClaudeOpus1M("inherit") {
+		t.Fatal("expected key without override to inherit global 1M allowance")
+	}
+	if !cfg.AllowsClaudeOpus1M("unknown") {
+		t.Fatal("expected unknown key to inherit global 1M allowance")
+	}
+}
+
 func TestConfig_AllowsClaudeOpus1M_RespectsPerKeyOverride(t *testing.T) {
 	cfg := &Config{
 		SDKConfig: SDKConfig{DisableClaudeOpus1M: true},

@@ -691,13 +691,19 @@ func (cfg *Config) ClaudeGPTReasoningEffortOrDefault() string {
 }
 
 // AllowsClaudeOpus1M reports whether this client API key may keep Claude Code 1M context signals.
-// When the global switch is off, all keys are allowed. When the global switch is on, only
-// keys with enable-claude-opus-1m=true are allowed.
+// A per-key enable-claude-opus-1m value takes precedence. Without a per-key value, the
+// global disable-claude-opus-1m switch controls the default.
 func (cfg *Config) AllowsClaudeOpus1M(apiKey string) bool {
-	if cfg == nil || !cfg.DisableClaudeOpus1M {
+	if cfg == nil {
 		return true
 	}
 	entry := cfg.FindAPIKeyPolicy(apiKey)
+	if entry != nil && entry.EnableClaudeOpus1M != nil {
+		return entry.ClaudeOpus1MEnabled()
+	}
+	if !cfg.DisableClaudeOpus1M {
+		return true
+	}
 	if entry == nil {
 		return false
 	}
