@@ -232,12 +232,13 @@ func TestConfigSynthesizer_CodexKeys(t *testing.T) {
 		Config: &config.Config{
 			CodexKey: []config.CodexKey{
 				{
-					APIKey:     "codex-key-123",
-					Prefix:     "dev",
-					BaseURL:    "https://api.openai.com",
-					ProxyURL:   "http://proxy.local",
-					FastMode:   true,
-					Websockets: true,
+					APIKey:                   "codex-key-123",
+					Prefix:                   "dev",
+					BaseURL:                  "https://api.openai.com",
+					ProxyURL:                 "http://proxy.local",
+					FastMode:                 true,
+					Websockets:               true,
+					StripImageGenerationTool: true,
 				},
 			},
 		},
@@ -267,6 +268,9 @@ func TestConfigSynthesizer_CodexKeys(t *testing.T) {
 	}
 	if auths[0].Attributes["fast_mode"] != "true" {
 		t.Errorf("expected fast_mode=true, got %s", auths[0].Attributes["fast_mode"])
+	}
+	if auths[0].Attributes["strip_image_generation_tool"] != "true" {
+		t.Errorf("expected strip_image_generation_tool=true, got %s", auths[0].Attributes["strip_image_generation_tool"])
 	}
 }
 

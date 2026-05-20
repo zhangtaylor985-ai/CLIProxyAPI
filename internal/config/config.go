@@ -475,6 +475,10 @@ type CodexKey struct {
 	// FastMode forces this provider to use Codex fast service tier for all requests.
 	FastMode bool `yaml:"fast-mode,omitempty" json:"fast-mode,omitempty"`
 
+	// StripImageGenerationTool removes Responses API image_generation tools before upstream dispatch.
+	// Use this for Codex API-compatible upstreams whose group does not have image generation enabled.
+	StripImageGenerationTool bool `yaml:"strip-image-generation-tool,omitempty" json:"strip-image-generation-tool,omitempty"`
+
 	// Prefix optionally namespaces models for this credential (e.g., "teamA/gpt-5-codex").
 	Prefix string `yaml:"prefix,omitempty" json:"prefix,omitempty"`
 

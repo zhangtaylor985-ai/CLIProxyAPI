@@ -202,6 +202,7 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 	if !gjson.GetBytes(body, "instructions").Exists() {
 		body, _ = sjson.SetBytes(body, "instructions", "")
 	}
+	body = stripImageGenerationToolForAuth(body, auth)
 	body = e.applyConfiguredCodexServiceTier(body, auth)
 
 	httpURL := strings.TrimSuffix(baseURL, "/") + "/responses"
@@ -403,6 +404,7 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 
 	requestedModel := payloadRequestedModel(opts, req.Model)
 	body = applyPayloadConfigWithRoot(e.cfg, baseModel, to.String(), "", body, body, requestedModel)
+	body = stripImageGenerationToolForAuth(body, auth)
 	body = e.applyConfiguredCodexServiceTier(body, auth)
 
 	httpURL := strings.TrimSuffix(baseURL, "/") + "/responses"

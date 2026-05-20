@@ -965,15 +965,16 @@ func (h *Handler) PutCodexKeys(c *gin.Context) {
 }
 func (h *Handler) PatchCodexKey(c *gin.Context) {
 	type codexKeyPatch struct {
-		APIKey         *string              `json:"api-key"`
-		FastRecovery   *bool                `json:"fast-recovery"`
-		FastMode       *bool                `json:"fast-mode"`
-		Prefix         *string              `json:"prefix"`
-		BaseURL        *string              `json:"base-url"`
-		ProxyURL       *string              `json:"proxy-url"`
-		Models         *[]config.CodexModel `json:"models"`
-		Headers        *map[string]string   `json:"headers"`
-		ExcludedModels *[]string            `json:"excluded-models"`
+		APIKey                   *string              `json:"api-key"`
+		FastRecovery             *bool                `json:"fast-recovery"`
+		FastMode                 *bool                `json:"fast-mode"`
+		StripImageGenerationTool *bool                `json:"strip-image-generation-tool"`
+		Prefix                   *string              `json:"prefix"`
+		BaseURL                  *string              `json:"base-url"`
+		ProxyURL                 *string              `json:"proxy-url"`
+		Models                   *[]config.CodexModel `json:"models"`
+		Headers                  *map[string]string   `json:"headers"`
+		ExcludedModels           *[]string            `json:"excluded-models"`
 	}
 	var body struct {
 		Index *int           `json:"index"`
@@ -1014,6 +1015,9 @@ func (h *Handler) PatchCodexKey(c *gin.Context) {
 	}
 	if body.Value.FastMode != nil {
 		entry.FastMode = *body.Value.FastMode
+	}
+	if body.Value.StripImageGenerationTool != nil {
+		entry.StripImageGenerationTool = *body.Value.StripImageGenerationTool
 	}
 	if body.Value.Prefix != nil {
 		entry.Prefix = strings.TrimSpace(*body.Value.Prefix)

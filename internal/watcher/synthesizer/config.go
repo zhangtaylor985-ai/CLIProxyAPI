@@ -175,6 +175,9 @@ func (s *ConfigSynthesizer) synthesizeCodexKeys(ctx *SynthesisContext) []*coreau
 		if ck.FastMode {
 			attrs["fast_mode"] = "true"
 		}
+		if ck.StripImageGenerationTool {
+			attrs["strip_image_generation_tool"] = "true"
+		}
 		if ck.BaseURL != "" {
 			attrs["base_url"] = ck.BaseURL
 		}

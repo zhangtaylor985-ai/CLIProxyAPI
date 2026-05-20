@@ -180,7 +180,7 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 	body, _ = sjson.DeleteBytes(body, "safety_identifier")
 	body, _ = sjson.DeleteBytes(body, "stream_options")
 	body = normalizeCodexInstructions(body)
-	body = ensureImageGenerationToolForSource(body, baseModel, from, auth)
+	body = applyCodexImageGenerationToolPolicy(body, baseModel, from, auth)
 	body = e.applyConfiguredCodexServiceTier(body, auth)
 
 	url := strings.TrimSuffix(baseURL, "/") + "/responses"
@@ -307,7 +307,7 @@ func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.A
 	body, _ = sjson.SetBytes(body, "model", baseModel)
 	body, _ = sjson.DeleteBytes(body, "stream")
 	body = normalizeCodexInstructions(body)
-	body = ensureImageGenerationToolForSource(body, baseModel, from, auth)
+	body = applyCodexImageGenerationToolPolicy(body, baseModel, from, auth)
 	body = e.applyConfiguredCodexServiceTier(body, auth)
 
 	url := strings.TrimSuffix(baseURL, "/") + "/responses/compact"
@@ -407,7 +407,7 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 	body, _ = sjson.SetBytes(body, "model", baseModel)
 	body, _ = sjson.DeleteBytes(body, "stream_options")
 	body = normalizeCodexInstructions(body)
-	body = ensureImageGenerationToolForSource(body, baseModel, from, auth)
+	body = applyCodexImageGenerationToolPolicy(body, baseModel, from, auth)
 	body = e.applyConfiguredCodexServiceTier(body, auth)
 
 	url := strings.TrimSuffix(baseURL, "/") + "/responses"
@@ -630,6 +630,54 @@ func ensureImageGenerationToolForSource(body []byte, baseModel string, from sdkt
 	return ensureImageGenerationTool(body, baseModel, auth)
 }
 
+func applyCodexImageGenerationToolPolicy(body []byte, baseModel string, from sdktranslator.Format, auth *cliproxyauth.Auth) []byte {
+	if shouldStripImageGenerationTool(auth) {
+		return stripImageGenerationTool(body)
+	}
+	return ensureImageGenerationToolForSource(body, baseModel, from, auth)
+}
+
+func stripImageGenerationToolForAuth(body []byte, auth *cliproxyauth.Auth) []byte {
+	if !shouldStripImageGenerationTool(auth) {
+		return body
+	}
+	return stripImageGenerationTool(body)
+}
+
+func shouldStripImageGenerationTool(auth *cliproxyauth.Auth) bool {
+	if auth == nil || auth.Attributes == nil {
+		return false
+	}
+	value := strings.TrimSpace(auth.Attributes["strip_image_generation_tool"])
+	return strings.EqualFold(value, "true") || value == "1"
+}
+
+func stripImageGenerationTool(body []byte) []byte {
+	tools := gjson.GetBytes(body, "tools")
+	if !tools.Exists() || !tools.IsArray() {
+		return body
+	}
+
+	kept := make([]string, 0, len(tools.Array()))
+	removed := false
+	for _, tool := range tools.Array() {
+		if strings.EqualFold(strings.TrimSpace(tool.Get("type").String()), "image_generation") {
+			removed = true
+			continue
+		}
+		kept = append(kept, tool.Raw)
+	}
+	if !removed {
+		return body
+	}
+	if len(kept) == 0 {
+		body, _ = sjson.DeleteBytes(body, "tools")
+		return body
+	}
+	body, _ = sjson.SetRawBytes(body, "tools", []byte("["+strings.Join(kept, ",")+"]"))
+	return body
+}
+
 func ensureImageGenerationTool(body []byte, baseModel string, auth *cliproxyauth.Auth) []byte {
 	if strings.HasSuffix(strings.ToLower(strings.TrimSpace(baseModel)), "spark") {
 		return body
@@ -672,6 +720,7 @@ func (e *CodexExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Auth
 	if !gjson.GetBytes(body, "instructions").Exists() {
 		body, _ = sjson.SetBytes(body, "instructions", "")
 	}
+	body = stripImageGenerationToolForAuth(body, auth)
 
 	enc, err := tokenizerForCodexModel(baseModel)
 	if err != nil {

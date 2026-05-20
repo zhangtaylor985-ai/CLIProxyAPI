@@ -129,3 +129,50 @@ func TestEnsureImageGenerationToolForSource_SkipsClaudeSource(t *testing.T) {
 		t.Fatalf("expected no image_generation tools for Claude source, got %s", gjson.GetBytes(result, "tools").Raw)
 	}
 }
+
+func TestApplyCodexImageGenerationToolPolicy_StripsImageToolAndPreservesOthers(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.5","tools":[{"type":"web_search"},{"type":"image_generation","output_format":"png"},{"type":"function","name":"f1"}]}`)
+	auth := &cliproxyauth.Auth{
+		Provider:   "codex",
+		Attributes: map[string]string{"strip_image_generation_tool": "true"},
+	}
+
+	result := applyCodexImageGenerationToolPolicy(body, "gpt-5.5", sdktranslator.FromString("openai-response"), auth)
+	tools := gjson.GetBytes(result, "tools")
+	arr := tools.Array()
+	if len(arr) != 2 {
+		t.Fatalf("expected 2 remaining tools, got %d: %s", len(arr), tools.Raw)
+	}
+	if arr[0].Get("type").String() != "web_search" {
+		t.Fatalf("expected first tool web_search, got %s", arr[0].Raw)
+	}
+	if arr[1].Get("type").String() != "function" {
+		t.Fatalf("expected second tool function, got %s", arr[1].Raw)
+	}
+}
+
+func TestApplyCodexImageGenerationToolPolicy_RemovesToolsWhenOnlyImageTool(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.5","tools":[{"type":"image_generation","output_format":"png"}]}`)
+	auth := &cliproxyauth.Auth{
+		Provider:   "codex",
+		Attributes: map[string]string{"strip_image_generation_tool": "true"},
+	}
+
+	result := applyCodexImageGenerationToolPolicy(body, "gpt-5.5", sdktranslator.FromString("openai-response"), auth)
+	if gjson.GetBytes(result, "tools").Exists() {
+		t.Fatalf("expected tools to be removed, got %s", gjson.GetBytes(result, "tools").Raw)
+	}
+}
+
+func TestApplyCodexImageGenerationToolPolicy_DoesNotInjectWhenStripEnabled(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.5","input":"hello"}`)
+	auth := &cliproxyauth.Auth{
+		Provider:   "codex",
+		Attributes: map[string]string{"strip_image_generation_tool": "true"},
+	}
+
+	result := applyCodexImageGenerationToolPolicy(body, "gpt-5.5", sdktranslator.FromString("openai-response"), auth)
+	if gjson.GetBytes(result, "tools").Exists() {
+		t.Fatalf("expected no tools to be injected, got %s", gjson.GetBytes(result, "tools").Raw)
+	}
+}
