@@ -1087,6 +1087,42 @@ func TestAPIKeyPolicyMiddleware_FastModeSetsPriorityServiceTier(t *testing.T) {
 	}
 }
 
+func TestAPIKeyPolicyMiddleware_StripsClientServiceTierWhenFastModeDisabled(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	cfg := &config.Config{
+		APIKeyPolicies: []config.APIKeyPolicy{
+			{APIKey: "k", FastMode: false},
+		},
+	}
+	cfg.SanitizeAPIKeyPolicies()
+
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set("apiKey", "k")
+		c.Next()
+	})
+	r.Use(APIKeyPolicyMiddleware(func() *config.Config { return cfg }, nil, nil, nil))
+	r.POST("/v1/responses", func(c *gin.Context) {
+		body, _ := io.ReadAll(c.Request.Body)
+		c.JSON(200, gin.H{
+			"model":              gjson.GetBytes(body, "model").String(),
+			"has_service_tier":   gjson.GetBytes(body, "service_tier").Exists(),
+			"service_tier_value": gjson.GetBytes(body, "service_tier").String(),
+		})
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewBufferString(`{"model":"gpt-5.5","input":"hi","service_tier":"fast"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	if gjson.GetBytes(w.Body.Bytes(), "has_service_tier").Bool() {
+		t.Fatalf("expected service_tier to be stripped body=%s", w.Body.String())
+	}
+}
+
 func TestAPIKeyPolicyMiddleware_ExcludedRequestedCategoryDoesNotBlockRoutingTarget(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	cfg := &config.Config{

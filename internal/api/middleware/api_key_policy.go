@@ -236,7 +236,14 @@ func APIKeyPolicyMiddleware(getConfig func() *config.Config, limiter policy.Dail
 				return
 			}
 		}
-		if policyEntry != nil && policyEntry.FastModeEnabled() {
+		fastModeEnabled := policyEntry != nil && policyEntry.FastModeEnabled()
+		if !fastModeEnabled && gjson.GetBytes(bodyBytes, "service_tier").Exists() {
+			if updated, errSet := sjson.DeleteBytes(bodyBytes, "service_tier"); errSet == nil {
+				bodyBytes = updated
+				replaceRequestBody(c, bodyBytes)
+			}
+		}
+		if fastModeEnabled {
 			requesttrace.UpsertAPIKeyPolicyTraceOnGin(c, func(trace *requesttrace.APIKeyPolicyTrace) {
 				trace.APIKey = apiKey
 				trace.FastModeEnabled = true
@@ -248,7 +255,7 @@ func APIKeyPolicyMiddleware(getConfig func() *config.Config, limiter policy.Dail
 				}
 			})
 		}
-		if policyEntry != nil && policyEntry.FastModeEnabled() && modelSupportsPriorityServiceTier(budgetModel) {
+		if fastModeEnabled && modelSupportsPriorityServiceTier(budgetModel) {
 			if updated, errSet := sjson.SetBytes(bodyBytes, "service_tier", "priority"); errSet == nil {
 				bodyBytes = updated
 				replaceRequestBody(c, bodyBytes)
