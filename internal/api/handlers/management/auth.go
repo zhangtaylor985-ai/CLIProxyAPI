@@ -219,6 +219,11 @@ func (h *Handler) authenticateManagementRequest(c *gin.Context) bool {
 		return true
 	}
 
+	if strings.HasPrefix(provided, "mgmt_session_") {
+		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "management session expired"})
+		return false
+	}
+
 	if !localClient {
 		fail()
 	}

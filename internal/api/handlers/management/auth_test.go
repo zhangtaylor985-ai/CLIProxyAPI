@@ -161,6 +161,65 @@ func TestHasManagementUserStoreRequiresSessionManager(t *testing.T) {
 	}
 }
 
+func TestStaleManagementSessionDoesNotBanRemoteClient(t *testing.T) {
+	t.Parallel()
+
+	gin.SetMode(gin.TestMode)
+
+	passwordHash, err := bcrypt.GenerateFromPassword([]byte("admin-pass"), bcrypt.DefaultCost)
+	if err != nil {
+		t.Fatalf("GenerateFromPassword: %v", err)
+	}
+
+	handler := NewHandlerWithoutConfigFilePath(&config.Config{
+		RemoteManagement: config.RemoteManagement{
+			AllowRemote: true,
+		},
+	}, nil)
+	handler.SetManagementUserStore(&memoryManagementUserStore{
+		items: map[string]managementauth.User{
+			"admin": {
+				Username:     "admin",
+				PasswordHash: string(passwordHash),
+				Role:         managementauth.RoleAdmin,
+				Enabled:      true,
+			},
+		},
+	})
+	handler.SetSessionManager(managementauth.NewSessionManager(30 * time.Minute))
+
+	router := gin.New()
+	public := router.Group("/v0/management")
+	public.POST("/login", handler.Login)
+	authenticated := router.Group("/v0/management")
+	authenticated.Use(handler.Middleware())
+	authenticated.GET("/me", handler.Me)
+
+	for i := 0; i < managementMaxFailures; i++ {
+		req := httptest.NewRequest(http.MethodGet, "/v0/management/me", nil)
+		req.RemoteAddr = "203.0.113.10:12345"
+		req.Header.Set("Authorization", "Bearer mgmt_session_restart_orphan")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("stale session attempt %d status = %d, want 401, body=%s", i+1, rec.Code, rec.Body.String())
+		}
+	}
+
+	body, _ := json.Marshal(gin.H{
+		"username": "admin",
+		"password": "admin-pass",
+	})
+	loginReq := httptest.NewRequest(http.MethodPost, "/v0/management/login", bytes.NewReader(body))
+	loginReq.RemoteAddr = "203.0.113.10:12345"
+	loginReq.Header.Set("Content-Type", "application/json")
+	loginRec := httptest.NewRecorder()
+	router.ServeHTTP(loginRec, loginReq)
+	if loginRec.Code != http.StatusOK {
+		t.Fatalf("login after stale sessions status = %d, want 200, body=%s", loginRec.Code, loginRec.Body.String())
+	}
+}
+
 func TestManagementSessionExpiresAfterPasswordChange(t *testing.T) {
 	t.Parallel()
 
