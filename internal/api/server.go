@@ -928,6 +928,9 @@ func (s *Server) registerManagementRoutes() {
 		adminMgmt.PATCH("/openai-compatibility", s.mgmt.PatchOpenAICompat)
 		adminMgmt.DELETE("/openai-compatibility", s.mgmt.DeleteOpenAICompat)
 		adminMgmt.GET("/codex-workers", s.mgmt.ListCodexWorkers)
+		adminMgmt.GET("/codex-workers/priority-schedule", s.mgmt.GetCodexWorkerPrioritySchedule)
+		adminMgmt.PUT("/codex-workers/priority-schedule", s.mgmt.PutCodexWorkerPrioritySchedule)
+		adminMgmt.PATCH("/codex-workers/priority-schedule", s.mgmt.PutCodexWorkerPrioritySchedule)
 		adminMgmt.POST("/codex-workers/:id/container", s.mgmt.ControlCodexWorkerContainer)
 		adminMgmt.PUT("/codex-workers/:id/proxy", s.mgmt.UpdateCodexWorkerProxy)
 		adminMgmt.PUT("/codex-workers/:id/routing", s.mgmt.UpdateCodexWorkerRouting)
@@ -1484,6 +1487,7 @@ func (s *Server) UpdateClients(cfg *config.Config) {
 	if s.handlers != nil && s.handlers.AuthManager != nil {
 		s.handlers.AuthManager.SetRetryConfig(cfg.RequestRetry, time.Duration(cfg.MaxRetryInterval)*time.Second, cfg.MaxRetryCredentials)
 	}
+	s.applyRoutingSelectorConfig(oldCfg, cfg)
 
 	// Update log level dynamically when debug flag changes
 	if oldCfg == nil || oldCfg.Debug != cfg.Debug {
@@ -1590,6 +1594,59 @@ func (s *Server) UpdateClients(cfg *config.Config) {
 		vertexAICompatCount,
 		openAICompatCount,
 	)
+}
+
+func (s *Server) applyRoutingSelectorConfig(oldCfg *config.Config, cfg *config.Config) {
+	if s == nil || cfg == nil || s.handlers == nil || s.handlers.AuthManager == nil {
+		return
+	}
+	previousStrategy := ""
+	previousSessionAffinity := false
+	previousSessionAffinityTTL := ""
+	if oldCfg != nil {
+		previousStrategy = normalizeServerRoutingStrategy(oldCfg.Routing.Strategy)
+		previousSessionAffinity = oldCfg.Routing.ClaudeCodeSessionAffinity || oldCfg.Routing.SessionAffinity
+		previousSessionAffinityTTL = strings.TrimSpace(oldCfg.Routing.SessionAffinityTTL)
+	}
+	nextStrategy := normalizeServerRoutingStrategy(cfg.Routing.Strategy)
+	nextSessionAffinity := cfg.Routing.ClaudeCodeSessionAffinity || cfg.Routing.SessionAffinity
+	nextSessionAffinityTTL := strings.TrimSpace(cfg.Routing.SessionAffinityTTL)
+	if oldCfg != nil &&
+		previousStrategy == nextStrategy &&
+		previousSessionAffinity == nextSessionAffinity &&
+		previousSessionAffinityTTL == nextSessionAffinityTTL {
+		return
+	}
+
+	var selector auth.Selector
+	switch nextStrategy {
+	case "fill-first":
+		selector = &auth.FillFirstSelector{}
+	default:
+		selector = &auth.RoundRobinSelector{}
+	}
+	if nextSessionAffinity {
+		ttl := time.Hour
+		if nextSessionAffinityTTL != "" {
+			if parsed, err := time.ParseDuration(nextSessionAffinityTTL); err == nil && parsed > 0 {
+				ttl = parsed
+			}
+		}
+		selector = auth.NewSessionAffinitySelectorWithConfig(auth.SessionAffinityConfig{
+			Fallback: selector,
+			TTL:      ttl,
+		})
+	}
+	s.handlers.AuthManager.SetSelector(selector)
+}
+
+func normalizeServerRoutingStrategy(strategy string) string {
+	switch strings.ToLower(strings.TrimSpace(strategy)) {
+	case "fill-first", "fillfirst", "ff":
+		return "fill-first"
+	default:
+		return "round-robin"
+	}
 }
 
 func (s *Server) SetWebsocketAuthChangeHandler(fn func(bool, bool)) {
