@@ -1,11 +1,15 @@
 package management
 
 import (
+	"bytes"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 )
 
@@ -28,8 +32,8 @@ func TestCodexWorkerPriorityScheduleAppliesWindowPriorities(t *testing.T) {
 			StartTime:          "15:00",
 			EndTime:            "17:30",
 			APIProviderBaseURL: "https://apibridge012.online",
-			SessionAffinityTTL: "3h",
 		},
+		Routing: config.RoutingConfig{SessionAffinity: false, SessionAffinityTTL: "1h"},
 		OpenAICompatibility: []config.OpenAICompatibility{
 			{Name: "codex-worker08", BaseURL: "http://127.0.0.1:18324/v1", ExcludedModels: []string{"legacy-disabled"}},
 			{Name: "codex-api", BaseURL: "https://apibridge012.online/v1"},
@@ -51,11 +55,11 @@ func TestCodexWorkerPriorityScheduleAppliesWindowPriorities(t *testing.T) {
 	if got := cfg.OpenAICompatibility[1].Priority; got != 0 {
 		t.Fatalf("api priority = %d, want 0", got)
 	}
-	if !cfg.Routing.SessionAffinity {
-		t.Fatal("session affinity should be enabled in window")
+	if cfg.Routing.SessionAffinity {
+		t.Fatal("priority schedule should not enable session affinity")
 	}
-	if got := cfg.Routing.SessionAffinityTTL; got != "3h" {
-		t.Fatalf("session affinity ttl = %q, want 3h", got)
+	if got := cfg.Routing.SessionAffinityTTL; got != "1h" {
+		t.Fatalf("session affinity ttl = %q, want unchanged 1h", got)
 	}
 	if got := cfg.OpenAICompatibility[0].ExcludedModels; len(got) != 1 || got[0] != "legacy-disabled" {
 		t.Fatalf("worker excluded models changed: %#v", got)
@@ -81,7 +85,6 @@ func TestCodexWorkerPriorityScheduleRestoresOutsidePriorities(t *testing.T) {
 			StartTime:          "15:00",
 			EndTime:            "17:30",
 			APIProviderBaseURL: "https://apibridge012.online",
-			SessionAffinityTTL: "3h",
 		},
 		Routing: config.RoutingConfig{SessionAffinity: true, SessionAffinityTTL: "3h"},
 		OpenAICompatibility: []config.OpenAICompatibility{
@@ -105,7 +108,41 @@ func TestCodexWorkerPriorityScheduleRestoresOutsidePriorities(t *testing.T) {
 	if got := cfg.OpenAICompatibility[1].Priority; got != 20 {
 		t.Fatalf("api priority = %d, want 20", got)
 	}
-	if cfg.Routing.SessionAffinity {
-		t.Fatal("session affinity should be disabled outside window")
+	if !cfg.Routing.SessionAffinity {
+		t.Fatal("priority schedule should not disable session affinity")
+	}
+	if got := cfg.Routing.SessionAffinityTTL; got != "3h" {
+		t.Fatalf("session affinity ttl = %q, want unchanged 3h", got)
+	}
+}
+
+func TestCodexWorkerSessionAffinityCanBeManagedSeparately(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(configPath, []byte("port: 8317\n"), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg := &config.Config{
+		Routing: config.RoutingConfig{SessionAffinity: false, SessionAffinityTTL: "1h"},
+	}
+	handler := NewHandler(cfg, configPath, nil)
+
+	body := bytes.NewBufferString(`{"enabled":true,"ttl":"3h"}`)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPut, "/v0/management/codex-workers/session-affinity", body)
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	handler.PutCodexWorkerSessionAffinity(c)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	if !cfg.Routing.SessionAffinity {
+		t.Fatal("session affinity should be enabled")
+	}
+	if got := cfg.Routing.SessionAffinityTTL; got != "3h" {
+		t.Fatalf("session affinity ttl = %q, want 3h", got)
 	}
 }

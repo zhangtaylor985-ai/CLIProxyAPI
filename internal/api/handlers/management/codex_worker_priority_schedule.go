@@ -19,7 +19,6 @@ const (
 	defaultCodexWorkerScheduleAPIProviderBase     = "https://apibridge012.online"
 	defaultCodexWorkerScheduleWorkerPriority      = 20
 	defaultCodexWorkerScheduleAPIProviderPriority = 20
-	defaultCodexWorkerScheduleSessionAffinityTTL  = "3h"
 )
 
 type codexWorkerPriorityScheduleView struct {
@@ -78,10 +77,6 @@ func (h *Handler) PutCodexWorkerPrioritySchedule(c *gin.Context) {
 	}
 	if _, _, err := codexWorkerScheduleTimes(req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-	if _, err := time.ParseDuration(req.SessionAffinityTTL); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid session_affinity_ttl"})
 		return
 	}
 	h.mu.Lock()
@@ -172,11 +167,9 @@ func (h *Handler) applyCodexWorkerPrioritySchedule(ctx context.Context, now time
 	changed := false
 	workerPriority := schedule.OutsideWorkerPriority
 	apiPriority := schedule.OutsideAPIProviderPriority
-	sessionAffinity := false
 	if active {
 		workerPriority = schedule.WindowWorkerPriority
 		apiPriority = schedule.WindowAPIProviderPriority
-		sessionAffinity = true
 	}
 
 	workerIndices := codexWorkerRouteProviderIndices(h.cfg.OpenAICompatibility, workers)
@@ -197,14 +190,6 @@ func (h *Handler) applyCodexWorkerPrioritySchedule(ctx context.Context, now time
 			h.cfg.OpenAICompatibility[idx].Priority = apiPriority
 			changed = true
 		}
-	}
-	if h.cfg.Routing.SessionAffinity != sessionAffinity {
-		h.cfg.Routing.SessionAffinity = sessionAffinity
-		changed = true
-	}
-	if active && strings.TrimSpace(h.cfg.Routing.SessionAffinityTTL) != schedule.SessionAffinityTTL {
-		h.cfg.Routing.SessionAffinityTTL = schedule.SessionAffinityTTL
-		changed = true
 	}
 	if changed {
 		h.cfg.CodexWorkerPrioritySchedule = schedule
@@ -248,9 +233,6 @@ func normalizeCodexWorkerPrioritySchedule(in config.CodexWorkerPriorityScheduleC
 		in.OutsideAPIProviderPriority = defaultCodexWorkerScheduleAPIProviderPriority
 	}
 	in.SessionAffinityTTL = strings.TrimSpace(in.SessionAffinityTTL)
-	if in.SessionAffinityTTL == "" {
-		in.SessionAffinityTTL = defaultCodexWorkerScheduleSessionAffinityTTL
-	}
 	return in
 }
 
