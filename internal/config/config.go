@@ -1487,6 +1487,8 @@ func shouldPruneMissingMapKeysForPath(path []string) bool {
 	switch path[0] {
 	case "api-key-policies":
 		return true
+	case "routing":
+		return true
 	default:
 		return false
 	}

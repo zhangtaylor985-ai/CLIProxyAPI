@@ -143,6 +143,11 @@ func (h *Handler) buildCodexWorkerPriorityScheduleView(ctx context.Context, now 
 			view.APIProviderNames = append(view.APIProviderNames, h.cfg.OpenAICompatibility[idx].Name)
 		}
 	}
+	for _, idx := range codexWorkerScheduleCodexProviderIndices(h.cfg.CodexKey, schedule) {
+		if idx >= 0 && idx < len(h.cfg.CodexKey) {
+			view.APIProviderNames = append(view.APIProviderNames, "codex-api-key")
+		}
+	}
 	_ = ctx
 	return view, nil
 }
@@ -196,6 +201,15 @@ func (h *Handler) applyCodexWorkerPrioritySchedule(ctx context.Context, now time
 			changed = true
 		}
 	}
+	for _, idx := range codexWorkerScheduleCodexProviderIndices(h.cfg.CodexKey, schedule) {
+		if idx < 0 || idx >= len(h.cfg.CodexKey) {
+			continue
+		}
+		if h.cfg.CodexKey[idx].Priority != apiPriority {
+			h.cfg.CodexKey[idx].Priority = apiPriority
+			changed = true
+		}
+	}
 	if active {
 		if !h.cfg.Routing.SessionAffinity || h.cfg.Routing.ClaudeCodeSessionAffinity {
 			h.cfg.Routing.SessionAffinity = true
@@ -214,6 +228,7 @@ func (h *Handler) applyCodexWorkerPrioritySchedule(ctx context.Context, now time
 	if changed {
 		h.cfg.CodexWorkerPrioritySchedule = schedule
 		h.cfg.SanitizeOpenAICompatibility()
+		h.cfg.SanitizeCodexKeys()
 		currentCfg := h.cfg
 		if err := config.SaveConfigPreserveComments(h.configFilePath, currentCfg); err != nil {
 			h.mu.Unlock()
@@ -351,6 +366,20 @@ func codexWorkerRouteProviderIndices(entries []config.OpenAICompatibility, worke
 }
 
 func codexWorkerScheduleAPIProviderIndices(entries []config.OpenAICompatibility, schedule config.CodexWorkerPriorityScheduleConfig) []int {
+	targetBase := sanitizeWorkerBaseURL(schedule.APIProviderBaseURL)
+	if targetBase == "" {
+		return nil
+	}
+	out := make([]int, 0, 1)
+	for i := range entries {
+		if sanitizeWorkerBaseURL(entries[i].BaseURL) == targetBase {
+			out = append(out, i)
+		}
+	}
+	return out
+}
+
+func codexWorkerScheduleCodexProviderIndices(entries []config.CodexKey, schedule config.CodexWorkerPriorityScheduleConfig) []int {
 	targetBase := sanitizeWorkerBaseURL(schedule.APIProviderBaseURL)
 	if targetBase == "" {
 		return nil

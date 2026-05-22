@@ -216,3 +216,39 @@ api-key-policies:
 		t.Fatalf("saved config missing explicit false override:\n%s", string(data))
 	}
 }
+
+func TestSaveConfigPreserveComments_PrunesDisabledSessionAffinity(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+	initial := []byte(`
+host: "127.0.0.1"
+port: 58080
+routing:
+  strategy: "round-robin"
+  session-affinity: true
+  session-affinity-ttl: "3h"
+`)
+	if err := os.WriteFile(configPath, initial, 0o600); err != nil {
+		t.Fatalf("failed to write config: %v", err)
+	}
+
+	cfg := &Config{
+		Host: "127.0.0.1",
+		Port: 58080,
+		Routing: RoutingConfig{
+			Strategy:           "round-robin",
+			SessionAffinity:    false,
+			SessionAffinityTTL: "3h",
+		},
+	}
+	if err := SaveConfigPreserveComments(configPath, cfg); err != nil {
+		t.Fatalf("SaveConfigPreserveComments() error = %v", err)
+	}
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("failed to read config: %v", err)
+	}
+	if strings.Contains(string(data), "session-affinity: true") {
+		t.Fatalf("saved config retained enabled session-affinity:\n%s", string(data))
+	}
+}

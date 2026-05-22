@@ -34,6 +34,9 @@ func TestCodexWorkerPriorityScheduleAppliesWindowPriorities(t *testing.T) {
 			APIProviderBaseURL: "https://apibridge012.online",
 		},
 		Routing: config.RoutingConfig{SessionAffinity: false, SessionAffinityTTL: "1h"},
+		CodexKey: []config.CodexKey{
+			{APIKey: "codex-api", BaseURL: "https://apibridge012.online/v1", Priority: 1},
+		},
 		OpenAICompatibility: []config.OpenAICompatibility{
 			{Name: "codex-worker08", BaseURL: "http://127.0.0.1:18324/v1", ExcludedModels: []string{"legacy-disabled"}},
 			{Name: "codex-api", BaseURL: "https://apibridge012.online/v1"},
@@ -54,6 +57,9 @@ func TestCodexWorkerPriorityScheduleAppliesWindowPriorities(t *testing.T) {
 	}
 	if got := cfg.OpenAICompatibility[1].Priority; got != 0 {
 		t.Fatalf("api priority = %d, want 0", got)
+	}
+	if got := cfg.CodexKey[0].Priority; got != 0 {
+		t.Fatalf("native codex api priority = %d, want 0", got)
 	}
 	if !cfg.Routing.SessionAffinity {
 		t.Fatal("active priority schedule should enable session affinity")
@@ -87,6 +93,9 @@ func TestCodexWorkerPriorityScheduleRestoresOutsidePriorities(t *testing.T) {
 			APIProviderBaseURL: "https://apibridge012.online",
 		},
 		Routing: config.RoutingConfig{SessionAffinity: true, SessionAffinityTTL: "3h"},
+		CodexKey: []config.CodexKey{
+			{APIKey: "codex-api", BaseURL: "https://apibridge012.online/v1", Priority: 0},
+		},
 		OpenAICompatibility: []config.OpenAICompatibility{
 			{Name: "codex-worker08", BaseURL: "http://127.0.0.1:18324/v1", Priority: 20},
 			{Name: "codex-api", BaseURL: "https://apibridge012.online/v1", Priority: 0},
@@ -107,6 +116,9 @@ func TestCodexWorkerPriorityScheduleRestoresOutsidePriorities(t *testing.T) {
 	}
 	if got := cfg.OpenAICompatibility[1].Priority; got != 20 {
 		t.Fatalf("api priority = %d, want 20", got)
+	}
+	if got := cfg.CodexKey[0].Priority; got != 20 {
+		t.Fatalf("native codex api priority = %d, want 20", got)
 	}
 	if cfg.Routing.SessionAffinity {
 		t.Fatal("outside priority schedule window should disable session affinity")
