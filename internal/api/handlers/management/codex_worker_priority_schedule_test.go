@@ -55,11 +55,11 @@ func TestCodexWorkerPriorityScheduleAppliesWindowPriorities(t *testing.T) {
 	if got := cfg.OpenAICompatibility[1].Priority; got != 0 {
 		t.Fatalf("api priority = %d, want 0", got)
 	}
-	if cfg.Routing.SessionAffinity {
-		t.Fatal("priority schedule should not enable session affinity")
+	if !cfg.Routing.SessionAffinity {
+		t.Fatal("active priority schedule should enable session affinity")
 	}
-	if got := cfg.Routing.SessionAffinityTTL; got != "1h" {
-		t.Fatalf("session affinity ttl = %q, want unchanged 1h", got)
+	if got := cfg.Routing.SessionAffinityTTL; got != "3h" {
+		t.Fatalf("session affinity ttl = %q, want scheduled 3h", got)
 	}
 	if got := cfg.OpenAICompatibility[0].ExcludedModels; len(got) != 1 || got[0] != "legacy-disabled" {
 		t.Fatalf("worker excluded models changed: %#v", got)
@@ -108,11 +108,8 @@ func TestCodexWorkerPriorityScheduleRestoresOutsidePriorities(t *testing.T) {
 	if got := cfg.OpenAICompatibility[1].Priority; got != 20 {
 		t.Fatalf("api priority = %d, want 20", got)
 	}
-	if !cfg.Routing.SessionAffinity {
-		t.Fatal("priority schedule should not disable session affinity")
-	}
-	if got := cfg.Routing.SessionAffinityTTL; got != "3h" {
-		t.Fatalf("session affinity ttl = %q, want unchanged 3h", got)
+	if cfg.Routing.SessionAffinity {
+		t.Fatal("outside priority schedule window should disable session affinity")
 	}
 }
 

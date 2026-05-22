@@ -19,6 +19,7 @@ const (
 	defaultCodexWorkerScheduleAPIProviderBase     = "https://apibridge012.online"
 	defaultCodexWorkerScheduleWorkerPriority      = 20
 	defaultCodexWorkerScheduleAPIProviderPriority = 20
+	defaultCodexWorkerScheduleSessionAffinityTTL  = "3h"
 )
 
 type codexWorkerPriorityScheduleView struct {
@@ -77,6 +78,10 @@ func (h *Handler) PutCodexWorkerPrioritySchedule(c *gin.Context) {
 	}
 	if _, _, err := codexWorkerScheduleTimes(req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if _, err := time.ParseDuration(req.SessionAffinityTTL); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid session_affinity_ttl"})
 		return
 	}
 	h.mu.Lock()
@@ -191,6 +196,21 @@ func (h *Handler) applyCodexWorkerPrioritySchedule(ctx context.Context, now time
 			changed = true
 		}
 	}
+	if active {
+		if !h.cfg.Routing.SessionAffinity || h.cfg.Routing.ClaudeCodeSessionAffinity {
+			h.cfg.Routing.SessionAffinity = true
+			h.cfg.Routing.ClaudeCodeSessionAffinity = false
+			changed = true
+		}
+		if strings.TrimSpace(h.cfg.Routing.SessionAffinityTTL) != schedule.SessionAffinityTTL {
+			h.cfg.Routing.SessionAffinityTTL = schedule.SessionAffinityTTL
+			changed = true
+		}
+	} else if h.cfg.Routing.SessionAffinity || h.cfg.Routing.ClaudeCodeSessionAffinity {
+		h.cfg.Routing.SessionAffinity = false
+		h.cfg.Routing.ClaudeCodeSessionAffinity = false
+		changed = true
+	}
 	if changed {
 		h.cfg.CodexWorkerPrioritySchedule = schedule
 		h.cfg.SanitizeOpenAICompatibility()
@@ -233,6 +253,9 @@ func normalizeCodexWorkerPrioritySchedule(in config.CodexWorkerPriorityScheduleC
 		in.OutsideAPIProviderPriority = defaultCodexWorkerScheduleAPIProviderPriority
 	}
 	in.SessionAffinityTTL = strings.TrimSpace(in.SessionAffinityTTL)
+	if in.SessionAffinityTTL == "" {
+		in.SessionAffinityTTL = defaultCodexWorkerScheduleSessionAffinityTTL
+	}
 	return in
 }
 
