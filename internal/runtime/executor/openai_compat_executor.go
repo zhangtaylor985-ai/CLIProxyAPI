@@ -79,7 +79,8 @@ func (e *OpenAICompatExecutor) Execute(ctx context.Context, auth *cliproxyauth.A
 
 	from := opts.SourceFormat
 	requestedModel := payloadRequestedModel(opts, req.Model)
-	reporter := newUsageReporter(ctx, e.Identifier(), usageModelForTranslatedRequest(baseModel, requestedModel, from.String()), auth)
+	billingRequestedModel := payloadOriginalRequestedModel(opts, requestedModel)
+	reporter := newUsageReporter(ctx, e.Identifier(), usageModelForTranslatedRequest(baseModel, billingRequestedModel, from.String()), auth)
 	defer reporter.trackFailure(ctx, &err)
 
 	baseURL, apiKey := e.resolveCredentials(auth)
@@ -197,7 +198,8 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 
 	from := opts.SourceFormat
 	requestedModel := payloadRequestedModel(opts, req.Model)
-	reporter := newUsageReporter(ctx, e.Identifier(), usageModelForTranslatedRequest(baseModel, requestedModel, from.String()), auth)
+	billingRequestedModel := payloadOriginalRequestedModel(opts, requestedModel)
+	reporter := newUsageReporter(ctx, e.Identifier(), usageModelForTranslatedRequest(baseModel, billingRequestedModel, from.String()), auth)
 	defer reporter.trackFailure(ctx, &err)
 
 	baseURL, apiKey := e.resolveCredentials(auth)

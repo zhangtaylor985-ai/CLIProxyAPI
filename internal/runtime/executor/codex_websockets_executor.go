@@ -176,7 +176,8 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 
 	from := opts.SourceFormat
 	requestedModel := payloadRequestedModel(opts, req.Model)
-	reporter := newUsageReporter(ctx, e.Identifier(), usageModelForTranslatedRequest(baseModel, requestedModel, from.String()), auth)
+	billingRequestedModel := payloadOriginalRequestedModel(opts, requestedModel)
+	reporter := newUsageReporter(ctx, e.Identifier(), usageModelForTranslatedRequest(baseModel, billingRequestedModel, from.String()), auth)
 	defer reporter.trackFailure(ctx, &err)
 
 	to := sdktranslator.FromString("codex")
@@ -392,7 +393,8 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 
 	from := opts.SourceFormat
 	requestedModel := payloadRequestedModel(opts, req.Model)
-	reporter := newUsageReporter(ctx, e.Identifier(), usageModelForTranslatedRequest(baseModel, requestedModel, from.String()), auth)
+	billingRequestedModel := payloadOriginalRequestedModel(opts, requestedModel)
+	reporter := newUsageReporter(ctx, e.Identifier(), usageModelForTranslatedRequest(baseModel, billingRequestedModel, from.String()), auth)
 	defer reporter.trackFailure(ctx, &err)
 
 	to := sdktranslator.FromString("codex")

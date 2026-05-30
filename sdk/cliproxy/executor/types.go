@@ -7,8 +7,11 @@ import (
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v6/sdk/translator"
 )
 
-// RequestedModelMetadataKey stores the client-requested model name in Options.Metadata.
+// RequestedModelMetadataKey stores the routed request model name in Options.Metadata.
 const RequestedModelMetadataKey = "requested_model"
+
+// OriginalRequestedModelMetadataKey stores the client-requested model before routing.
+const OriginalRequestedModelMetadataKey = "original_requested_model"
 
 // DisallowFreeAuthMetadataKey instructs auth selection to skip known free-tier credentials.
 const DisallowFreeAuthMetadataKey = "disallow_free_auth"

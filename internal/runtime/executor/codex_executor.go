@@ -155,7 +155,8 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 
 	from := opts.SourceFormat
 	requestedModel := payloadRequestedModel(opts, req.Model)
-	reporter := newUsageReporter(ctx, e.Identifier(), usageModelForTranslatedRequest(baseModel, requestedModel, from.String()), auth)
+	billingRequestedModel := payloadOriginalRequestedModel(opts, requestedModel)
+	reporter := newUsageReporter(ctx, e.Identifier(), usageModelForTranslatedRequest(baseModel, billingRequestedModel, from.String()), auth)
 	defer reporter.trackFailure(ctx, &err)
 
 	to := sdktranslator.FromString("codex")
@@ -286,7 +287,8 @@ func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.A
 
 	from := opts.SourceFormat
 	requestedModel := payloadRequestedModel(opts, req.Model)
-	reporter := newUsageReporter(ctx, e.Identifier(), usageModelForTranslatedRequest(baseModel, requestedModel, from.String()), auth)
+	billingRequestedModel := payloadOriginalRequestedModel(opts, requestedModel)
+	reporter := newUsageReporter(ctx, e.Identifier(), usageModelForTranslatedRequest(baseModel, billingRequestedModel, from.String()), auth)
 	defer reporter.trackFailure(ctx, &err)
 
 	to := sdktranslator.FromString("openai-response")
@@ -383,7 +385,8 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 
 	from := opts.SourceFormat
 	requestedModel := payloadRequestedModel(opts, req.Model)
-	reporter := newUsageReporter(ctx, e.Identifier(), usageModelForTranslatedRequest(baseModel, requestedModel, from.String()), auth)
+	billingRequestedModel := payloadOriginalRequestedModel(opts, requestedModel)
+	reporter := newUsageReporter(ctx, e.Identifier(), usageModelForTranslatedRequest(baseModel, billingRequestedModel, from.String()), auth)
 	defer reporter.trackFailure(ctx, &err)
 
 	to := sdktranslator.FromString("codex")

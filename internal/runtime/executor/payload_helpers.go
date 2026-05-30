@@ -273,6 +273,35 @@ func payloadRequestedModel(opts cliproxyexecutor.Options, fallback string) strin
 	}
 }
 
+func payloadOriginalRequestedModel(opts cliproxyexecutor.Options, fallback string) string {
+	fallback = strings.TrimSpace(fallback)
+	if len(opts.Metadata) == 0 {
+		return fallback
+	}
+	raw, ok := opts.Metadata[cliproxyexecutor.OriginalRequestedModelMetadataKey]
+	if !ok || raw == nil {
+		return fallback
+	}
+	switch v := raw.(type) {
+	case string:
+		if strings.TrimSpace(v) == "" {
+			return fallback
+		}
+		return strings.TrimSpace(v)
+	case []byte:
+		if len(v) == 0 {
+			return fallback
+		}
+		trimmed := strings.TrimSpace(string(v))
+		if trimmed == "" {
+			return fallback
+		}
+		return trimmed
+	default:
+		return fallback
+	}
+}
+
 // matchModelPattern performs simple wildcard matching where '*' matches zero or more characters.
 // Examples:
 //

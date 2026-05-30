@@ -1796,6 +1796,7 @@ func (h *BaseAPIHandler) ExecuteWithAuthManager(ctx context.Context, handlerType
 		}
 	}
 	reqMeta[coreexecutor.RequestedModelMetadataKey] = normalizedModel
+	reqMeta[coreexecutor.OriginalRequestedModelMetadataKey] = originalRequestedModel
 	payload := rawJSON
 	if len(payload) == 0 {
 		payload = nil
@@ -1999,6 +2000,7 @@ func (h *BaseAPIHandler) ExecuteCountWithAuthManager(ctx context.Context, handle
 		}
 	}
 	reqMeta[coreexecutor.RequestedModelMetadataKey] = normalizedModel
+	reqMeta[coreexecutor.OriginalRequestedModelMetadataKey] = originalRequestedModel
 	payload := rawJSON
 	if len(payload) == 0 {
 		payload = nil
@@ -2202,6 +2204,7 @@ func (h *BaseAPIHandler) ExecuteStreamWithAuthManager(ctx context.Context, handl
 		}
 	}
 	reqMeta[coreexecutor.RequestedModelMetadataKey] = normalizedModel
+	reqMeta[coreexecutor.OriginalRequestedModelMetadataKey] = originalRequestedModel
 	payload := rawJSON
 	if len(payload) == 0 {
 		payload = nil

@@ -22,24 +22,27 @@ type recordingModelExecutor struct {
 	mu           sync.Mutex
 	seenModels   []string
 	seenPayloads []string
+	seenMetadata []map[string]any
 }
 
 func (e *recordingModelExecutor) Identifier() string {
 	return e.provider
 }
 
-func (e *recordingModelExecutor) Execute(_ context.Context, _ *coreauth.Auth, req coreexecutor.Request, _ coreexecutor.Options) (coreexecutor.Response, error) {
+func (e *recordingModelExecutor) Execute(_ context.Context, _ *coreauth.Auth, req coreexecutor.Request, opts coreexecutor.Options) (coreexecutor.Response, error) {
 	e.mu.Lock()
 	e.seenModels = append(e.seenModels, req.Model)
 	e.seenPayloads = append(e.seenPayloads, string(req.Payload))
+	e.seenMetadata = append(e.seenMetadata, cloneMetadata(opts.Metadata))
 	e.mu.Unlock()
 	return coreexecutor.Response{Payload: []byte(`{"model":"` + req.Model + `"}`)}, nil
 }
 
-func (e *recordingModelExecutor) ExecuteStream(_ context.Context, _ *coreauth.Auth, req coreexecutor.Request, _ coreexecutor.Options) (*coreexecutor.StreamResult, error) {
+func (e *recordingModelExecutor) ExecuteStream(_ context.Context, _ *coreauth.Auth, req coreexecutor.Request, opts coreexecutor.Options) (*coreexecutor.StreamResult, error) {
 	e.mu.Lock()
 	e.seenModels = append(e.seenModels, req.Model)
 	e.seenPayloads = append(e.seenPayloads, string(req.Payload))
+	e.seenMetadata = append(e.seenMetadata, cloneMetadata(opts.Metadata))
 	e.mu.Unlock()
 
 	ch := make(chan coreexecutor.StreamChunk, 1)
@@ -52,10 +55,11 @@ func (e *recordingModelExecutor) Refresh(_ context.Context, auth *coreauth.Auth)
 	return auth, nil
 }
 
-func (e *recordingModelExecutor) CountTokens(_ context.Context, _ *coreauth.Auth, req coreexecutor.Request, _ coreexecutor.Options) (coreexecutor.Response, error) {
+func (e *recordingModelExecutor) CountTokens(_ context.Context, _ *coreauth.Auth, req coreexecutor.Request, opts coreexecutor.Options) (coreexecutor.Response, error) {
 	e.mu.Lock()
 	e.seenModels = append(e.seenModels, req.Model)
 	e.seenPayloads = append(e.seenPayloads, string(req.Payload))
+	e.seenMetadata = append(e.seenMetadata, cloneMetadata(opts.Metadata))
 	e.mu.Unlock()
 	return coreexecutor.Response{Payload: []byte(`{"model":"` + req.Model + `"}`)}, nil
 }
@@ -80,6 +84,27 @@ func (e *recordingModelExecutor) lastPayloadModel() string {
 		return ""
 	}
 	return gjson.Get(e.seenPayloads[len(e.seenPayloads)-1], "model").String()
+}
+
+func (e *recordingModelExecutor) lastMetadataString(key string) string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if len(e.seenMetadata) == 0 {
+		return ""
+	}
+	value, _ := e.seenMetadata[len(e.seenMetadata)-1][key].(string)
+	return value
+}
+
+func cloneMetadata(meta map[string]any) map[string]any {
+	if len(meta) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(meta))
+	for k, v := range meta {
+		out[k] = v
+	}
+	return out
 }
 
 func TestAPIKeyModelRoutingDoesNotRewriteOpenAIResponsesRequests(t *testing.T) {
@@ -138,6 +163,12 @@ func TestAPIKeyModelRoutingStillAppliesToClaudeRequests(t *testing.T) {
 	}
 	if got := executor.lastPayloadModel(); got != "gpt-5.4-routing-target" {
 		t.Fatalf("payload model = %q, want Claude model-routing target", got)
+	}
+	if got := executor.lastMetadataString(coreexecutor.RequestedModelMetadataKey); got != "gpt-5.4-routing-target" {
+		t.Fatalf("requested metadata model = %q, want routed target", got)
+	}
+	if got := executor.lastMetadataString(coreexecutor.OriginalRequestedModelMetadataKey); got != "claude-opus-routing-source" {
+		t.Fatalf("original requested metadata model = %q, want original Claude model", got)
 	}
 }
 
