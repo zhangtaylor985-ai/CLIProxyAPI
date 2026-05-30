@@ -6,7 +6,7 @@ AUTH_DIR="${AUTH_DIR:-${CLI_ROOT}/auths}"
 SUB2API_DB_CONTAINER="${SUB2API_DB_CONTAINER:-sub2api-postgres}"
 SUB2API_DB_USER="${SUB2API_DB_USER:-sub2api}"
 SUB2API_DB_NAME="${SUB2API_DB_NAME:-sub2api}"
-BACKUP_ROOT="${BACKUP_ROOT:-${CLI_ROOT}/migration-backups}"
+BACKUP_ROOT="${BACKUP_ROOT:-$(dirname "${CLI_ROOT}")/CLIProxyAPI-migration-backups}"
 
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 backup_dir="${BACKUP_ROOT}/sub2api-auth-export-${timestamp}"

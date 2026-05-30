@@ -5,7 +5,7 @@ CLI_ROOT="${CLI_ROOT:-/root/cliapp/CLIProxyAPI}"
 SUB2API_DB_CONTAINER="${SUB2API_DB_CONTAINER:-sub2api-postgres}"
 SUB2API_DB_USER="${SUB2API_DB_USER:-sub2api}"
 SUB2API_DB_NAME="${SUB2API_DB_NAME:-sub2api}"
-BACKUP_ROOT="${BACKUP_ROOT:-${CLI_ROOT}/migration-backups}"
+BACKUP_ROOT="${BACKUP_ROOT:-$(dirname "${CLI_ROOT}")/CLIProxyAPI-migration-backups}"
 MIGRATION_TAG="${MIGRATION_TAG:-sub2api-return-$(date -u +%Y%m%dT%H%M%SZ)}"
 DRY_RUN="${DRY_RUN:-0}"
 
