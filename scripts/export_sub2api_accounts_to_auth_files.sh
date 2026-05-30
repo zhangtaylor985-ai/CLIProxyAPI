@@ -54,6 +54,29 @@ def clean_part(value: str) -> str:
     value = value.strip("-._")
     return value or "account"
 
+def find_existing_auth_path(email, account_id):
+    wanted_email = (email or "").strip().lower()
+    wanted_account_id = str(account_id or "").strip()
+    try:
+        names = sorted(os.listdir(auth_dir))
+    except FileNotFoundError:
+        return None
+    for name in names:
+        if not name.endswith(".json"):
+            continue
+        path = os.path.join(auth_dir, name)
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                existing = json.load(f)
+        except Exception:
+            continue
+        if str(existing.get("sub2api_account_id") or "").strip() == wanted_account_id and wanted_account_id:
+            return path
+        existing_email = str(existing.get("email") or "").strip().lower()
+        if wanted_email and existing_email == wanted_email:
+            return path
+    return None
+
 for line in sys.stdin:
     line = line.strip()
     if not line:
@@ -68,8 +91,10 @@ for line in sys.stdin:
         continue
 
     email = str(credentials.get("email") or row.get("name") or f"account-{row.get('id')}")
-    filename = f"codex-{clean_part(email)}-{row.get('id')}.json"
-    path = os.path.join(auth_dir, filename)
+    path = find_existing_auth_path(email, row.get("id"))
+    if not path:
+        filename = f"codex-{clean_part(email)}-{row.get('id')}.json"
+        path = os.path.join(auth_dir, filename)
 
     payload = dict(credentials)
     payload["type"] = "codex"
