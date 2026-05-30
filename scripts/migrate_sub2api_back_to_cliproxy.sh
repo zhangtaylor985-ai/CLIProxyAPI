@@ -119,13 +119,13 @@ ORDER BY u.id;
 SQL
 chmod 600 "${usage_jsonl}"
 
-psql "${TARGET_DSN}" \
-  -v ON_ERROR_STOP=1 \
-  -v target_schema="${TARGET_SCHEMA}" \
-  -v api_keys_file="${api_keys_jsonl}" \
-  -v usage_file="${usage_jsonl}" \
-  -v migration_tag="${MIGRATION_TAG}" \
-  -v dry_run="${DRY_RUN}" <<'SQL'
+if [[ "${api_keys_jsonl}${usage_jsonl}" == *"'"* ]]; then
+  printf 'migrate_sub2api_back_to_cliproxy: export file path must not contain single quotes\n' >&2
+  exit 1
+fi
+
+target_sql="${work_dir}/migrate-target.sql"
+cat > "${target_sql}" <<'SQL'
 SET search_path TO :"target_schema", public;
 BEGIN;
 SELECT set_config('sub2api.migration_tag', :'migration_tag', true);
@@ -163,7 +163,9 @@ ON CONFLICT (id) DO UPDATE SET
   updated_at = now();
 
 CREATE TEMP TABLE sub2api_api_key_stage (payload jsonb) ON COMMIT DROP;
-\copy sub2api_api_key_stage(payload) FROM :api_keys_file
+SQL
+printf "\\copy sub2api_api_key_stage(payload) FROM '%s'\n" "${api_keys_jsonl}" >> "${target_sql}"
+cat >> "${target_sql}" <<'SQL'
 
 WITH rows AS (
   SELECT
@@ -256,7 +258,9 @@ ON CONFLICT (source_api_key_id) DO UPDATE SET
   migrated_at = now();
 
 CREATE TEMP TABLE sub2api_usage_stage (payload jsonb) ON COMMIT DROP;
-\copy sub2api_usage_stage(payload) FROM :usage_file
+SQL
+printf "\\copy sub2api_usage_stage(payload) FROM '%s'\n" "${usage_jsonl}" >> "${target_sql}"
+cat >> "${target_sql}" <<'SQL'
 
 DO $$
 DECLARE
@@ -337,5 +341,13 @@ COMMIT;
 SELECT 'committed=1';
 \endif
 SQL
+chmod 600 "${target_sql}"
+
+psql "${TARGET_DSN}" \
+  -v ON_ERROR_STOP=1 \
+  -v target_schema="${TARGET_SCHEMA}" \
+  -v migration_tag="${MIGRATION_TAG}" \
+  -v dry_run="${DRY_RUN}" \
+  -f "${target_sql}"
 
 printf 'work_dir=%s\n' "${work_dir}"
