@@ -62,3 +62,42 @@ func TestUsageReporterBuildRecordIncludesLatency(t *testing.T) {
 		t.Fatalf("latency = %v, want <= 3s", record.Latency)
 	}
 }
+
+func TestUsageModelForTranslatedRequestBillsClaudeOpusAsClaude(t *testing.T) {
+	tests := []struct {
+		baseModel      string
+		requestedModel string
+		sourceFormat   string
+		want           string
+	}{
+		{
+			baseModel:      "gpt-5.5(high)",
+			requestedModel: "claude-opus-4-8[1m](8192)",
+			sourceFormat:   "claude",
+			want:           "claude-opus-4-8",
+		},
+		{
+			baseModel:      "gpt-5.4(high)",
+			requestedModel: "claude-opus-4-7-thinking",
+			sourceFormat:   "claude",
+			want:           "claude-opus-4-7",
+		},
+		{
+			baseModel:      "gpt-5.5(medium)",
+			requestedModel: "claude-sonnet-4-6",
+			sourceFormat:   "claude",
+			want:           "gpt-5.5(medium)",
+		},
+		{
+			baseModel:      "gpt-5.5(high)",
+			requestedModel: "claude-opus-4-8",
+			sourceFormat:   "openai",
+			want:           "gpt-5.5(high)",
+		},
+	}
+	for _, tt := range tests {
+		if got := usageModelForTranslatedRequest(tt.baseModel, tt.requestedModel, tt.sourceFormat); got != tt.want {
+			t.Fatalf("usageModelForTranslatedRequest(%q, %q, %q) = %q, want %q", tt.baseModel, tt.requestedModel, tt.sourceFormat, got, tt.want)
+		}
+	}
+}

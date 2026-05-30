@@ -360,7 +360,8 @@ func APIKeyPolicyMiddleware(getConfig func() *config.Config, limiter policy.Dail
 				c.Data(http.StatusInternalServerError, "application/json", body)
 				return
 			}
-			if _, source, _, errPrice := resolver.ResolvePriceMicro(c.Request.Context(), budgetModel); errPrice != nil {
+			priceModel := policy.ClaudeOpusBillingModelForRoute(effectiveModel, budgetModel)
+			if _, source, _, errPrice := resolver.ResolvePriceMicro(c.Request.Context(), priceModel); errPrice != nil {
 				body := buildPolicyErrorResponseBody(c, http.StatusInternalServerError, errPrice.Error())
 				c.Abort()
 				c.Data(http.StatusInternalServerError, "application/json", body)

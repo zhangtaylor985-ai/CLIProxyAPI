@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/policy"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/usage"
 	"github.com/tidwall/gjson"
@@ -40,6 +41,16 @@ func newUsageReporter(ctx context.Context, provider, model string, auth *cliprox
 		reporter.authIndex = auth.EnsureIndex()
 	}
 	return reporter
+}
+
+func usageModelForTranslatedRequest(baseModel, requestedModel, sourceFormat string) string {
+	baseModel = strings.TrimSpace(baseModel)
+	if strings.EqualFold(strings.TrimSpace(sourceFormat), "claude") {
+		if model := policy.ClaudeOpusBillingModelForRoute(requestedModel, baseModel); strings.TrimSpace(model) != "" {
+			return model
+		}
+	}
+	return baseModel
 }
 
 func (r *usageReporter) publish(ctx context.Context, detail usage.Detail) {

@@ -153,10 +153,11 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 		baseURL = "https://chatgpt.com/backend-api/codex"
 	}
 
-	reporter := newUsageReporter(ctx, e.Identifier(), baseModel, auth)
+	from := opts.SourceFormat
+	requestedModel := payloadRequestedModel(opts, req.Model)
+	reporter := newUsageReporter(ctx, e.Identifier(), usageModelForTranslatedRequest(baseModel, requestedModel, from.String()), auth)
 	defer reporter.trackFailure(ctx, &err)
 
-	from := opts.SourceFormat
 	to := sdktranslator.FromString("codex")
 	originalPayloadSource := req.Payload
 	if len(opts.OriginalRequest) > 0 {
@@ -171,7 +172,6 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 		return resp, err
 	}
 
-	requestedModel := payloadRequestedModel(opts, req.Model)
 	body = applyPayloadConfigWithRoot(e.cfg, baseModel, to.String(), "", body, originalTranslated, requestedModel)
 	body, _ = sjson.SetBytes(body, "model", baseModel)
 	body, _ = sjson.SetBytes(body, "stream", true)
@@ -284,10 +284,11 @@ func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.A
 		baseURL = "https://chatgpt.com/backend-api/codex"
 	}
 
-	reporter := newUsageReporter(ctx, e.Identifier(), baseModel, auth)
+	from := opts.SourceFormat
+	requestedModel := payloadRequestedModel(opts, req.Model)
+	reporter := newUsageReporter(ctx, e.Identifier(), usageModelForTranslatedRequest(baseModel, requestedModel, from.String()), auth)
 	defer reporter.trackFailure(ctx, &err)
 
-	from := opts.SourceFormat
 	to := sdktranslator.FromString("openai-response")
 	originalPayloadSource := req.Payload
 	if len(opts.OriginalRequest) > 0 {
@@ -302,7 +303,6 @@ func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.A
 		return resp, err
 	}
 
-	requestedModel := payloadRequestedModel(opts, req.Model)
 	body = applyPayloadConfigWithRoot(e.cfg, baseModel, to.String(), "", body, originalTranslated, requestedModel)
 	body, _ = sjson.SetBytes(body, "model", baseModel)
 	body, _ = sjson.DeleteBytes(body, "stream")
@@ -381,10 +381,11 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 		baseURL = "https://chatgpt.com/backend-api/codex"
 	}
 
-	reporter := newUsageReporter(ctx, e.Identifier(), baseModel, auth)
+	from := opts.SourceFormat
+	requestedModel := payloadRequestedModel(opts, req.Model)
+	reporter := newUsageReporter(ctx, e.Identifier(), usageModelForTranslatedRequest(baseModel, requestedModel, from.String()), auth)
 	defer reporter.trackFailure(ctx, &err)
 
-	from := opts.SourceFormat
 	to := sdktranslator.FromString("codex")
 	originalPayloadSource := req.Payload
 	if len(opts.OriginalRequest) > 0 {
@@ -399,7 +400,6 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 		return nil, err
 	}
 
-	requestedModel := payloadRequestedModel(opts, req.Model)
 	body = applyPayloadConfigWithRoot(e.cfg, baseModel, to.String(), "", body, originalTranslated, requestedModel)
 	body, _ = sjson.DeleteBytes(body, "previous_response_id")
 	body, _ = sjson.DeleteBytes(body, "prompt_cache_retention")

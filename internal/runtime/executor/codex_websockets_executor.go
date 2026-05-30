@@ -174,10 +174,11 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 		baseURL = "https://chatgpt.com/backend-api/codex"
 	}
 
-	reporter := newUsageReporter(ctx, e.Identifier(), baseModel, auth)
+	from := opts.SourceFormat
+	requestedModel := payloadRequestedModel(opts, req.Model)
+	reporter := newUsageReporter(ctx, e.Identifier(), usageModelForTranslatedRequest(baseModel, requestedModel, from.String()), auth)
 	defer reporter.trackFailure(ctx, &err)
 
-	from := opts.SourceFormat
 	to := sdktranslator.FromString("codex")
 	originalPayloadSource := req.Payload
 	if len(opts.OriginalRequest) > 0 {
@@ -192,7 +193,6 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 		return resp, err
 	}
 
-	requestedModel := payloadRequestedModel(opts, req.Model)
 	body = applyPayloadConfigWithRoot(e.cfg, baseModel, to.String(), "", body, originalTranslated, requestedModel)
 	body, _ = sjson.SetBytes(body, "model", baseModel)
 	body, _ = sjson.SetBytes(body, "stream", true)
@@ -390,10 +390,11 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 		baseURL = "https://chatgpt.com/backend-api/codex"
 	}
 
-	reporter := newUsageReporter(ctx, e.Identifier(), baseModel, auth)
+	from := opts.SourceFormat
+	requestedModel := payloadRequestedModel(opts, req.Model)
+	reporter := newUsageReporter(ctx, e.Identifier(), usageModelForTranslatedRequest(baseModel, requestedModel, from.String()), auth)
 	defer reporter.trackFailure(ctx, &err)
 
-	from := opts.SourceFormat
 	to := sdktranslator.FromString("codex")
 	body := req.Payload
 
@@ -402,7 +403,6 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 		return nil, err
 	}
 
-	requestedModel := payloadRequestedModel(opts, req.Model)
 	body = applyPayloadConfigWithRoot(e.cfg, baseModel, to.String(), "", body, body, requestedModel)
 	body = stripImageGenerationToolForAuth(body, auth)
 	body = e.applyConfiguredCodexServiceTier(body, auth)

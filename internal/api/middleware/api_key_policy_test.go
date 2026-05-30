@@ -1619,6 +1619,51 @@ func TestAPIKeyPolicyMiddleware_BudgetedModelRequiresPrice(t *testing.T) {
 	}
 }
 
+func TestAPIKeyPolicyMiddleware_ClaudeOpusRoutedBudgetUsesClaudePriceModel(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	cfg := &config.Config{
+		SDKConfig: config.SDKConfig{ClaudeToGPTRoutingEnabled: true},
+		APIKeyPolicies: []config.APIKeyPolicy{
+			{
+				APIKey:             "k",
+				EnableClaudeModels: boolPtr(true),
+				DailyBudgetUSD:     10,
+			},
+		},
+	}
+	cfg.SanitizeAPIKeyPolicies()
+
+	var resolvedModel string
+	reader := stubCostReader{
+		resolvePriceMicro: func(ctx context.Context, model string) (billing.PriceMicroUSDPer1M, string, int64, error) {
+			resolvedModel = model
+			return billing.PriceMicroUSDPer1M{Prompt: 1}, "saved", 0, nil
+		},
+	}
+	var _ billing.DailyCostReader = reader
+
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set("apiKey", "k")
+		c.Next()
+	})
+	r.Use(APIKeyPolicyMiddleware(func() *config.Config { return cfg }, nil, reader, nil))
+	r.POST("/v1/messages", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewBufferString(`{"model":"claude-opus-4-8[1m](8192)"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	if resolvedModel != "claude-opus-4-8" {
+		t.Fatalf("resolved model=%q, want claude-opus-4-8", resolvedModel)
+	}
+}
+
 func TestAPIKeyPolicyMiddleware_TokenPackageBypassesDailyAndWeeklyBudgets(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	now := time.Now().UTC().Truncate(time.Hour)

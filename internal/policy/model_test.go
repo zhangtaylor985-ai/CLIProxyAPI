@@ -75,6 +75,25 @@ func TestRewriteClaudeOpus1MToBase(t *testing.T) {
 	}
 }
 
+func TestClaudeOpusBillingModelForRoute(t *testing.T) {
+	tests := []struct {
+		requested string
+		routed    string
+		want      string
+	}{
+		{"claude-opus-4-8", "gpt-5.5(high)", "claude-opus-4-8"},
+		{"Claude-Opus-4-8[1m](8192)", "gpt-5.4(high)", "claude-opus-4-8"},
+		{"claude-opus-4-7-thinking", "gpt-5.4(high)", "claude-opus-4-7"},
+		{"claude-sonnet-4-6", "gpt-5.5(medium)", "gpt-5.5(medium)"},
+		{"", "gpt-5.5(high)", "gpt-5.5(high)"},
+	}
+	for _, tt := range tests {
+		if got := ClaudeOpusBillingModelForRoute(tt.requested, tt.routed); got != tt.want {
+			t.Fatalf("ClaudeOpusBillingModelForRoute(%q, %q) = %q, want %q", tt.requested, tt.routed, got, tt.want)
+		}
+	}
+}
+
 func TestNormaliseModelKey_StripsSuffix(t *testing.T) {
 	if got := NormaliseModelKey("claude-opus-4-6(8192)"); got != "claude-opus-4-6" {
 		t.Fatalf("NormaliseModelKey got %q", got)

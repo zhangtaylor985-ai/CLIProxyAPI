@@ -44,20 +44,18 @@ func ConvertClaudeRequestToCodex(modelName string, inputRawJSON []byte, _ bool) 
 	rootResult := gjson.ParseBytes(rawJSON)
 	template, _ = sjson.SetBytes(template, "model", modelName)
 
-	// Process system messages and convert them to input content format.
+	// Process system messages as Responses API instructions. Codex upstream
+	// rejects system/developer messages in input for some GPT targets.
 	systemsResult := rootResult.Get("system")
 	if systemsResult.Exists() {
-		message := []byte(`{"type":"message","role":"developer","content":[]}`)
-		contentIndex := 0
+		systemTexts := make([]string, 0)
 
 		appendSystemText := func(text string) {
 			if text == "" || strings.HasPrefix(text, "x-anthropic-billing-header: ") {
 				return
 			}
 
-			message, _ = sjson.SetBytes(message, fmt.Sprintf("content.%d.type", contentIndex), "input_text")
-			message, _ = sjson.SetBytes(message, fmt.Sprintf("content.%d.text", contentIndex), text)
-			contentIndex++
+			systemTexts = append(systemTexts, text)
 		}
 
 		if systemsResult.Type == gjson.String {
@@ -72,8 +70,8 @@ func ConvertClaudeRequestToCodex(modelName string, inputRawJSON []byte, _ bool) 
 			}
 		}
 
-		if contentIndex > 0 {
-			template, _ = sjson.SetRawBytes(template, "input.-1", message)
+		if len(systemTexts) > 0 {
+			template, _ = sjson.SetBytes(template, "instructions", strings.Join(systemTexts, "\n\n"))
 		}
 	}
 

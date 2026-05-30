@@ -110,6 +110,25 @@ func RewriteClaudeOpus1MToBase(model string) (string, bool) {
 	return rewritten, true
 }
 
+// ClaudeOpusBillingModelForRoute returns the customer-facing Claude Opus
+// model to use for billing when a Claude Opus request is executed through a
+// GPT/Codex target. Non-Opus requests keep the routed target model.
+func ClaudeOpusBillingModelForRoute(requestedModel, routedModel string) string {
+	fallback := strings.TrimSpace(routedModel)
+	requested := strings.TrimSpace(requestedModel)
+	if requested == "" {
+		return fallback
+	}
+	if rewritten, changed := RewriteClaudeOpus1MToBase(requested); changed {
+		requested = rewritten
+	}
+	modelKey := StripThinkingVariant(NormaliseModelKey(requested))
+	if !strings.HasPrefix(modelKey, claudeOpusPrefix) {
+		return fallback
+	}
+	return modelKey
+}
+
 // IsClaudeOpus46 returns true when the model name (after stripping "(...)") starts with claude-opus-4-6.
 func IsClaudeOpus46(model string) bool {
 	return strings.HasPrefix(NormaliseModelKey(model), claudeOpus46Prefix)

@@ -77,3 +77,19 @@ func TestResolveDefaultPrice_CoversCodexAliasesUsedByWorkers(t *testing.T) {
 		}
 	}
 }
+
+func TestResolveDefaultPrice_CoversClaudeOpusRoutedAliases(t *testing.T) {
+	base, ok := ResolveDefaultPrice("claude-opus-4-6")
+	if !ok {
+		t.Fatal("expected default price for claude-opus-4-6")
+	}
+	for _, model := range []string{"claude-opus-4-7", "claude-opus-4-8", "claude-opus-4-8-thinking"} {
+		price, ok := ResolveDefaultPrice(model)
+		if !ok {
+			t.Fatalf("expected default price for %s", model)
+		}
+		if price != base {
+			t.Fatalf("price for %s = %+v, want %+v", model, price, base)
+		}
+	}
+}

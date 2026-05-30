@@ -36,6 +36,16 @@ var DefaultPrices = map[string]PriceMicroUSDPer1M{
 		Completion: 25_000_000, // $25.00 / 1M
 		Cached:     500_000,    // $0.50 / 1M
 	},
+	policy.NormaliseModelKey("claude-opus-4-7"): {
+		Prompt:     5_000_000,  // $5.00 / 1M; routed compatibility alias for Opus 4.6.
+		Completion: 25_000_000, // $25.00 / 1M
+		Cached:     500_000,    // $0.50 / 1M
+	},
+	policy.NormaliseModelKey("claude-opus-4-8"): {
+		Prompt:     5_000_000,  // $5.00 / 1M; routed compatibility alias for Opus 4.6.
+		Completion: 25_000_000, // $25.00 / 1M
+		Cached:     500_000,    // $0.50 / 1M
+	},
 	policy.NormaliseModelKey("claude-opus-4-5-20251101"): {
 		Prompt:     5_000_000,  // $5.00 / 1M
 		Completion: 25_000_000, // $25.00 / 1M
