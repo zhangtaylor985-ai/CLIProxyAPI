@@ -10,6 +10,7 @@ BACKUP_ROOT="${BACKUP_ROOT:-${CLI_ROOT}/migration-backups}"
 
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 backup_dir="${BACKUP_ROOT}/sub2api-auth-export-${timestamp}"
+accounts_jsonl="${backup_dir}/sub2api-accounts.jsonl"
 
 mkdir -p "${backup_dir}" "${AUTH_DIR}"
 chmod 700 "${backup_dir}"
@@ -18,7 +19,7 @@ if [[ -d "${AUTH_DIR}" ]]; then
   cp -a "${AUTH_DIR}" "${backup_dir}/auths.before"
 fi
 
-docker exec -i "${SUB2API_DB_CONTAINER}" psql -U "${SUB2API_DB_USER}" -d "${SUB2API_DB_NAME}" -At <<'SQL' |
+docker exec -i "${SUB2API_DB_CONTAINER}" psql -U "${SUB2API_DB_USER}" -d "${SUB2API_DB_NAME}" -At <<'SQL' > "${accounts_jsonl}"
 SELECT jsonb_build_object(
   'id', id,
   'name', name,
@@ -35,16 +36,18 @@ FROM accounts
 WHERE deleted_at IS NULL
   AND lower(platform) = 'openai'
   AND lower(type) IN ('oauth', 'codex', 'auth_file')
-  AND lower(status) = 'active'
 ORDER BY id;
 SQL
-python3 - "${AUTH_DIR}" <<'PY'
+chmod 600 "${accounts_jsonl}"
+
+python3 - "${AUTH_DIR}" "${accounts_jsonl}" <<'PY'
 import json
 import os
 import re
 import sys
 
 auth_dir = sys.argv[1]
+accounts_path = sys.argv[2]
 written = 0
 skipped = 0
 
@@ -77,10 +80,11 @@ def find_existing_auth_path(email, account_id):
             return path
     return None
 
-for line in sys.stdin:
+with open(accounts_path, "r", encoding="utf-8") as accounts_file:
+  for line in accounts_file:
     line = line.strip()
     if not line:
-        continue
+      continue
     row = json.loads(line)
     credentials = row.get("credentials") or {}
     if not isinstance(credentials, dict):
@@ -96,12 +100,14 @@ for line in sys.stdin:
         filename = f"codex-{clean_part(email)}-{row.get('id')}.json"
         path = os.path.join(auth_dir, filename)
 
+    status = str(row.get("status") or "").strip().lower()
     payload = dict(credentials)
     payload["type"] = "codex"
-    payload["disabled"] = False
+    payload["disabled"] = status != "active"
     payload["concurrency_limit"] = int(row.get("concurrency") or 10)
     payload["sub2api_account_id"] = row.get("id")
     payload["sub2api_account_name"] = row.get("name")
+    payload["sub2api_account_status"] = row.get("status")
     if "account_id" not in payload and payload.get("chatgpt_account_id"):
         payload["account_id"] = payload["chatgpt_account_id"]
     if row.get("expires_at"):
