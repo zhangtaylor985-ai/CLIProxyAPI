@@ -31,6 +31,7 @@ type apiKeyPolicyView struct {
 	OwnerRole                 string                         `json:"owner_role"`
 	GroupID                   string                         `json:"group_id"`
 	GroupName                 string                         `json:"group_name"`
+	ConcurrencyLimit          int                            `json:"concurrency_limit"`
 	AllowClaudeFamily         bool                           `json:"allow_claude_family"`
 	AllowGPTFamily            bool                           `json:"allow_gpt_family"`
 	FastMode                  bool                           `json:"fast_mode"`
@@ -168,6 +169,7 @@ type apiKeyRecordSummaryView struct {
 	OwnerRole                 string                         `json:"owner_role"`
 	GroupID                   string                         `json:"group_id"`
 	GroupName                 string                         `json:"group_name"`
+	ConcurrencyLimit          int                            `json:"concurrency_limit"`
 	Registered                bool                           `json:"registered"`
 	HasExplicitPolicy         bool                           `json:"has_explicit_policy"`
 	LastUsedAt                *time.Time                     `json:"last_used_at,omitempty"`
@@ -711,6 +713,7 @@ func (h *Handler) buildAPIKeySummary(ctx context.Context, apiKey string, now tim
 		Disabled:           false,
 		GroupID:            "",
 		GroupName:          "",
+		ConcurrencyLimit:   0,
 		OwnerUsername:      "admin",
 		OwnerRole:          "admin",
 		Registered:         h.apiKeyExists(apiKey),
@@ -737,6 +740,7 @@ func (h *Handler) buildAPIKeySummary(ctx context.Context, apiKey string, now tim
 		summary.OwnerUsername = apiKeyOwnerUsername(effectivePolicy)
 		summary.OwnerRole = apiKeyOwnerRole(effectivePolicy)
 		summary.GroupID = strings.TrimSpace(effectivePolicy.GroupID)
+		summary.ConcurrencyLimit = effectivePolicy.ConcurrencyLimit
 		summary.DailyLimitCount = len(effectivePolicy.DailyLimits)
 		summary.PolicyFamily = effectivePolicy.ClaudeGPTTargetFamilyOrDefault()
 		summary.EnableClaudeModels = effectivePolicy.ClaudeModelsEnabled()
@@ -783,6 +787,7 @@ func (h *Handler) buildAPIKeyPolicyOnlySummary(apiKey string, now time.Time, eff
 		summary.OwnerUsername = apiKeyOwnerUsername(effectivePolicy)
 		summary.OwnerRole = apiKeyOwnerRole(effectivePolicy)
 		summary.GroupID = strings.TrimSpace(effectivePolicy.GroupID)
+		summary.ConcurrencyLimit = effectivePolicy.ConcurrencyLimit
 		summary.DailyLimitCount = len(effectivePolicy.DailyLimits)
 		summary.PolicyFamily = effectivePolicy.ClaudeGPTTargetFamilyOrDefault()
 		summary.EnableClaudeModels = effectivePolicy.ClaudeModelsEnabled()
@@ -1167,6 +1172,7 @@ func policyToView(apiKey string, p *config.APIKeyPolicy, group *apikeygroup.Grou
 		Disabled:          false,
 		GroupID:           "",
 		GroupName:         "",
+		ConcurrencyLimit:  0,
 		AllowClaudeFamily: allowClaudeFamily,
 		AllowGPTFamily:    allowGPTFamily,
 		AllowClaudeOpus46: true,
@@ -1187,6 +1193,7 @@ func policyToView(apiKey string, p *config.APIKeyPolicy, group *apikeygroup.Grou
 	view.OwnerUsername = apiKeyOwnerUsername(p)
 	view.OwnerRole = apiKeyOwnerRole(p)
 	view.GroupID = strings.TrimSpace(p.GroupID)
+	view.ConcurrencyLimit = p.ConcurrencyLimit
 	if group != nil {
 		view.GroupName = group.Name
 	}
@@ -1225,6 +1232,10 @@ func viewToPolicy(apiKey string, view apiKeyPolicyView) config.APIKeyPolicy {
 	claudeGlobalFallback := view.ClaudeGlobalFallback
 	enableClaudeOpus1M := view.EnableClaudeOpus1M
 	allowClaudeOpus46 := view.AllowClaudeOpus46
+	concurrencyLimit := view.ConcurrencyLimit
+	if concurrencyLimit < 0 {
+		concurrencyLimit = 0
+	}
 	var claudeCodeOnly *bool
 	switch strings.ToLower(strings.TrimSpace(view.ClaudeCodeOnlyMode)) {
 	case "", "inherit":
@@ -1246,6 +1257,7 @@ func viewToPolicy(apiKey string, view apiKeyPolicyView) config.APIKeyPolicy {
 		OwnerUsername:               strings.TrimSpace(view.OwnerUsername),
 		OwnerRole:                   normalizeAPIKeyOwnerRole(view.OwnerRole),
 		GroupID:                     strings.TrimSpace(view.GroupID),
+		ConcurrencyLimit:            concurrencyLimit,
 		FastMode:                    view.FastMode,
 		SessionTrajectoryDisabled:   view.SessionTrajectoryDisabled,
 		CodexChannelMode:            config.NormalizeCodexChannelMode(view.CodexChannelMode),
@@ -1429,6 +1441,7 @@ func isEmptyPolicyView(view apiKeyPolicyView) bool {
 		strings.TrimSpace(view.ExpiresAt) == "" &&
 		!view.Disabled &&
 		strings.TrimSpace(view.GroupID) == "" &&
+		view.ConcurrencyLimit == 0 &&
 		!view.AllowClaudeFamily &&
 		!view.AllowGPTFamily &&
 		!view.FastMode &&

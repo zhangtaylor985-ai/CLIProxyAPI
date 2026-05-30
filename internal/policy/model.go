@@ -10,6 +10,7 @@ const (
 	claudeModelPrefix              = "claude-"
 	claudeOpusPrefix               = "claude-opus-"
 	claudeOpus47Prefix             = "claude-opus-4-7"
+	claudeOpus48Prefix             = "claude-opus-4-8"
 	claudeOpus46Prefix             = "claude-opus-4-6"
 	claudeOpus45FallbackPrefix     = "claude-opus-4-5-20251101"
 	claudeOpus1MMarker             = "[1m]"
@@ -27,7 +28,7 @@ func NormaliseModelKey(model string) string {
 	return strings.ToLower(strings.TrimSpace(parsed.ModelName))
 }
 
-// RewriteClaudeOpus47To46 rewrites claude-opus-4-7* to claude-opus-4-6*
+// RewriteClaudeOpus47To46 rewrites claude-opus-4-7* and claude-opus-4-8* to claude-opus-4-6*
 // while preserving any suffix segments (e.g., "-thinking", "[1m]") and
 // thinking budget suffix "(...)".
 func RewriteClaudeOpus47To46(model string) (string, bool) {
@@ -38,13 +39,19 @@ func RewriteClaudeOpus47To46(model string) (string, bool) {
 	parsed := thinking.ParseSuffix(trimmed)
 	base := parsed.ModelName
 	baseLower := strings.ToLower(strings.TrimSpace(base))
-	if !strings.HasPrefix(baseLower, claudeOpus47Prefix) {
+	matchedPrefix := ""
+	switch {
+	case strings.HasPrefix(baseLower, claudeOpus47Prefix):
+		matchedPrefix = claudeOpus47Prefix
+	case strings.HasPrefix(baseLower, claudeOpus48Prefix):
+		matchedPrefix = claudeOpus48Prefix
+	default:
 		return model, false
 	}
 
 	remainder := ""
-	if len(base) >= len(claudeOpus47Prefix) {
-		remainder = base[len(claudeOpus47Prefix):]
+	if len(base) >= len(matchedPrefix) {
+		remainder = base[len(matchedPrefix):]
 	}
 
 	rewritten := claudeOpus46Prefix + remainder

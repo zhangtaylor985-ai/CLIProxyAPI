@@ -976,7 +976,8 @@ func (h *BaseAPIHandler) resolveClaudeOpus47To46AuthID(model string) (string, st
 		if auth == nil || auth.Disabled || !strings.EqualFold(strings.TrimSpace(auth.Provider), "claude") {
 			continue
 		}
-		if !strings.EqualFold(strings.TrimSpace(auth.Attributes["opus_4_7_to_4_6"]), "true") {
+		if !strings.EqualFold(strings.TrimSpace(auth.Attributes["opus_4_7_to_4_6"]), "true") &&
+			!strings.EqualFold(strings.TrimSpace(auth.Attributes["opus_4_8_to_4_6"]), "true") {
 			continue
 		}
 		candidateModel := model
@@ -1028,7 +1029,7 @@ func (h *BaseAPIHandler) applyClaudeOpus47To46Pin(ctx context.Context, handlerTy
 		"to_model":       strings.TrimSpace(rewritten),
 		"handler_format": handlerType,
 		"pinned_auth_id": authID,
-	}).Info("rewriting Claude Opus 4.7 request to Opus 4.6 for configured provider")
+	}).Info("rewriting Claude Opus 4.7/4.8 request to Opus 4.6 for configured provider")
 	return rewritten, rawJSON, true
 }
 

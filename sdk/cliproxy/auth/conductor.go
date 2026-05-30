@@ -200,6 +200,10 @@ type Manager struct {
 	// modelPoolOffsets tracks per-auth alias pool rotation state.
 	modelPoolOffsets map[string]int
 
+	// authConcurrency tracks per-auth in-flight request counts.
+	authConcurrencyMu       sync.Mutex
+	authConcurrencyInflight map[string]int
+
 	// runtimeConfig stores the latest application config for request-time decisions.
 	// It is initialized in NewManager; never Load() before first Store().
 	runtimeConfig atomic.Value
@@ -221,19 +225,104 @@ func NewManager(store Store, selector Selector, hook Hook) *Manager {
 		hook = NoopHook{}
 	}
 	manager := &Manager{
-		store:            store,
-		executors:        make(map[string]ProviderExecutor),
-		selector:         selector,
-		hook:             hook,
-		auths:            make(map[string]*Auth),
-		providerOffsets:  make(map[string]int),
-		modelPoolOffsets: make(map[string]int),
+		store:                   store,
+		executors:               make(map[string]ProviderExecutor),
+		selector:                selector,
+		hook:                    hook,
+		auths:                   make(map[string]*Auth),
+		providerOffsets:         make(map[string]int),
+		modelPoolOffsets:        make(map[string]int),
+		authConcurrencyInflight: make(map[string]int),
 	}
 	// atomic.Value requires non-nil initial value.
 	manager.runtimeConfig.Store(&internalconfig.Config{})
 	manager.apiKeyModelAlias.Store(apiKeyModelAliasTable(nil))
 	manager.scheduler = newAuthScheduler(selector)
 	return manager
+}
+
+type authConcurrencyLimitError struct {
+	authID string
+	limit  int
+}
+
+func (e *authConcurrencyLimitError) Error() string {
+	return "concurrency limit exceeded, please retry shortly"
+}
+
+func (e *authConcurrencyLimitError) StatusCode() int {
+	return http.StatusTooManyRequests
+}
+
+func (m *Manager) tryAcquireAuthConcurrency(auth *Auth) (func(), bool, error) {
+	if m == nil || auth == nil {
+		return func() {}, true, nil
+	}
+	limit := auth.ConcurrencyLimit()
+	if limit <= 0 {
+		return func() {}, true, nil
+	}
+	authID := strings.TrimSpace(auth.ID)
+	if authID == "" {
+		return func() {}, true, nil
+	}
+	m.authConcurrencyMu.Lock()
+	defer m.authConcurrencyMu.Unlock()
+	if m.authConcurrencyInflight == nil {
+		m.authConcurrencyInflight = make(map[string]int)
+	}
+	current := m.authConcurrencyInflight[authID]
+	if current >= limit {
+		return nil, false, &authConcurrencyLimitError{authID: authID, limit: limit}
+	}
+	m.authConcurrencyInflight[authID] = current + 1
+	return func() {
+		m.releaseAuthConcurrency(authID)
+	}, true, nil
+}
+
+func (m *Manager) releaseAuthConcurrency(authID string) {
+	if m == nil {
+		return
+	}
+	authID = strings.TrimSpace(authID)
+	if authID == "" {
+		return
+	}
+	m.authConcurrencyMu.Lock()
+	defer m.authConcurrencyMu.Unlock()
+	current := m.authConcurrencyInflight[authID]
+	if current <= 1 {
+		delete(m.authConcurrencyInflight, authID)
+		return
+	}
+	m.authConcurrencyInflight[authID] = current - 1
+}
+
+func wrapStreamResultWithAuthConcurrencyRelease(streamResult *cliproxyexecutor.StreamResult, release func()) *cliproxyexecutor.StreamResult {
+	if release == nil {
+		return streamResult
+	}
+	if streamResult == nil {
+		release()
+		return nil
+	}
+	if streamResult.Chunks == nil {
+		release()
+		return streamResult
+	}
+	out := make(chan cliproxyexecutor.StreamChunk)
+	go func() {
+		defer close(out)
+		defer release()
+		for chunk := range streamResult.Chunks {
+			out <- chunk
+		}
+	}()
+	return &cliproxyexecutor.StreamResult{
+		Headers: streamResult.Headers,
+		Chunks:  out,
+	}
 }
 
 func isBuiltInSelector(selector Selector) bool {
@@ -1621,6 +1710,11 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 		if len(models) == 0 {
 			continue
 		}
+		releaseConcurrency, acquiredConcurrency, errConcurrency := m.tryAcquireAuthConcurrency(auth)
+		if !acquiredConcurrency {
+			lastErr = errConcurrency
+			continue
+		}
 		attempted[auth.ID] = struct{}{}
 		var authErr error
 		for _, upstreamModel := range models {
@@ -1638,6 +1732,7 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 			}
 			if errExec != nil {
 				if errCtx := execCtx.Err(); errCtx != nil {
+					releaseConcurrency()
 					return cliproxyexecutor.Response{}, errCtx
 				}
 				result.Error = &Error{Message: errExec.Error()}
@@ -1649,6 +1744,7 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 				}
 				m.MarkResult(execCtx, result)
 				if isRequestInvalidError(errExec) {
+					releaseConcurrency()
 					return cliproxyexecutor.Response{}, errExec
 				}
 				authErr = errExec
@@ -1656,8 +1752,10 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 			}
 			pendingAlert = nil
 			m.MarkResult(execCtx, result)
+			releaseConcurrency()
 			return resp, nil
 		}
+		releaseConcurrency()
 		if authErr != nil {
 			if isRequestInvalidError(authErr) {
 				return cliproxyexecutor.Response{}, authErr
@@ -1735,6 +1833,11 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 		if len(models) == 0 {
 			continue
 		}
+		releaseConcurrency, acquiredConcurrency, errConcurrency := m.tryAcquireAuthConcurrency(auth)
+		if !acquiredConcurrency {
+			lastErr = errConcurrency
+			continue
+		}
 		attempted[auth.ID] = struct{}{}
 		var authErr error
 		for _, upstreamModel := range models {
@@ -1752,6 +1855,7 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 			}
 			if errExec != nil {
 				if errCtx := execCtx.Err(); errCtx != nil {
+					releaseConcurrency()
 					return cliproxyexecutor.Response{}, errCtx
 				}
 				result.Error = &Error{Message: errExec.Error()}
@@ -1763,6 +1867,7 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 				}
 				m.MarkResult(execCtx, result)
 				if isRequestInvalidError(errExec) {
+					releaseConcurrency()
 					return cliproxyexecutor.Response{}, errExec
 				}
 				authErr = errExec
@@ -1770,8 +1875,10 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 			}
 			pendingAlert = nil
 			m.MarkResult(execCtx, result)
+			releaseConcurrency()
 			return resp, nil
 		}
+		releaseConcurrency()
 		if authErr != nil {
 			if isRequestInvalidError(authErr) {
 				return cliproxyexecutor.Response{}, authErr
@@ -1852,9 +1959,15 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 		if len(models) == 0 {
 			continue
 		}
+		releaseConcurrency, acquiredConcurrency, errConcurrency := m.tryAcquireAuthConcurrency(auth)
+		if !acquiredConcurrency {
+			lastErr = errConcurrency
+			continue
+		}
 		attempted[auth.ID] = struct{}{}
 		streamResult, errStream := m.executeStreamWithModelPool(execCtx, executor, auth, provider, req, opts, routeModel, models, pooled)
 		if errStream != nil {
+			releaseConcurrency()
 			if errCtx := execCtx.Err(); errCtx != nil {
 				return nil, errCtx
 			}
@@ -1873,7 +1986,7 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 			continue
 		}
 		pendingAlert = nil
-		return streamResult, nil
+		return wrapStreamResultWithAuthConcurrencyRelease(streamResult, releaseConcurrency), nil
 	}
 }
 

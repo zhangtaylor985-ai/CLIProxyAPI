@@ -15,6 +15,7 @@ type Group struct {
 	Name                 string    `json:"name"`
 	DailyBudgetMicroUSD  int64     `json:"daily_budget_micro_usd"`
 	WeeklyBudgetMicroUSD int64     `json:"weekly_budget_micro_usd"`
+	ConcurrencyLimit     int       `json:"concurrency_limit"`
 	IsSystem             bool      `json:"is_system"`
 	CreatedAt            time.Time `json:"created_at"`
 	UpdatedAt            time.Time `json:"updated_at"`
@@ -43,10 +44,10 @@ type PostgresStore struct {
 }
 
 var DefaultGroups = []Group{
-	{ID: "dedicated", Name: "独享车", DailyBudgetMicroUSD: 300_000_000, WeeklyBudgetMicroUSD: 1_000_000_000, IsSystem: true},
-	{ID: "double", Name: "双人车", DailyBudgetMicroUSD: 150_000_000, WeeklyBudgetMicroUSD: 500_000_000, IsSystem: true},
-	{ID: "triple", Name: "三人车", DailyBudgetMicroUSD: 100_000_000, WeeklyBudgetMicroUSD: 300_000_000, IsSystem: true},
-	{ID: "quad", Name: "四人车", DailyBudgetMicroUSD: 60_000_000, WeeklyBudgetMicroUSD: 250_000_000, IsSystem: true},
+	{ID: "dedicated", Name: "独享车", DailyBudgetMicroUSD: 300_000_000, WeeklyBudgetMicroUSD: 1_000_000_000, ConcurrencyLimit: 3, IsSystem: true},
+	{ID: "double", Name: "双人车", DailyBudgetMicroUSD: 150_000_000, WeeklyBudgetMicroUSD: 500_000_000, ConcurrencyLimit: 3, IsSystem: true},
+	{ID: "triple", Name: "三人车", DailyBudgetMicroUSD: 100_000_000, WeeklyBudgetMicroUSD: 300_000_000, ConcurrencyLimit: 2, IsSystem: true},
+	{ID: "quad", Name: "四人车", DailyBudgetMicroUSD: 60_000_000, WeeklyBudgetMicroUSD: 250_000_000, ConcurrencyLimit: 1, IsSystem: true},
 }
 
 func NewPostgresStore(ctx context.Context, cfg PostgresStoreConfig) (*PostgresStore, error) {
@@ -95,6 +96,7 @@ func (s *PostgresStore) EnsureSchema(ctx context.Context) error {
 			name TEXT NOT NULL UNIQUE,
 			daily_budget_micro_usd BIGINT NOT NULL,
 			weekly_budget_micro_usd BIGINT NOT NULL,
+			concurrency_limit INTEGER NOT NULL DEFAULT 0,
 			is_system BOOLEAN NOT NULL DEFAULT FALSE,
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -102,6 +104,12 @@ func (s *PostgresStore) EnsureSchema(ctx context.Context) error {
 	`, s.table)
 	if _, err := s.db.ExecContext(ctx, query); err != nil {
 		return fmt.Errorf("api key group store: create table: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, fmt.Sprintf(`
+		ALTER TABLE %s
+			ADD COLUMN IF NOT EXISTS concurrency_limit INTEGER NOT NULL DEFAULT 0
+	`, s.table)); err != nil {
+		return fmt.Errorf("api key group store: add concurrency column: %w", err)
 	}
 	return nil
 }
@@ -123,7 +131,7 @@ func (s *PostgresStore) ListGroups(ctx context.Context) ([]Group, error) {
 		return nil, fmt.Errorf("api key group store: not initialized")
 	}
 	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`
-		SELECT id, name, daily_budget_micro_usd, weekly_budget_micro_usd, is_system, created_at, updated_at
+		SELECT id, name, daily_budget_micro_usd, weekly_budget_micro_usd, concurrency_limit, is_system, created_at, updated_at
 		FROM %s
 		ORDER BY is_system DESC, daily_budget_micro_usd DESC, name ASC
 	`, s.table))
@@ -135,7 +143,7 @@ func (s *PostgresStore) ListGroups(ctx context.Context) ([]Group, error) {
 	result := make([]Group, 0)
 	for rows.Next() {
 		var item Group
-		if err := rows.Scan(&item.ID, &item.Name, &item.DailyBudgetMicroUSD, &item.WeeklyBudgetMicroUSD, &item.IsSystem, &item.CreatedAt, &item.UpdatedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.Name, &item.DailyBudgetMicroUSD, &item.WeeklyBudgetMicroUSD, &item.ConcurrencyLimit, &item.IsSystem, &item.CreatedAt, &item.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("api key group store: scan group: %w", err)
 		}
 		result = append(result, item)
@@ -155,12 +163,12 @@ func (s *PostgresStore) GetGroup(ctx context.Context, id string) (Group, bool, e
 		return Group{}, false, nil
 	}
 	row := s.db.QueryRowContext(ctx, fmt.Sprintf(`
-		SELECT id, name, daily_budget_micro_usd, weekly_budget_micro_usd, is_system, created_at, updated_at
+		SELECT id, name, daily_budget_micro_usd, weekly_budget_micro_usd, concurrency_limit, is_system, created_at, updated_at
 		FROM %s
 		WHERE id = $1
 	`, s.table), id)
 	var item Group
-	if err := row.Scan(&item.ID, &item.Name, &item.DailyBudgetMicroUSD, &item.WeeklyBudgetMicroUSD, &item.IsSystem, &item.CreatedAt, &item.UpdatedAt); err != nil {
+	if err := row.Scan(&item.ID, &item.Name, &item.DailyBudgetMicroUSD, &item.WeeklyBudgetMicroUSD, &item.ConcurrencyLimit, &item.IsSystem, &item.CreatedAt, &item.UpdatedAt); err != nil {
 		if err == sql.ErrNoRows {
 			return Group{}, false, nil
 		}
@@ -184,19 +192,23 @@ func (s *PostgresStore) UpsertGroup(ctx context.Context, group Group) (Group, er
 	if group.DailyBudgetMicroUSD < 0 || group.WeeklyBudgetMicroUSD < 0 {
 		return Group{}, fmt.Errorf("api key group store: budgets must be >= 0")
 	}
+	if group.ConcurrencyLimit < 0 {
+		return Group{}, fmt.Errorf("api key group store: concurrency limit must be >= 0")
+	}
 	row := s.db.QueryRowContext(ctx, fmt.Sprintf(`
-		INSERT INTO %s (id, name, daily_budget_micro_usd, weekly_budget_micro_usd, is_system)
-		VALUES ($1, $2, $3, $4, $5)
+		INSERT INTO %s (id, name, daily_budget_micro_usd, weekly_budget_micro_usd, concurrency_limit, is_system)
+		VALUES ($1, $2, $3, $4, $5, $6)
 		ON CONFLICT(id) DO UPDATE SET
 			name = EXCLUDED.name,
 			daily_budget_micro_usd = EXCLUDED.daily_budget_micro_usd,
 			weekly_budget_micro_usd = EXCLUDED.weekly_budget_micro_usd,
+			concurrency_limit = EXCLUDED.concurrency_limit,
 			is_system = EXCLUDED.is_system,
 			updated_at = NOW()
-		RETURNING id, name, daily_budget_micro_usd, weekly_budget_micro_usd, is_system, created_at, updated_at
-	`, s.table), group.ID, group.Name, group.DailyBudgetMicroUSD, group.WeeklyBudgetMicroUSD, group.IsSystem)
+		RETURNING id, name, daily_budget_micro_usd, weekly_budget_micro_usd, concurrency_limit, is_system, created_at, updated_at
+	`, s.table), group.ID, group.Name, group.DailyBudgetMicroUSD, group.WeeklyBudgetMicroUSD, group.ConcurrencyLimit, group.IsSystem)
 	var saved Group
-	if err := row.Scan(&saved.ID, &saved.Name, &saved.DailyBudgetMicroUSD, &saved.WeeklyBudgetMicroUSD, &saved.IsSystem, &saved.CreatedAt, &saved.UpdatedAt); err != nil {
+	if err := row.Scan(&saved.ID, &saved.Name, &saved.DailyBudgetMicroUSD, &saved.WeeklyBudgetMicroUSD, &saved.ConcurrencyLimit, &saved.IsSystem, &saved.CreatedAt, &saved.UpdatedAt); err != nil {
 		return Group{}, fmt.Errorf("api key group store: upsert group: %w", err)
 	}
 	return saved, nil

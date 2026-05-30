@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -387,6 +388,81 @@ func (a *Auth) RequestRetryOverride() (int, bool) {
 		}
 	}
 	return 0, false
+}
+
+// ConcurrencyLimit returns the maximum number of in-flight requests allowed for this auth.
+// Explicit metadata/attribute values take precedence. Codex OAuth auth files default to 10.
+func (a *Auth) ConcurrencyLimit() int {
+	if a == nil {
+		return 0
+	}
+	for _, key := range []string{"concurrency_limit", "concurrency-limit", "concurrency", "max_concurrency", "max-concurrency"} {
+		if a.Attributes != nil {
+			if val, ok := a.Attributes[key]; ok {
+				if parsed, okParse := parseIntAny(val); okParse {
+					if parsed < 0 {
+						return 0
+					}
+					return parsed
+				}
+			}
+		}
+		if a.Metadata != nil {
+			if val, ok := a.Metadata[key]; ok {
+				if parsed, okParse := parseIntAny(val); okParse {
+					if parsed < 0 {
+						return 0
+					}
+					return parsed
+				}
+			}
+		}
+	}
+	if a.isCodexOAuthAuthFile() {
+		return 10
+	}
+	return 0
+}
+
+func (a *Auth) isCodexOAuthAuthFile() bool {
+	if a == nil || strings.ToLower(strings.TrimSpace(a.Provider)) != "codex" {
+		return false
+	}
+	if a.Attributes != nil {
+		if strings.TrimSpace(a.Attributes["api_key"]) != "" {
+			return false
+		}
+		if strings.TrimSpace(a.Attributes["path"]) != "" {
+			return true
+		}
+	}
+	if a.Metadata != nil {
+		if kind, ok := a.Metadata["auth_kind"]; ok {
+			if strings.EqualFold(strings.TrimSpace(fmtAny(kind)), "oauth") {
+				return true
+			}
+		}
+		if strings.TrimSpace(fmtAny(a.Metadata["refresh_token"])) != "" {
+			return true
+		}
+		if strings.TrimSpace(fmtAny(a.Metadata["access_token"])) != "" && strings.TrimSpace(fmtAny(a.Metadata["email"])) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func fmtAny(val any) string {
+	switch typed := val.(type) {
+	case string:
+		return typed
+	case json.Number:
+		return typed.String()
+	case nil:
+		return ""
+	default:
+		return strings.TrimSpace(fmt.Sprint(typed))
+	}
 }
 
 func parseBoolAny(val any) (bool, bool) {

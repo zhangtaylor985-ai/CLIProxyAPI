@@ -323,7 +323,7 @@ func TestApplyRelayProbePin(t *testing.T) {
 	}
 }
 
-func TestApplyClaudeOpus47To46PinUsesProviderBaseOnlyRewrite(t *testing.T) {
+func TestApplyClaudeOpus47To46PinUsesProviderBaseOnlyRewriteForOpus48(t *testing.T) {
 	manager := coreauth.NewManager(nil, nil, nil)
 	if _, err := manager.Register(context.Background(), &coreauth.Auth{
 		ID:       "claude-opus",
@@ -344,7 +344,7 @@ func TestApplyClaudeOpus47To46PinUsesProviderBaseOnlyRewrite(t *testing.T) {
 		Cfg:         &sdkconfig.SDKConfig{},
 	}
 	raw := relayProbePayloadWithOverrides(t, map[string]any{
-		"model":      "claude-opus-4-7[1m](8192)",
+		"model":      "claude-opus-4-8[1m](8192)",
 		"max_tokens": 8,
 		"messages": []map[string]any{
 			anthropicTextMessage("user", "reply ok"),
@@ -352,7 +352,7 @@ func TestApplyClaudeOpus47To46PinUsesProviderBaseOnlyRewrite(t *testing.T) {
 	})
 	meta := map[string]any{}
 
-	routedModel, rewrittenJSON, applied := handler.applyClaudeOpus47To46Pin(context.Background(), "claude", raw, "claude-opus-4-7[1m](8192)", meta)
+	routedModel, rewrittenJSON, applied := handler.applyClaudeOpus47To46Pin(context.Background(), "claude", raw, "claude-opus-4-8[1m](8192)", meta)
 	if !applied {
 		t.Fatalf("applyClaudeOpus47To46Pin() applied = false, want true")
 	}

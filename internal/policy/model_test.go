@@ -13,6 +13,9 @@ func TestRewriteClaudeOpus47To46(t *testing.T) {
 		{"claude-opus-4-7[1m]", "claude-opus-4-6[1m]", true},
 		{"claude-opus-4-7(8192)", "claude-opus-4-6(8192)", true},
 		{"claude-opus-4-7-thinking(high)", "claude-opus-4-6-thinking(high)", true},
+		{"claude-opus-4-8", "claude-opus-4-6", true},
+		{"claude-opus-4-8-thinking", "claude-opus-4-6-thinking", true},
+		{"claude-opus-4-8[1m](8192)", "claude-opus-4-6[1m](8192)", true},
 		{"claude-opus-4-6", "claude-opus-4-6", false},
 		{"claude-sonnet-4-7", "claude-sonnet-4-7", false},
 	}

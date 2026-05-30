@@ -11,14 +11,15 @@ import (
 )
 
 type apiKeyGroupView struct {
-	ID              string    `json:"id"`
-	Name            string    `json:"name"`
-	DailyBudgetUSD  float64   `json:"daily_budget_usd"`
-	WeeklyBudgetUSD float64   `json:"weekly_budget_usd"`
-	IsSystem        bool      `json:"is_system"`
-	MemberCount     int       `json:"member_count"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	ID               string    `json:"id"`
+	Name             string    `json:"name"`
+	DailyBudgetUSD   float64   `json:"daily_budget_usd"`
+	WeeklyBudgetUSD  float64   `json:"weekly_budget_usd"`
+	ConcurrencyLimit int       `json:"concurrency_limit"`
+	IsSystem         bool      `json:"is_system"`
+	MemberCount      int       `json:"member_count"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
 }
 
 func (h *Handler) ListAPIKeyGroups(c *gin.Context) {
@@ -44,10 +45,11 @@ func (h *Handler) CreateAPIKeyGroup(c *gin.Context) {
 		return
 	}
 	var body struct {
-		ID              string  `json:"id"`
-		Name            string  `json:"name"`
-		DailyBudgetUSD  float64 `json:"daily_budget_usd"`
-		WeeklyBudgetUSD float64 `json:"weekly_budget_usd"`
+		ID               string  `json:"id"`
+		Name             string  `json:"name"`
+		DailyBudgetUSD   float64 `json:"daily_budget_usd"`
+		WeeklyBudgetUSD  float64 `json:"weekly_budget_usd"`
+		ConcurrencyLimit int     `json:"concurrency_limit"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
@@ -58,6 +60,7 @@ func (h *Handler) CreateAPIKeyGroup(c *gin.Context) {
 		Name:                 strings.TrimSpace(body.Name),
 		DailyBudgetMicroUSD:  billingUSDToMicro(body.DailyBudgetUSD),
 		WeeklyBudgetMicroUSD: billingUSDToMicro(body.WeeklyBudgetUSD),
+		ConcurrencyLimit:     body.ConcurrencyLimit,
 	}
 	saved, err := h.groupStore.UpsertGroup(c.Request.Context(), group)
 	if err != nil {
@@ -87,9 +90,10 @@ func (h *Handler) UpdateAPIKeyGroup(c *gin.Context) {
 		return
 	}
 	var body struct {
-		Name            *string  `json:"name"`
-		DailyBudgetUSD  *float64 `json:"daily_budget_usd"`
-		WeeklyBudgetUSD *float64 `json:"weekly_budget_usd"`
+		Name             *string  `json:"name"`
+		DailyBudgetUSD   *float64 `json:"daily_budget_usd"`
+		WeeklyBudgetUSD  *float64 `json:"weekly_budget_usd"`
+		ConcurrencyLimit *int     `json:"concurrency_limit"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
@@ -103,6 +107,9 @@ func (h *Handler) UpdateAPIKeyGroup(c *gin.Context) {
 	}
 	if body.WeeklyBudgetUSD != nil {
 		current.WeeklyBudgetMicroUSD = billingUSDToMicro(*body.WeeklyBudgetUSD)
+	}
+	if body.ConcurrencyLimit != nil {
+		current.ConcurrencyLimit = *body.ConcurrencyLimit
 	}
 	saved, err := h.groupStore.UpsertGroup(c.Request.Context(), current)
 	if err != nil {
@@ -139,14 +146,15 @@ func (h *Handler) DeleteAPIKeyGroup(c *gin.Context) {
 
 func (h *Handler) groupToView(group apikeygroup.Group) apiKeyGroupView {
 	return apiKeyGroupView{
-		ID:              group.ID,
-		Name:            group.Name,
-		DailyBudgetUSD:  microToBillingUSD(group.DailyBudgetMicroUSD),
-		WeeklyBudgetUSD: microToBillingUSD(group.WeeklyBudgetMicroUSD),
-		IsSystem:        group.IsSystem,
-		MemberCount:     h.countGroupMembers(group.ID),
-		CreatedAt:       group.CreatedAt,
-		UpdatedAt:       group.UpdatedAt,
+		ID:               group.ID,
+		Name:             group.Name,
+		DailyBudgetUSD:   microToBillingUSD(group.DailyBudgetMicroUSD),
+		WeeklyBudgetUSD:  microToBillingUSD(group.WeeklyBudgetMicroUSD),
+		ConcurrencyLimit: group.ConcurrencyLimit,
+		IsSystem:         group.IsSystem,
+		MemberCount:      h.countGroupMembers(group.ID),
+		CreatedAt:        group.CreatedAt,
+		UpdatedAt:        group.UpdatedAt,
 	}
 }
 

@@ -11,6 +11,13 @@ REPO_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 
 cd "${REPO_DIR}"
 
+if [[ -f .env ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source .env
+  set +a
+fi
+
 die() {
   printf 'deploy_systemd: %s\n' "$*" >&2
   exit 1
@@ -53,6 +60,8 @@ require_clean_worktree
 VERSION="$(git describe --tags --always 2>/dev/null || git rev-parse --short HEAD)"
 COMMIT="$(git rev-parse HEAD)"
 BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+run go run ./scripts/migrate_api_key_concurrency_pg
 
 run env CGO_ENABLED=0 GOOS=linux go build \
   -ldflags="-s -w -X main.Version=${VERSION} -X main.Commit=${COMMIT} -X main.BuildDate=${BUILD_DATE}" \

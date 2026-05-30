@@ -72,6 +72,67 @@ func TestAPIKeyPolicyMiddleware_DowngradesOpus46(t *testing.T) {
 	}
 }
 
+func TestAPIKeyPolicyMiddleware_EnforcesAPIKeyConcurrencyLimit(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	cfg := &config.Config{
+		APIKeyPolicies: []config.APIKeyPolicy{
+			{APIKey: "concurrent-key", ConcurrencyLimit: 1},
+		},
+	}
+	cfg.SanitizeAPIKeyPolicies()
+
+	firstEntered := make(chan struct{}, 1)
+	releaseFirst := make(chan struct{})
+	firstDone := make(chan *httptest.ResponseRecorder, 1)
+
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set("apiKey", "concurrent-key")
+		c.Next()
+	})
+	r.Use(APIKeyPolicyMiddleware(func() *config.Config { return cfg }, nil, nil, nil))
+	r.POST("/v1/messages", func(c *gin.Context) {
+		firstEntered <- struct{}{}
+		<-releaseFirst
+		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	})
+
+	go func() {
+		req := httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewBufferString(`{"model":"claude-sonnet-4-5"}`))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		firstDone <- w
+	}()
+
+	select {
+	case <-firstEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first request did not enter handler")
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewBufferString(`{"model":"claude-sonnet-4-5"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	if got := gjson.GetBytes(w.Body.Bytes(), "error.message").String(); got != "api key concurrency limit exceeded" {
+		t.Fatalf("message=%q", got)
+	}
+
+	close(releaseFirst)
+	select {
+	case first := <-firstDone:
+		if first.Code != http.StatusOK {
+			t.Fatalf("first status=%d body=%s", first.Code, first.Body.String())
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("first request did not finish")
+	}
+}
+
 func TestAPIKeyPolicyMiddleware_StripsClaudeOpus1MSignalsWhenGloballyDisabled(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	cfg := &config.Config{

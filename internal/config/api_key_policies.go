@@ -60,6 +60,11 @@ type APIKeyPolicy struct {
 	// When set, daily/weekly base budgets are resolved from that group.
 	GroupID string `yaml:"group-id,omitempty" json:"group-id,omitempty"`
 
+	// ConcurrencyLimit caps the number of simultaneous in-flight requests for this API key.
+	// Values <= 0 are treated as unlimited. When the key belongs to a group and this
+	// field is unset, the group concurrency setting is used.
+	ConcurrencyLimit int `yaml:"concurrency-limit,omitempty" json:"concurrency-limit,omitempty"`
+
 	// FastMode forces OpenAI-compatible upstream requests for this client API key
 	// to use the priority service tier when the target model supports it.
 	FastMode bool `yaml:"fast-mode,omitempty" json:"fast-mode,omitempty"`
@@ -792,6 +797,9 @@ func (cfg *Config) SanitizeAPIKeyPolicies() {
 		entry.Name = strings.TrimSpace(entry.Name)
 		entry.Note = strings.TrimSpace(entry.Note)
 		entry.GroupID = strings.TrimSpace(entry.GroupID)
+		if entry.ConcurrencyLimit < 0 {
+			entry.ConcurrencyLimit = 0
+		}
 
 		entry.UpstreamBaseURL = strings.TrimSpace(entry.UpstreamBaseURL)
 		entry.ClaudeGPTTargetFamily = policy.NormalizeClaudeGPTTargetBase(entry.ClaudeGPTTargetFamily)

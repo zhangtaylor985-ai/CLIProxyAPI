@@ -7,7 +7,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 )
 
-// ApplyGroupBudget overlays daily/weekly budgets from the bound group onto the policy copy.
+// ApplyGroupBudget overlays daily/weekly budgets and fallback concurrency from the bound group onto the policy copy.
 func ApplyGroupBudget(ctx context.Context, store Store, p *config.APIKeyPolicy) (*config.APIKeyPolicy, *Group, error) {
 	if p == nil {
 		return nil, nil, nil
@@ -26,5 +26,8 @@ func ApplyGroupBudget(ctx context.Context, store Store, p *config.APIKeyPolicy) 
 	}
 	cloned.DailyBudgetUSD = float64(group.DailyBudgetMicroUSD) / 1_000_000
 	cloned.WeeklyBudgetUSD = float64(group.WeeklyBudgetMicroUSD) / 1_000_000
+	if cloned.ConcurrencyLimit <= 0 {
+		cloned.ConcurrencyLimit = group.ConcurrencyLimit
+	}
 	return &cloned, &group, nil
 }

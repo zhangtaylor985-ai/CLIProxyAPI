@@ -14,6 +14,7 @@ import (
 	"math"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -63,6 +64,49 @@ const (
 	claudePromptTooLongErrorContentType = "application/json"
 	claudePromptTooLongMessage          = "Prompt is too long. Please run /compact and try again."
 )
+
+var apiKeyConcurrencyLimiter = newInMemoryConcurrencyLimiter()
+
+type inMemoryConcurrencyLimiter struct {
+	mu       sync.Mutex
+	inflight map[string]int
+}
+
+func newInMemoryConcurrencyLimiter() *inMemoryConcurrencyLimiter {
+	return &inMemoryConcurrencyLimiter{
+		inflight: make(map[string]int),
+	}
+}
+
+func (l *inMemoryConcurrencyLimiter) tryAcquire(key string, limit int) (func(), bool) {
+	if l == nil || strings.TrimSpace(key) == "" || limit <= 0 {
+		return func() {}, true
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	current := l.inflight[key]
+	if current >= limit {
+		return nil, false
+	}
+	l.inflight[key] = current + 1
+	return func() {
+		l.release(key)
+	}, true
+}
+
+func (l *inMemoryConcurrencyLimiter) release(key string) {
+	if l == nil || strings.TrimSpace(key) == "" {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	current := l.inflight[key]
+	if current <= 1 {
+		delete(l.inflight, key)
+		return
+	}
+	l.inflight[key] = current - 1
+}
 
 func modelSupportsPriorityServiceTier(model string) bool {
 	key := policy.NormaliseModelKey(model)
@@ -149,6 +193,16 @@ func APIKeyPolicyMiddleware(getConfig func() *config.Config, limiter policy.Dail
 		if c.Request.Method == http.MethodGet || c.Request.Method == http.MethodHead || c.Request.Method == http.MethodOptions {
 			c.Next()
 			return
+		}
+		if policyEntry != nil && policyEntry.ConcurrencyLimit > 0 {
+			release, ok := apiKeyConcurrencyLimiter.tryAcquire(apiKey, policyEntry.ConcurrencyLimit)
+			if !ok {
+				body := buildPolicyErrorResponseBody(c, http.StatusTooManyRequests, "api key concurrency limit exceeded")
+				c.Abort()
+				c.Data(http.StatusTooManyRequests, "application/json", body)
+				return
+			}
+			defer release()
 		}
 
 		bodyBytes, err := io.ReadAll(c.Request.Body)
