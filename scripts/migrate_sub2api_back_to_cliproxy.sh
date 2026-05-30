@@ -163,7 +163,7 @@ ON CONFLICT (id) DO UPDATE SET
   updated_at = now();
 
 CREATE TEMP TABLE sub2api_api_key_stage (payload jsonb) ON COMMIT DROP;
-\copy sub2api_api_key_stage(payload) FROM :'api_keys_file'
+\copy sub2api_api_key_stage(payload) FROM :api_keys_file
 
 WITH rows AS (
   SELECT
@@ -256,7 +256,7 @@ ON CONFLICT (source_api_key_id) DO UPDATE SET
   migrated_at = now();
 
 CREATE TEMP TABLE sub2api_usage_stage (payload jsonb) ON COMMIT DROP;
-\copy sub2api_usage_stage(payload) FROM :'usage_file'
+\copy sub2api_usage_stage(payload) FROM :usage_file
 
 DO $$
 DECLARE
