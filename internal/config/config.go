@@ -88,10 +88,6 @@ type Config struct {
 	// Routing controls credential selection behavior.
 	Routing RoutingConfig `yaml:"routing" json:"routing"`
 
-	// CodexWorkerPrioritySchedule adjusts Codex worker and API-provider priorities
-	// during a daily window without starting/stopping worker containers.
-	CodexWorkerPrioritySchedule CodexWorkerPriorityScheduleConfig `yaml:"codex-worker-priority-schedule" json:"codex-worker-priority-schedule"`
-
 	// WebsocketAuth enables or disables authentication for the WebSocket API.
 	WebsocketAuth bool `yaml:"ws-auth" json:"ws-auth"`
 
@@ -254,30 +250,6 @@ type RoutingConfig struct {
 
 	// SessionAffinityTTL specifies how long session-to-auth bindings are retained.
 	// Default: 1h. Accepts duration strings like "30m", "1h", "2h30m".
-	SessionAffinityTTL string `yaml:"session-affinity-ttl,omitempty" json:"session-affinity-ttl,omitempty"`
-}
-
-// CodexWorkerPriorityScheduleConfig configures the daily Codex worker priority window.
-type CodexWorkerPriorityScheduleConfig struct {
-	Enabled bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
-
-	// Timezone is an IANA location name. Default: Asia/Shanghai.
-	Timezone string `yaml:"timezone,omitempty" json:"timezone,omitempty"`
-
-	// StartTime and EndTime use HH:MM 24-hour local time in Timezone.
-	StartTime string `yaml:"start-time,omitempty" json:"start-time,omitempty"`
-	EndTime   string `yaml:"end-time,omitempty" json:"end-time,omitempty"`
-
-	// APIProviderBaseURL identifies the fallback Codex API provider to reprioritize.
-	APIProviderBaseURL string `yaml:"api-provider-base-url,omitempty" json:"api-provider-base-url,omitempty"`
-
-	// Higher priority wins. Defaults keep both sides available for fallback.
-	WindowWorkerPriority       int `yaml:"window-worker-priority,omitempty" json:"window-worker-priority,omitempty"`
-	WindowAPIProviderPriority  int `yaml:"window-api-provider-priority,omitempty" json:"window-api-provider-priority,omitempty"`
-	OutsideWorkerPriority      int `yaml:"outside-worker-priority,omitempty" json:"outside-worker-priority,omitempty"`
-	OutsideAPIProviderPriority int `yaml:"outside-api-provider-priority,omitempty" json:"outside-api-provider-priority,omitempty"`
-
-	// SessionAffinityTTL is applied while the worker window is active. Default: 3h.
 	SessionAffinityTTL string `yaml:"session-affinity-ttl,omitempty" json:"session-affinity-ttl,omitempty"`
 }
 
