@@ -23,7 +23,7 @@ import (
 // from the raw JSON request and returns them in the format expected by the internal client.
 // The function performs the following transformations:
 // 1. Sets up a template with the model name and empty instructions field
-// 2. Processes system messages and converts them to developer input content
+// 2. Processes top-level system messages as instructions
 // 3. Transforms message contents (text, image, tool_use, tool_result) to appropriate formats
 // 4. Converts tools declarations to the expected format
 // 5. Adds additional configuration parameters for the Codex API
@@ -82,7 +82,8 @@ func ConvertClaudeRequestToCodex(modelName string, inputRawJSON []byte, _ bool) 
 
 		for i := 0; i < len(messageResults); i++ {
 			messageResult := messageResults[i]
-			messageRole := messageResult.Get("role").String()
+			sourceMessageRole := messageResult.Get("role").String()
+			messageRole := codexClaudeInputMessageRole(sourceMessageRole)
 
 			newMessage := func() []byte {
 				msg := []byte(`{"type":"message","role":"","content":[]}`)
@@ -105,7 +106,7 @@ func ConvertClaudeRequestToCodex(modelName string, inputRawJSON []byte, _ bool) 
 
 			appendTextContent := func(text string) {
 				partType := "input_text"
-				if messageRole == "assistant" {
+				if sourceMessageRole == "assistant" {
 					partType = "output_text"
 				}
 				message, _ = sjson.SetBytes(message, fmt.Sprintf("content.%d.type", contentIndex), partType)
@@ -327,6 +328,17 @@ func ConvertClaudeRequestToCodex(modelName string, inputRawJSON []byte, _ bool) 
 	template, _ = sjson.SetBytes(template, "include", []string{"reasoning.encrypted_content"})
 
 	return template
+}
+
+func codexClaudeInputMessageRole(role string) string {
+	switch strings.ToLower(strings.TrimSpace(role)) {
+	case "assistant":
+		return "assistant"
+	default:
+		// Codex upstream rejects system/developer messages in input. Preserve
+		// the content as user-visible context instead of forwarding those roles.
+		return "user"
+	}
 }
 
 func claudeSourceDataURL(sourceResult gjson.Result) string {

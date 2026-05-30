@@ -52,6 +52,17 @@ func TestConvertClaudeRequestToCodex_SystemMessageScenarios(t *testing.T) {
 			}`,
 			wantInstructions: "Block 1\n\nBlock 2",
 		},
+		{
+			name: "Mid-conversation system messages are preserved as user context",
+			inputJSON: `{
+				"model": "claude-3-opus",
+				"messages": [
+					{"role": "system", "content": [{"type": "text", "text": "Runtime context"}]},
+					{"role": "user", "content": "hello"}
+				]
+			}`,
+			wantInstructions: "",
+		},
 	}
 
 	for _, tt := range tests {
