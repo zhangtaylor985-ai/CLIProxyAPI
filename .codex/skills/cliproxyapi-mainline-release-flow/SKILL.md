@@ -87,7 +87,8 @@ Pushing main is not the same as production deployment.
 When the user asks to “上线 / deploy / 重启线上” after main is pushed:
 
 - Use `cliproxyapi-systemd-deploy` for backend production deployment.
-- If frontend changed, complete the frontend release/deploy path before saying the full release is live. If the frontend deployment mechanism is unclear, say that main is pushed but frontend production has not been redeployed yet.
+- Use `cliproxyapi-frontend-caddy-deploy` for Management Center frontend production deployment.
+- Use `cliproxyapi-domain-tunnel-proxy` when the release depends on Caddy domain routing, Cloudflare Tunnel hostname exposure, or worker reverse tunnel verification.
 - Report backend commit, frontend commit, tests, whether binaries/assets were rebuilt, and whether service status checks passed.
 
 ## Reporting

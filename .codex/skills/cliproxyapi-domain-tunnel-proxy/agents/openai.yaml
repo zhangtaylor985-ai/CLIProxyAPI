@@ -1,0 +1,4 @@
+interface:
+  display_name: "CLIProxyAPI Domain Tunnel Proxy"
+  short_description: "Check domain and tunnel routing"
+  default_prompt: "Use $cliproxyapi-domain-tunnel-proxy to inspect or update CLIProxyAPI domain routing, Caddy reverse proxies, Cloudflare Tunnel local hostnames, and worker reverse tunnel boundaries."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "CLIProxyAPI Frontend Caddy Deploy"
+  short_description: "Deploy Management Center frontend"
+  default_prompt: "Use $cliproxyapi-frontend-caddy-deploy to deploy and verify the CLIProxyAPI Management Center frontend on /root/cliapp/Cli-Proxy-API-Management-Center with repo-local Caddy and admin.claudepool.com."
